@@ -14,7 +14,8 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, LoginService loginService) throws Exception {
-        http.authorizeHttpRequests(auth ->
+        http.csrf(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(auth ->
                         auth.requestMatchers("/login", "/signup", "/_resources/**").permitAll()
                                 .anyRequest().authenticated())  // 그 외는 모두 인증 필요
                 .formLogin(formLogin ->

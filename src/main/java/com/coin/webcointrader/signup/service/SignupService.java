@@ -56,6 +56,7 @@ public class SignupService {
         user.setUsername(request.getUsername());
         user.setPhoneNumber(request.getPhoneNumber());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
+        user.setEmail(request.getEmail());
         user.setApiKey(aesEncryptor.encrypt(request.getApiKey()));
         user.setApiSecret(aesEncryptor.encrypt(request.getApiSecret()));
 
