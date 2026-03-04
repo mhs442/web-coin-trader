@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>코인 상세 차트</title>
+    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+</head>
+<body>
+    <div class="trade-layout-container">
+        <!-- 메인 콘텐츠 (차트) -->
+        <div class="main-content">
+            <a href="/dashboard" class="back-link">← 대시보드로 돌아가기</a>
+            <div class="chart-container">
+                <div class="chart-header">
+                    <h2 th:text="${symbol} + ' 상세 차트'"></h2>
+                    <div class="interval-buttons">
+                        <button onclick="loadChart('1')" id="btn-1">1분</button>
+                        <button onclick="loadChart('5')" id="btn-5">5분</button>
+                        <button onclick="loadChart('15')" id="btn-15">15분</button>
+                        <button onclick="loadChart('30')" id="btn-30">30분</button>
+                        <button onclick="loadChart('60')" id="btn-60">1시간</button>
+                    </div>
+                </div>
+                <div id="chart"></div>
+            </div>
+
+            <!-- 호가창 (차트 하단, 매도/매수 좌우 배치) -->
+            <div class="order-book-horizontal-panel">
+                <h3>호가창 (Order Book)</h3>
+                <div class="order-book-last-price">
+                    <span id="ob-last-price">...</span>
+                </div>
+                <div class="order-book-horizontal">
+                    <!-- 매도 호가 (Asks) - 왼쪽 -->
+                    <div class="ob-side ob-asks-side">
+                        <div class="ob-side-title ob-ask">매도 (Asks)</div>
+                        <div class="ob-side-header">
+                            <span>가격(USDT)</span>
+                            <span>수량</span>
+                            <span>총합</span>
+                        </div>
+                        <div id="asks-list" class="order-book-list asks">
+                            <!-- 매도 호가 -->
+                        </div>
+                    </div>
+                    <!-- 매수 호가 (Bids) - 오른쪽 -->
+                    <div class="ob-side ob-bids-side">
+                        <div class="ob-side-title ob-bid">매수 (Bids)</div>
+                        <div class="ob-side-header">
+                            <span>가격(USDT)</span>
+                            <span>수량</span>
+                            <span>총합</span>
+                        </div>
+                        <div id="bids-list" class="order-book-list bids">
+                            <!-- 매수 호가 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 사이드 패널 (패턴 관리 큐 + 큐 설정) -->
+        <div class="side-panel">
+            <!-- 패턴 관리 큐 (SRS 20, 21번) - 등록된 큐의 단계/패턴 계층 표시 -->
+            <div class="side-pattern-manage-panel">
+                <h3>패턴 관리 큐</h3>
+                <div id="queue-display" class="queue-display">
+                    <div class="pattern-manage-empty">등록된 큐가 없습니다. 아래에서 큐를 구성해주세요.</div>
+                </div>
+            </div>
+
+            <!-- 큐 설정 영역 -->
+            <div class="trade-form-panel queue-settings-panel">
+                <h3>큐 설정</h3>
+
+                <!-- 트리거 설정 (SRS 9번) -->
+                <div class="trigger-settings">
+                    <label class="builder-label">트리거 설정</label>
+                    <div class="trigger-input-row">
+                        <div class="trigger-input-group">
+                            <label for="trigger-seconds">시간(초)</label>
+                            <input type="number" id="trigger-seconds" min="1" placeholder="60">
+                        </div>
+                        <div class="trigger-input-group">
+                            <label for="trigger-rate">상승/하락률(%)</label>
+                            <input type="number" id="trigger-rate" step="0.01" min="0.01" placeholder="1.00">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 단계 추가 영역 -->
+                <div class="step-builder">
+                    <label class="builder-label">
+                        <span id="step-number-label">1단계</span> 추가
+                    </label>
+
+                    <!-- 추가된 패턴 미리보기 (현재 단계에 추가된 패턴 0~2개 표시) -->
+                    <div id="pending-patterns-preview" class="pending-patterns-preview"></div>
+
+                    <!-- 단일 패턴 입력 영역 -->
+                    <div class="pattern-input-group">
+                        <div class="pattern-input-header">패턴 입력</div>
+                        <!-- 블록 입력: 조건 블록 + 콜론 + 리프 블록 -->
+                        <div class="block-builder-row">
+                            <div class="block-area">
+                                <div id="condition-blocks" class="pattern-blocks condition-blocks">
+                                    <span class="pattern-empty-msg">조건 블록</span>
+                                </div>
+                                <span class="block-colon">:</span>
+                                <div id="leaf-block" class="pattern-blocks leaf-block">
+                                    <span class="pattern-empty-msg">리프</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="builder-btn-row" style="margin-bottom:6px;">
+                            <button onclick="addConditionBlock('LONG')" class="builder-add-btn long-btn">L</button>
+                            <button onclick="addConditionBlock('SHORT')" class="builder-add-btn short-btn">S</button>
+                            <span class="btn-separator">|</span>
+                            <button onclick="setLeafBlock('LONG')" class="builder-add-btn long-btn leaf-btn">리프 L</button>
+                            <button onclick="setLeafBlock('SHORT')" class="builder-add-btn short-btn leaf-btn">리프 S</button>
+                        </div>
+                        <!-- 패턴 설정 (금액, 레버리지, 손절, 익절) -->
+                        <div class="pattern-settings-row">
+                            <div class="pattern-setting-item">
+                                <label>금액(USDT)</label>
+                                <input type="number" id="pattern-amount" min="1" step="1" placeholder="5">
+                            </div>
+                            <div class="pattern-setting-item">
+                                <label>레버리지</label>
+                                <input type="number" id="pattern-leverage" min="1" max="125" step="1" placeholder="1">
+                            </div>
+                        </div>
+                        <div class="pattern-settings-row">
+                            <div class="pattern-setting-item">
+                                <label>손절(%)</label>
+                                <input type="number" id="pattern-stoploss" step="0.01" min="0" placeholder="선택">
+                            </div>
+                            <div class="pattern-setting-item">
+                                <label>익절(%)</label>
+                                <input type="number" id="pattern-takeprofit" step="0.01" min="0" placeholder="선택">
+                            </div>
+                        </div>
+                        <!-- 패턴 추가 버튼 -->
+                        <button onclick="addPatternToStep()" class="trade-btn btn-outline" style="width:100%; margin-top:4px;">패턴 추가</button>
+                    </div>
+
+                    <!-- 단계 추가 / 큐 저장 버튼 -->
+                    <div class="step-action-buttons">
+                        <button onclick="addStepToQueue()" class="trade-btn btn-outline" style="flex:1;">단계 추가</button>
+                        <button onclick="saveQueue()" class="trade-btn queue-save-btn" style="flex:1;">큐 저장</button>
+                    </div>
+                </div>
+
+                <!-- 상태 표시 -->
+                <div id="autotrade-status" class="autotrade-status" style="display: none;">
+                    <div>현재 패턴: <strong id="status-pattern">-</strong></div>
+                    <div>현재 단계: <strong id="status-step">-</strong></div>
+                    <div>이전 가격: <strong id="status-prev-price">-</strong></div>
+                    <div id="trade-log" class="trade-log"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script th:inline="javascript">
+        const symbol = [[${symbol}]];
+        let chart = null;
+        let currentInterval = '1';
+        let klineFetchIntervalId = null;
+        let orderBookFetchIntervalId = null;
+        let autoTradeActive = false;
+        let autoTradeStatusInterval = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadChart('1');
+            loadOrderBook();
+            loadPatterns();
+            checkAutoTradeStatus();
+        });
+
+        function loadChart(interval) {
+            // 시간 간격이 바뀌면 기존 차트 파괴 (타이틀 및 설정 초기화)
+            if (currentInterval !== interval && chart) {
+                chart.destroy();
+                chart = null;
+            }
+            currentInterval = interval;
+            
+            // 기존 폴링 중단
+            if (klineFetchIntervalId) clearInterval(klineFetchIntervalId);
+
+            // 버튼 스타일 업데이트
+            document.querySelectorAll('.interval-buttons button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('btn-' + interval).classList.add('active');
+
+            // 즉시 실행 후 1초마다 갱신
+            fetchAndDraw(true); // 초기 로딩
+            klineFetchIntervalId = setInterval(() => fetchAndDraw(false), 1000); // 이후 업데이트
+        }
+
+        function fetchAndDraw(isInitial) {
+            fetch(`/api/kline?symbol=${symbol}&interval=${currentInterval}`)
+                .then(res => res.json())
+                .then(data => {
+                    // retCode는 String("0") 또는 Number(0)일 수 있으므로 동등 비교 사용
+                    if (data.retCode == '0' && data.result && data.result.list) {
+                        updateChart(data.result.list, isInitial);
+                    } else {
+                        console.error('Failed to load data', data);
+                    }
+                })
+                .catch(err => console.error(err));
+        }
+
+        function updateChart(klineData, isInitial) {
+            // Bybit 데이터: [startTime, open, high, low, close, volume, turnover]
+            // 최신 데이터가 먼저 오므로 역순으로 정렬하여 과거->현재 순으로 변경
+            const seriesData = klineData.map(item => {
+                return {
+                    x: new Date(parseInt(item[0])),
+                    y: [parseFloat(item[1]), parseFloat(item[2]), parseFloat(item[3]), parseFloat(item[4])]
+                };
+            }).reverse();
+
+            // 차트가 이미 존재하면 데이터만 업데이트 (줌 상태 유지)
+            if (!isInitial && chart) {
+                const minX = chart.w.globals.minX;
+                const maxX = chart.w.globals.maxX;
+
+                chart.updateSeries([{
+                    data: seriesData
+                }]).then(() => {
+                    // 데이터 업데이트 후 기존 줌 상태가 있다면 복구
+                    if (minX && maxX) {
+                        chart.zoomX(minX, maxX);
+                    }
+                });
+                return;
+            }
+
+            const options = {
+                series: [{
+                    data: seriesData
+                }],
+                chart: {
+                    type: 'candlestick',
+                    height: 500,
+                    toolbar: { show: true },
+                    animations: { enabled: false }, // 실시간 업데이트 시 애니메이션 끄기
+                    zoom: {
+                        type: 'xy', // X축과 Y축 모두 줌 가능
+                        enabled: true,
+                        autoScaleYaxis: true // X축 줌에 맞춰 Y축 스케일 자동 조정
+                    },
+                    events: {
+                        beforeZoom: function(chartContext, { xaxis }) {
+                            // 1분(60000ms) 미만으로 확대 방지
+                            if (xaxis.max - xaxis.min < 60000) {
+                                return {
+                                    xaxis: {
+                                        min: xaxis.min,
+                                        max: xaxis.min + 60000
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    defaultLocale: 'ko',
+                    locales: [{
+                        "name": "ko",
+                        "options": {
+                            "months": ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
+                            "shortMonths": ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
+                            "days": ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
+                            "shortDays": ["일", "월", "화", "수", "목", "금", "토"],
+                            "toolbar": {
+                                "exportToSVG": "SVG 다운로드",
+                                "exportToPNG": "PNG 다운로드",
+                                "exportToCSV": "CSV 다운로드",
+                                "menu": "메뉴",
+                                "selection": "선택",
+                                "selectionZoom": "선택 확대",
+                                "zoomIn": "확대",
+                                "zoomOut": "축소",
+                                "pan": "이동",
+                                "reset": "줌 초기화"
+                            }
+                        }
+                    }]
+                },
+                title: {
+                    text: symbol + ' 가격 차트 (' + getIntervalLabel(currentInterval) + ')',
+                    align: 'left'
+                },
+                xaxis: {
+                    type: 'datetime',
+                    labels: {
+                        datetimeFormatter: {
+                            year: 'yyyy년',
+                            month: 'yyyy년 M월',
+                            day: 'M월 d일',
+                            hour: 'HH:mm'
+                        }
+                    }
+                },
+                yaxis: {
+                    tooltip: {
+                        enabled: true
+                    }
+                }
+            };
+
+            chart = new ApexCharts(document.querySelector("#chart"), options);
+            chart.render();
+        }
+
+        function getIntervalLabel(interval) {
+            if (interval === '60') return '1시간';
+            return interval + '분';
+        }
+
+        function loadOrderBook() {
+            // 1초마다 호가창 데이터 갱신
+            orderBookFetchIntervalId = setInterval(() => {
+                fetch(`/api/orderbook?symbol=${symbol}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.retCode == '0' && data.result) {
+                            updateOrderBookUI(data.result.a, data.result.b);
+                        }
+                    })
+                    .catch(err => console.error('Error fetching order book:', err));
+            }, 1000);
+        }
+
+        function updateOrderBookUI(asks, bids) {
+            if (!asks || !bids) return;
+
+            const asksContainer = document.getElementById('asks-list');
+            const bidsContainer = document.getElementById('bids-list');
+            
+            // 매도 호가 (asks) - API가 오름차순으로 주므로, 가장 좋은 8개 호가를 그대로 사용한다.
+            asksContainer.innerHTML = asks.slice(0, 8).map(ask => {
+                const price = parseFloat(ask[0]);
+                const quantity = parseFloat(ask[1]);
+                const total = (price * quantity).toFixed(2);
+                return `
+                    <div class="ob-row">
+                        <span class="ob-price ob-ask">${price.toLocaleString()}</span>
+                        <span>${quantity}</span>
+                        <span>${total}</span>
+                    </div>
+                `;
+            }).join('');
+
+            // 매수 호가 (bids) - API가 내림차순으로 주므로, 가장 좋은 8개 호가를 그대로 사용한다.
+            bidsContainer.innerHTML = bids.slice(0, 8).map(bid => {
+                const price = parseFloat(bid[0]);
+                const quantity = parseFloat(bid[1]);
+                const total = (price * quantity).toFixed(2);
+                return `
+                    <div class="ob-row">
+                        <span class="ob-price ob-bid">${price.toLocaleString()}</span>
+                        <span>${quantity}</span>
+                        <span>${total}</span>
+                    </div>
+                `;
+            }).join('');
+
+            // 마지막 체결가 업데이트 (bids의 첫번째 가격으로 근사)
+            if (bids.length > 0) {
+                const lastPriceEl = document.getElementById('ob-last-price');
+                const currentPriceNum = parseFloat(bids[0][0]);
+                const previousPriceNum = parseFloat(lastPriceEl.dataset.rawPrice || 0);
+                
+                lastPriceEl.className = 'order-book-last-price ' + (currentPriceNum >= previousPriceNum ? 'ob-bid' : 'ob-ask');
+                lastPriceEl.innerText = currentPriceNum.toLocaleString();
+                lastPriceEl.dataset.rawPrice = currentPriceNum; // 비교를 위해 원본 숫자 저장
+            }
+        }
+
+        // === 패턴 관리 큐 ===
+
+        // 큐 상태: 단계 목록, 각 단계는 최대 2개 패턴을 가짐
+        let queueSteps = []; // [{patterns: [{conditionBlocks: ['LONG','SHORT'], leafBlock: 'LONG', amount: 5, leverage: 1, stopLoss: null, takeProfit: null}, ...]}]
+
+        // 패턴 빌더 상태: 단일 입력 영역
+        let conditionBlocks = [];    // ['LONG', 'SHORT', ...] - 현재 입력 중인 조건 블록
+        let leafBlock = null;        // 'LONG' or 'SHORT' or null - 현재 입력 중인 리프 블록
+        let pendingStepPatterns = []; // 현재 단계에 추가된 패턴 목록 (최대 2개)
+
+        const MAX_CONDITION_BLOCKS = 5; // 조건 블록 최대 5개
+        const MAX_STEPS = 20;           // 큐당 단계 최대 20개
+        const MAX_PATTERNS_PER_STEP = 2; // 단계당 패턴 최대 2개
+
+        function loadPatterns() {
+            // 현재는 큐 데이터를 로컬에서 관리 (API 연동은 다음 작업)
+            renderQueueDisplay();
+        }
+
+        /**
+         * 큐 표시 영역에 등록된 단계/패턴을 계층적으로 렌더링
+         */
+        function renderQueueDisplay() {
+            const container = document.getElementById('queue-display');
+
+            if (queueSteps.length === 0) {
+                container.innerHTML = '<div class="pattern-manage-empty">등록된 큐가 없습니다. 아래에서 큐를 구성해주세요.</div>';
+                return;
+            }
+
+            // 트리거 설정값 표시
+            const triggerSec = document.getElementById('trigger-seconds').value || '-';
+            const triggerRate = document.getElementById('trigger-rate').value || '-';
+
+            container.innerHTML = `
+                <div class="queue-trigger-info">
+                    <span>트리거: ${triggerSec}초 / ${triggerRate}%</span>
+                </div>
+                ${queueSteps.map((step, stepIdx) => `
+                    <div class="step-card">
+                        <div class="step-card-header">
+                            <span class="step-card-title">${stepIdx + 1}단계</span>
+                            <button onclick="removeStep(${stepIdx})" class="pattern-delete-btn">삭제</button>
+                        </div>
+                        <div class="step-card-body">
+                            ${step.patterns.map((p, pIdx) => {
+                                // 조건 블록 시각화
+                                const condBlocks = p.conditionBlocks.map(side => {
+                                    const isLong = side === 'LONG';
+                                    return `<span class="block-tag ${isLong ? 'block-long' : 'block-short'}">${isLong ? 'L' : 'S'}</span>`;
+                                }).join('');
+                                // 리프 블록 시각화
+                                const leafTag = p.leafBlock
+                                    ? `<span class="block-tag ${p.leafBlock === 'LONG' ? 'block-long' : 'block-short'}">${p.leafBlock === 'LONG' ? 'L' : 'S'}</span>`
+                                    : '';
+                                return `
+                                    <div class="step-pattern-row">
+                                        <span class="step-pattern-label">패턴${pIdx + 1}:</span>
+                                        <span class="step-pattern-blocks">${condBlocks}</span>
+                                        <span class="block-colon-display">:</span>
+                                        <span class="step-pattern-blocks">${leafTag}</span>
+                                        <span class="step-pattern-meta">→ ${p.amount}$ x${p.leverage}</span>
+                                        ${p.stopLoss ? `<span class="step-pattern-meta sl">SL:${p.stopLoss}%</span>` : ''}
+                                        ${p.takeProfit ? `<span class="step-pattern-meta tp">TP:${p.takeProfit}%</span>` : ''}
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        /**
+         * 조건 블록 추가 (단일 입력 영역, 최대 5개)
+         * 첫 블록 추가 시 기존 패턴과 중복 검증
+         */
+        function addConditionBlock(side) {
+            if (conditionBlocks.length >= MAX_CONDITION_BLOCKS) {
+                alert(`조건 블록은 최대 ${MAX_CONDITION_BLOCKS}개까지 추가할 수 있습니다.`);
+                return;
+            }
+            // 첫 블록 중복 검증: 이미 패턴이 1개 있고, 현재 조건 블록이 비어있을 때
+            if (conditionBlocks.length === 0 && pendingStepPatterns.length === 1) {
+                const existingFirstBlock = pendingStepPatterns[0].conditionBlocks[0];
+                if (existingFirstBlock === side) {
+                    const sideLabel = side === 'LONG' ? 'L' : 'S';
+                    alert(`같은 단계 내 패턴의 시작 블록이 중복됩니다. (${sideLabel}) 다른 방향을 선택해주세요.`);
+                    return;
+                }
+            }
+            conditionBlocks.push(side);
+            renderPatternBlocks();
+        }
+
+        /**
+         * 리프 블록 설정 (1개만 가능)
+         */
+        function setLeafBlock(side) {
+            leafBlock = side;
+            renderPatternBlocks();
+        }
+
+        /**
+         * 패턴 블록 영역 렌더링 (조건 블록 + 리프 블록)
+         */
+        function renderPatternBlocks() {
+            // 조건 블록 렌더링
+            const condContainer = document.getElementById('condition-blocks');
+            if (conditionBlocks.length === 0) {
+                condContainer.innerHTML = '<span class="pattern-empty-msg">조건 블록</span>';
+            } else {
+                condContainer.innerHTML = conditionBlocks.map((side, idx) => {
+                    const isLong = side === 'LONG';
+                    return `<span class="block-tag ${isLong ? 'block-long' : 'block-short'}">
+                        ${isLong ? 'L' : 'S'}
+                        <button onclick="removeConditionBlock(${idx})" class="block-remove-btn">&times;</button>
+                    </span>`;
+                }).join('');
+            }
+
+            // 리프 블록 렌더링
+            const leafContainer = document.getElementById('leaf-block');
+            if (!leafBlock) {
+                leafContainer.innerHTML = '<span class="pattern-empty-msg">리프</span>';
+            } else {
+                const isLong = leafBlock === 'LONG';
+                leafContainer.innerHTML = `<span class="block-tag ${isLong ? 'block-long' : 'block-short'}">
+                    ${isLong ? 'L' : 'S'}
+                    <button onclick="clearLeafBlock()" class="block-remove-btn">&times;</button>
+                </span>`;
+            }
+        }
+
+        /**
+         * 조건 블록 제거
+         */
+        function removeConditionBlock(index) {
+            conditionBlocks.splice(index, 1);
+            renderPatternBlocks();
+        }
+
+        /**
+         * 리프 블록 초기화
+         */
+        function clearLeafBlock() {
+            leafBlock = null;
+            renderPatternBlocks();
+        }
+
+        /**
+         * 현재 입력 영역의 패턴 데이터 수집 (입력값 검증 포함)
+         * @returns 패턴 객체 또는 false (검증 실패)
+         */
+        function collectCurrentPattern() {
+            const amount = document.getElementById('pattern-amount').value;
+            const leverage = document.getElementById('pattern-leverage').value;
+            const stopLoss = document.getElementById('pattern-stoploss').value;
+            const takeProfit = document.getElementById('pattern-takeprofit').value;
+
+            // 필수 검증: 조건 블록, 리프 블록, 금액
+            if (conditionBlocks.length === 0) {
+                alert('조건 블록을 추가해주세요.');
+                return false;
+            }
+            if (!leafBlock) {
+                alert('리프 블록(실행 방향)을 설정해주세요.');
+                return false;
+            }
+            if (!amount || parseFloat(amount) <= 0) {
+                alert('금액(USDT)을 입력해주세요.');
+                return false;
+            }
+
+            return {
+                conditionBlocks: [...conditionBlocks],
+                leafBlock: leafBlock,
+                amount: parseFloat(amount),
+                leverage: parseInt(leverage) || 1,
+                stopLoss: stopLoss ? parseFloat(stopLoss) : null,
+                takeProfit: takeProfit ? parseFloat(takeProfit) : null
+            };
+        }
+
+        /**
+         * 현재 입력 영역의 패턴을 pendingStepPatterns에 추가
+         * 최대 2개 제한 + 첫 블록 중복 검증
+         */
+        function addPatternToStep() {
+            // 최대 2개 제한
+            if (pendingStepPatterns.length >= MAX_PATTERNS_PER_STEP) {
+                alert(`패턴은 단계당 최대 ${MAX_PATTERNS_PER_STEP}개까지 추가할 수 있습니다.`);
+                return;
+            }
+
+            // 현재 입력 데이터 수집
+            const pattern = collectCurrentPattern();
+            if (pattern === false) return;
+
+            // 첫 블록 중복 검증: 이미 패턴이 1개 있으면, 새 패턴의 첫 조건 블록이 기존과 같은지 확인
+            if (pendingStepPatterns.length === 1) {
+                const existingFirstBlock = pendingStepPatterns[0].conditionBlocks[0];
+                if (existingFirstBlock === pattern.conditionBlocks[0]) {
+                    const sideLabel = existingFirstBlock === 'LONG' ? 'L' : 'S';
+                    alert(`같은 단계 내 패턴의 시작 블록이 중복됩니다. (${sideLabel}) 다른 방향으로 시작하는 패턴을 추가해주세요.`);
+                    return;
+                }
+            }
+
+            // 패턴 추가 + 입력 영역 초기화 + 미리보기 갱신
+            pendingStepPatterns.push(pattern);
+            resetPatternInputs();
+            renderPendingPatterns();
+        }
+
+        /**
+         * 현재 단계에 추가된 패턴들을 미리보기로 표시
+         */
+        function renderPendingPatterns() {
+            const container = document.getElementById('pending-patterns-preview');
+
+            if (pendingStepPatterns.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = pendingStepPatterns.map((p, idx) => {
+                // 조건 블록 시각화
+                const condBlocks = p.conditionBlocks.map(side => {
+                    const isLong = side === 'LONG';
+                    return `<span class="block-tag ${isLong ? 'block-long' : 'block-short'}">${isLong ? 'L' : 'S'}</span>`;
+                }).join('');
+                // 리프 블록 시각화
+                const leafTag = p.leafBlock
+                    ? `<span class="block-tag ${p.leafBlock === 'LONG' ? 'block-long' : 'block-short'}">${p.leafBlock === 'LONG' ? 'L' : 'S'}</span>`
+                    : '';
+                return `
+                    <div class="pending-pattern-item">
+                        <span class="step-pattern-label">패턴${idx + 1}:</span>
+                        <span class="step-pattern-blocks">${condBlocks}</span>
+                        <span class="block-colon-display">:</span>
+                        <span class="step-pattern-blocks">${leafTag}</span>
+                        <span class="step-pattern-meta">→ ${p.amount}$ x${p.leverage}</span>
+                        ${p.stopLoss ? `<span class="step-pattern-meta sl">SL:${p.stopLoss}%</span>` : ''}
+                        ${p.takeProfit ? `<span class="step-pattern-meta tp">TP:${p.takeProfit}%</span>` : ''}
+                        <button onclick="removePendingPattern(${idx})" class="pattern-delete-btn">삭제</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        /**
+         * 미리보기에서 패턴 삭제
+         */
+        function removePendingPattern(index) {
+            pendingStepPatterns.splice(index, 1);
+            renderPendingPatterns();
+        }
+
+        /**
+         * 단계를 큐에 추가 (최대 20개)
+         * pendingStepPatterns에서 패턴 수집
+         */
+        function addStepToQueue() {
+            if (queueSteps.length >= MAX_STEPS) {
+                alert(`단계는 최대 ${MAX_STEPS}개까지 추가할 수 있습니다.`);
+                return;
+            }
+
+            // pendingStepPatterns가 비어있으면 차단
+            if (pendingStepPatterns.length === 0) {
+                alert('패턴을 최소 1개 추가해주세요.');
+                return;
+            }
+
+            // 단계 추가
+            queueSteps.push({ patterns: [...pendingStepPatterns] });
+
+            // 전체 초기화 (pending 포함)
+            pendingStepPatterns = [];
+            resetPatternInputs();
+            renderPendingPatterns();
+
+            // 단계 번호 업데이트
+            document.getElementById('step-number-label').textContent = `${queueSteps.length + 1}단계`;
+
+            // 큐 표시 갱신
+            renderQueueDisplay();
+        }
+
+        /**
+         * 패턴 입력 영역 초기화 (단일 입력 영역만)
+         */
+        function resetPatternInputs() {
+            conditionBlocks = [];
+            leafBlock = null;
+
+            renderPatternBlocks();
+
+            // 입력 필드 초기화
+            ['pattern-amount', 'pattern-leverage', 'pattern-stoploss', 'pattern-takeprofit'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+        }
+
+        /**
+         * 단계 제거
+         */
+        function removeStep(index) {
+            queueSteps.splice(index, 1);
+            // 단계 번호 라벨 업데이트
+            document.getElementById('step-number-label').textContent = `${queueSteps.length + 1}단계`;
+            renderQueueDisplay();
+        }
+
+        /**
+         * 큐 저장 (현재는 데이터 구성만, API 연동은 다음 작업)
+         */
+        function saveQueue() {
+            if (queueSteps.length === 0) {
+                alert('최소 1개의 단계를 추가해주세요.');
+                return;
+            }
+
+            const triggerSeconds = document.getElementById('trigger-seconds').value;
+            const triggerRate = document.getElementById('trigger-rate').value;
+
+            if (!triggerSeconds || parseInt(triggerSeconds) <= 0) {
+                alert('트리거 시간(초)을 입력해주세요.');
+                return;
+            }
+            if (!triggerRate || parseFloat(triggerRate) <= 0) {
+                alert('트리거 상승/하락률(%)을 입력해주세요.');
+                return;
+            }
+
+            // 큐 데이터 구성
+            const queueData = {
+                symbol: symbol,
+                triggerSeconds: parseInt(triggerSeconds),
+                triggerRate: parseFloat(triggerRate),
+                steps: queueSteps.map((step, stepIdx) => ({
+                    stepOrder: stepIdx + 1,
+                    patterns: step.patterns.map(p => ({
+                        conditionBlocks: p.conditionBlocks.map((side, blockIdx) => ({
+                            side: side,
+                            blockOrder: blockIdx + 1,
+                            isLeaf: false
+                        })),
+                        leafBlock: {
+                            side: p.leafBlock,
+                            blockOrder: p.conditionBlocks.length + 1,
+                            isLeaf: true
+                        },
+                        amount: p.amount,
+                        leverage: p.leverage,
+                        stopLossRate: p.stopLoss,
+                        takeProfitRate: p.takeProfit
+                    }))
+                }))
+            };
+
+            // TODO: API 연동 (다음 작업에서 구현)
+            console.log('큐 데이터:', JSON.stringify(queueData, null, 2));
+            alert('큐가 구성되었습니다. (API 연동은 다음 작업에서 진행)');
+
+            // 큐 표시 갱신 (트리거 정보 포함)
+            renderQueueDisplay();
+        }
+
+        /**
+         * 기존 호환: 패턴 삭제 (API 연동용, 현재는 미사용)
+         */
+        function deletePattern(id) {
+            fetch(`/api/autotrade/patterns/${id}?symbol=${symbol}`, { method: 'DELETE' })
+                .then(() => {
+                    loadPatterns();
+                    checkAutoTradeStatus();
+                })
+                .catch(err => alert('패턴 삭제 실패: ' + err.message));
+        }
+
+        function checkAutoTradeStatus() {
+            fetch(`/api/autotrade/status?symbol=${symbol}`)
+                .then(res => res.json())
+                .then(data => {
+                    const wasActive = autoTradeActive;
+                    autoTradeActive = data.active;
+                    document.getElementById('autotrade-status').style.display = autoTradeActive ? 'block' : 'none';
+
+                    if (autoTradeActive && !wasActive) {
+                        startStatusPolling();
+                    } else if (!autoTradeActive && wasActive) {
+                        stopStatusPolling();
+                    }
+                })
+                .catch(err => console.error('상태 조회 실패:', err));
+        }
+
+        function startStatusPolling() {
+            if (autoTradeStatusInterval) clearInterval(autoTradeStatusInterval);
+            autoTradeStatusInterval = setInterval(() => {
+                fetch(`/api/autotrade/status?symbol=${symbol}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (!data.active) {
+                            autoTradeActive = false;
+                            document.getElementById('autotrade-status').style.display = 'none';
+                            stopStatusPolling();
+                            return;
+                        }
+                        document.getElementById('status-pattern').textContent = data.currentPattern || '-';
+                        const stepParts = data.currentPattern ? data.currentPattern.split(',') : [];
+                        document.getElementById('status-step').textContent = (data.currentStep + 1) + '/' + (stepParts.length || '-');
+                        document.getElementById('status-prev-price').textContent = data.previousPrice || '-';
+                        const logEl = document.getElementById('trade-log');
+                        if (data.recentLog && data.recentLog.length > 0) {
+                            logEl.innerHTML = data.recentLog.slice(-10).reverse().map(l => `<div>${l}</div>`).join('');
+                        }
+                    })
+                    .catch(err => console.error('상태 폴링 실패:', err));
+            }, 1000);
+        }
+
+        function stopStatusPolling() {
+            if (autoTradeStatusInterval) {
+                clearInterval(autoTradeStatusInterval);
+                autoTradeStatusInterval = null;
+            }
+        }
+    </script>
+</body>
+</html>
