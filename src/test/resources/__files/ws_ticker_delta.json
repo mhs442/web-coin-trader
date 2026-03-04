@@ -1,0 +1,9 @@
+{
+  "topic": "tickers.BTCUSDT",
+  "type": "delta",
+  "data": {
+    "symbol": "BTCUSDT",
+    "lastPrice": "50100.00"
+  },
+  "ts": 1699999801000
+}

@@ -1,0 +1,14 @@
+{
+  "topic": "tickers.BTCUSDT",
+  "type": "snapshot",
+  "data": {
+    "symbol": "BTCUSDT",
+    "lastPrice": "50000.00",
+    "price24hPcnt": "0.05",
+    "highPrice24h": "51000.00",
+    "lowPrice24h": "49000.00",
+    "volume24h": "10000.0",
+    "turnover24h": "500000000.0"
+  },
+  "ts": 1699999800000
+}

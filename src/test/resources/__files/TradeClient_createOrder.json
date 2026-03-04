@@ -1,0 +1,8 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "orderId": "1234567890",
+    "orderLinkId": ""
+  }
+}

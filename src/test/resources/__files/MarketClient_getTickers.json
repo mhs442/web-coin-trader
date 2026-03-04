@@ -1,0 +1,36 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "category": "linear",
+    "list": [
+      {
+        "symbol": "BTCUSDT",
+        "lastPrice": "50000.00",
+        "price24hPcnt": "0.05",
+        "highPrice24h": "51000.00",
+        "lowPrice24h": "49000.00",
+        "volume24h": "10000.0",
+        "turnover24h": "500000000.0"
+      },
+      {
+        "symbol": "ETHUSDT",
+        "lastPrice": "3000.00",
+        "price24hPcnt": "0.03",
+        "highPrice24h": "3100.00",
+        "lowPrice24h": "2900.00",
+        "volume24h": "5000.0",
+        "turnover24h": "15000000.0"
+      },
+      {
+        "symbol": "BTCETH",
+        "lastPrice": "16.5",
+        "price24hPcnt": "0.01",
+        "highPrice24h": "17.0",
+        "lowPrice24h": "16.0",
+        "volume24h": "100.0",
+        "turnover24h": "1650.0"
+      }
+    ]
+  }
+}

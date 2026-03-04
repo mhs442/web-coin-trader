@@ -1,0 +1,12 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "id": "12345",
+    "note": "test-key",
+    "apiKey": "testApiKey",
+    "readOnly": 0,
+    "type": 1,
+    "userID": "67890"
+  }
+}
