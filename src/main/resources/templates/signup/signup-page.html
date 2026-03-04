@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>회원가입</title>
+    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+</head>
+<body>
+<div class="auth-container">
+    <div class="auth-card">
+        <h2 class="auth-title">회원가입</h2>
+
+        <div th:if="${error}" class="auth-message auth-error" th:text="${error}"></div>
+
+        <form class="auth-form" method="post" action="/signup">
+            <div class="auth-field">
+                <label for="username">이름</label>
+                <input type="text" id="username" name="username"
+                       placeholder="이름" required
+                       th:value="${request?.username}">
+            </div>
+            <div class="auth-field">
+                <label for="phoneNumber">휴대폰 번호</label>
+                <input type="text" id="phoneNumber" name="phoneNumber"
+                       placeholder="휴대폰 번호" required
+                       th:value="${request?.phoneNumber}">
+            </div>
+            <div class="auth-field">
+                <label for="password">비밀번호</label>
+                <input type="password" id="password" name="password"
+                       placeholder="비밀번호" required>
+            </div>
+            <div class="auth-field">
+                <label for="passwordConfirm">비밀번호 확인</label>
+                <input type="password" id="passwordConfirm" name="passwordConfirm"
+                       placeholder="비밀번호 확인" required>
+            </div>
+            <div class="auth-field">
+                <label for="apiKey">Bybit API Key</label>
+                <input type="text" id="apiKey" name="apiKey"
+                       placeholder="Bybit API Key" required
+                       th:value="${request?.apiKey}">
+            </div>
+            <div class="auth-field">
+                <label for="apiSecret">Bybit API Secret</label>
+                <input type="password" id="apiSecret" name="apiSecret"
+                       placeholder="Bybit API Secret" required>
+            </div>
+            <div class="auth-buttons">
+                <button type="submit" class="auth-btn auth-btn-primary">가입하기</button>
+                <a href="/login" class="auth-btn auth-btn-secondary">돌아가기</a>
+            </div>
+        </form>
+    </div>
+</div>
+</body>
+</html>
