@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>로그인</title>
+    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+</head>
+<body>
+<div class="auth-container">
+    <div class="auth-card">
+        <h2 class="auth-title">로그인</h2>
+
+        <div th:if="${param.signupSuccess}" class="auth-message auth-success">
+            회원가입이 완료되었습니다. 로그인해주세요.
+        </div>
+
+        <div th:if="${param.error}" class="auth-message auth-error">
+            휴대폰 번호 또는 비밀번호가 올바르지 않습니다.
+        </div>
+
+        <form class="auth-form" method="post" action="/login">
+            <div class="auth-field">
+                <label for="phoneNumber">휴대폰 번호</label>
+                <input type="text" id="phoneNumber" name="phoneNumber"
+                       placeholder="휴대폰 번호" required autofocus>
+            </div>
+            <div class="auth-field">
+                <label for="password">비밀번호</label>
+                <input type="password" id="password" name="password"
+                       placeholder="비밀번호" required>
+            </div>
+            <div class="auth-buttons">
+                <button type="submit" class="auth-btn auth-btn-primary">로그인</button>
+                <a href="/signup" class="auth-btn auth-btn-secondary">회원가입</a>
+            </div>
+        </form>
+    </div>
+</div>
+</body>
+</html>
