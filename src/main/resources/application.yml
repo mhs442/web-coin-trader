@@ -1,0 +1,29 @@
+server:
+  port: 8080
+
+spring:
+  config:
+    import: optional:classpath:application-local.yml
+  datasource:
+    driver-class-name: org.mariadb.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  level:
+    org.hibernate.orm.jdbc.bind: TRACE
+
+bybit:
+  api:
+    url: https://api-testnet.bybit.com
+    recv-window: 5000
+  websocket:
+    url: wss://stream-testnet.bybit.com/v5/public/linear
+    ping-interval: 20000
+    reconnect-delay: 1000
+    reconnect-max-delay: 30000

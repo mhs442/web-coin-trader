@@ -1,0 +1,30 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+  h2:
+    console:
+      enabled: false
+
+bybit:
+  api:
+    url: http://localhost:${wiremock.server.port}
+    recv-window: 5000
+  websocket:
+    url: ws://localhost:0/mock-ws
+    ping-interval: 20000
+    reconnect-delay: 1000
+    reconnect-max-delay: 30000
+
+aes:
+  encryption:
+    key: 0123456789abcdef0123456789abcdef
