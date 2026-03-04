@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>마이페이지</title>
+    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+</head>
+<body>
+<div class="mypage-container">
+    <div class="mypage-header">
+        <a href="/dashboard" class="back-link">← 대시보드로 돌아가기</a>
+        <h1>마이페이지</h1>
+    </div>
+
+    <!-- 탭 메뉴 -->
+    <div class="mypage-tabs">
+        <button class="mypage-tab active" onclick="switchTab('patterns')">등록된 패턴</button>
+        <button class="mypage-tab" onclick="switchTab('trades')">거래 히스토리</button>
+    </div>
+
+    <!-- 패턴 탭 -->
+    <div id="tab-patterns" class="mypage-tab-content">
+        <div class="trade-filter">
+            <div class="filter-group">
+                <label for="pat-filter-symbol">코인</label>
+                <input type="text" id="pat-filter-symbol" placeholder="예: BTC">
+            </div>
+            <div class="filter-group">
+                <label for="pat-filter-start">등록 시작일</label>
+                <input type="date" id="pat-filter-start">
+            </div>
+            <div class="filter-group">
+                <label for="pat-filter-end">등록 종료일</label>
+                <input type="date" id="pat-filter-end">
+            </div>
+            <div class="filter-group">
+                <label for="pat-filter-sort">정렬</label>
+                <select id="pat-filter-sort">
+                    <option value="desc">최신순</option>
+                    <option value="asc">오래된순</option>
+                </select>
+            </div>
+            <button class="filter-btn" onclick="searchPatterns()">검색</button>
+            <button class="filter-btn filter-reset-btn" onclick="resetPatternFilter()">초기화</button>
+        </div>
+        <div id="pattern-container" class="mypage-scroll-wrapper"></div>
+        <div id="pattern-scroll-loading" class="scroll-loading" style="display: none;">데이터 로딩 중...</div>
+    </div>
+
+    <!-- 거래 히스토리 탭 -->
+    <div id="tab-trades" class="mypage-tab-content" style="display: none;">
+        <div class="trade-filter">
+            <div class="filter-group">
+                <label for="trade-filter-symbol">코인</label>
+                <input type="text" id="trade-filter-symbol" placeholder="예: BTC">
+            </div>
+            <div class="filter-group">
+                <label for="trade-filter-start">시작일</label>
+                <input type="date" id="trade-filter-start">
+            </div>
+            <div class="filter-group">
+                <label for="trade-filter-end">종료일</label>
+                <input type="date" id="trade-filter-end">
+            </div>
+            <div class="filter-group">
+                <label for="trade-filter-sort">정렬</label>
+                <select id="trade-filter-sort">
+                    <option value="desc">최신순</option>
+                    <option value="asc">오래된순</option>
+                </select>
+            </div>
+            <button class="filter-btn" onclick="searchTrades()">검색</button>
+            <button class="filter-btn filter-reset-btn" onclick="resetTradeFilter()">초기화</button>
+        </div>
+        <div id="trade-container" class="mypage-scroll-wrapper"></div>
+        <div id="trade-scroll-loading" class="scroll-loading" style="display: none;">데이터 로딩 중...</div>
+    </div>
+</div>
+
+<script>
+    const PAGE_SIZE = 20;
+
+    // 패턴 페이징 상태
+    let patternPage = 0;
+    let patternLast = false;
+    let patternLoading = false;
+    let patternIndex = 0; // 전체 패턴 순번 관리
+
+    // 거래 히스토리 페이징 상태
+    let tradePage = 0;
+    let tradeLast = false;
+    let tradeLoading = false;
+
+    function switchTab(tab) {
+        document.querySelectorAll('.mypage-tab').forEach(btn => btn.classList.remove('active'));
+        document.querySelectorAll('.mypage-tab-content').forEach(el => el.style.display = 'none');
+
+        if (tab === 'patterns') {
+            document.querySelector('.mypage-tab:first-child').classList.add('active');
+            document.getElementById('tab-patterns').style.display = 'block';
+        } else {
+            document.querySelector('.mypage-tab:last-child').classList.add('active');
+            document.getElementById('tab-trades').style.display = 'block';
+        }
+    }
+
+    // === 패턴 필터 파라미터 생성 ===
+    function getPatternParams(page) {
+        const symbol = document.getElementById('pat-filter-symbol').value.trim();
+        const startDate = document.getElementById('pat-filter-start').value;
+        const endDate = document.getElementById('pat-filter-end').value;
+        const sort = document.getElementById('pat-filter-sort').value;
+
+        const params = new URLSearchParams();
+        if (symbol) params.append('symbol', symbol);
+        if (startDate) params.append('startDate', startDate);
+        if (endDate) params.append('endDate', endDate);
+        params.append('sort', sort);
+        params.append('page', page);
+        params.append('size', PAGE_SIZE);
+        return params;
+    }
+
+    // === 패턴 로드 (페이지 단위) ===
+    function loadPatterns(page) {
+        if (patternLoading || patternLast) return;
+        patternLoading = true;
+
+        const params = getPatternParams(page);
+        const loadingEl = document.getElementById('pattern-scroll-loading');
+        loadingEl.style.display = 'block';
+
+        fetch('/api/mypage/patterns?' + params.toString())
+            .then(res => res.json())
+            .then(response => {
+                const container = document.getElementById('pattern-container');
+                const patterns = response.content;
+
+                // 첫 페이지인데 데이터 없으면 빈 상태 표시
+                if (page === 0 && patterns.length === 0) {
+                    container.innerHTML = '<div class="mypage-empty">등록된 패턴이 없습니다.</div>';
+                    patternLast = true;
+                    loadingEl.style.display = 'none';
+                    patternLoading = false;
+                    return;
+                }
+
+                // 심볼별 그룹핑하여 기존 섹션에 추가
+                const grouped = {};
+                patterns.forEach(p => {
+                    if (!grouped[p.symbol]) grouped[p.symbol] = [];
+                    grouped[p.symbol].push(p);
+                });
+
+                for (const [sym, items] of Object.entries(grouped)) {
+                    // 기존 심볼 섹션이 있는지 확인
+                    let section = container.querySelector('[data-symbol="' + sym + '"]');
+                    let tbody;
+
+                    if (section) {
+                        // 기존 섹션에 행 추가
+                        tbody = section.querySelector('tbody');
+                    } else {
+                        // 새 심볼 섹션 생성
+                        section = document.createElement('div');
+                        section.className = 'mypage-section';
+                        section.setAttribute('data-symbol', sym);
+                        section.innerHTML = `
+                            <h3 class="mypage-section-title">${sym}</h3>
+                            <div class="mypage-table-wrapper">
+                                <table class="mypage-table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>패턴</th>
+                                            <th>수량</th>
+                                            <th>상태</th>
+                                            <th>등록일</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        `;
+                        container.appendChild(section);
+                        tbody = section.querySelector('tbody');
+                    }
+
+                    // 각 패턴 행 추가
+                    items.forEach(p => {
+                        patternIndex++;
+                        const blocks = p.steps.map(s => {
+                            const isLong = s.side === 'LONG';
+                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                        }).join(' ');
+                        const qty = p.steps.map(s => s.quantity).join(', ');
+                        const status = p.useYn === 'Y'
+                            ? '<span class="status-active">활성</span>'
+                            : '<span class="status-inactive">비활성</span>';
+
+                        const tr = document.createElement('tr');
+                        tr.innerHTML =
+                            '<td>' + patternIndex + '</td>' +
+                            '<td>' + blocks + '</td>' +
+                            '<td class="mono-cell">' + qty + '</td>' +
+                            '<td>' + status + '</td>' +
+                            '<td>' + p.createdAt + '</td>';
+                        tbody.appendChild(tr);
+                    });
+                }
+
+                // 페이징 상태 업데이트
+                patternPage = response.page;
+                patternLast = response.last;
+                loadingEl.style.display = patternLast ? 'none' : 'block';
+                patternLoading = false;
+            })
+            .catch(err => {
+                console.error('패턴 로드 실패:', err);
+                loadingEl.style.display = 'none';
+                patternLoading = false;
+            });
+    }
+
+    // === 검색 버튼: 패턴 초기화 후 첫 페이지 로드 ===
+    function searchPatterns() {
+        patternPage = 0;
+        patternLast = false;
+        patternLoading = false;
+        patternIndex = 0;
+        document.getElementById('pattern-container').innerHTML = '';
+        loadPatterns(0);
+    }
+
+    // === 거래 히스토리 필터 파라미터 생성 ===
+    function getTradeParams(page) {
+        const symbol = document.getElementById('trade-filter-symbol').value.trim();
+        const startDate = document.getElementById('trade-filter-start').value;
+        const endDate = document.getElementById('trade-filter-end').value;
+        const sort = document.getElementById('trade-filter-sort').value;
+
+        const params = new URLSearchParams();
+        if (symbol) params.append('symbol', symbol);
+        if (startDate) params.append('startDate', startDate);
+        if (endDate) params.append('endDate', endDate);
+        params.append('sort', sort);
+        params.append('page', page);
+        params.append('size', PAGE_SIZE);
+        return params;
+    }
+
+    // === 거래 히스토리 로드 (페이지 단위) ===
+    function loadTrades(page) {
+        if (tradeLoading || tradeLast) return;
+        tradeLoading = true;
+
+        const params = getTradeParams(page);
+        const loadingEl = document.getElementById('trade-scroll-loading');
+        loadingEl.style.display = 'block';
+
+        fetch('/api/mypage/trades?' + params.toString())
+            .then(res => res.json())
+            .then(response => {
+                const container = document.getElementById('trade-container');
+                const trades = response.content;
+
+                // 첫 페이지인데 데이터 없으면 빈 상태 표시
+                if (page === 0 && trades.length === 0) {
+                    container.innerHTML = '<div class="mypage-empty">거래 내역이 없습니다.</div>';
+                    tradeLast = true;
+                    loadingEl.style.display = 'none';
+                    tradeLoading = false;
+                    return;
+                }
+
+                // 첫 페이지면 테이블 구조 생성
+                let tbody = container.querySelector('tbody');
+                if (page === 0 || !tbody) {
+                    container.innerHTML = `
+                        <div class="mypage-table-wrapper">
+                            <table class="mypage-table">
+                                <thead>
+                                    <tr>
+                                        <th>일시</th>
+                                        <th>코인</th>
+                                        <th>방향</th>
+                                        <th>수량</th>
+                                        <th>체결가</th>
+                                        <th>상태</th>
+                                        <th>비고</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    `;
+                    tbody = container.querySelector('tbody');
+                }
+
+                // 거래 행 추가
+                trades.forEach(t => {
+                    const isLong = t.side === 'LONG';
+                    const sideClass = isLong ? 'text-green' : 'text-red';
+                    const statusClass = t.orderStatus === 'SUCCESS' ? 'status-active' : 'status-failed';
+
+                    const tr = document.createElement('tr');
+                    tr.innerHTML =
+                        '<td>' + t.createdAt + '</td>' +
+                        '<td><strong>' + t.symbol + '</strong></td>' +
+                        '<td class="' + sideClass + '">' + t.side + '</td>' +
+                        '<td class="mono-cell">' + t.quantity + '</td>' +
+                        '<td class="mono-cell">' + t.executedPrice + '</td>' +
+                        '<td><span class="' + statusClass + '">' + t.orderStatus + '</span></td>' +
+                        '<td class="error-cell">' + (t.errorMessage || '-') + '</td>';
+                    tbody.appendChild(tr);
+                });
+
+                // 페이징 상태 업데이트
+                tradePage = response.page;
+                tradeLast = response.last;
+                loadingEl.style.display = tradeLast ? 'none' : 'block';
+                tradeLoading = false;
+            })
+            .catch(err => {
+                console.error('거래 히스토리 로드 실패:', err);
+                loadingEl.style.display = 'none';
+                tradeLoading = false;
+            });
+    }
+
+    // === 검색 버튼: 거래 히스토리 초기화 후 첫 페이지 로드 ===
+    function searchTrades() {
+        tradePage = 0;
+        tradeLast = false;
+        tradeLoading = false;
+        document.getElementById('trade-container').innerHTML = '';
+        loadTrades(0);
+    }
+
+    function resetPatternFilter() {
+        document.getElementById('pat-filter-symbol').value = '';
+        document.getElementById('pat-filter-start').value = '';
+        document.getElementById('pat-filter-end').value = '';
+        document.getElementById('pat-filter-sort').value = 'desc';
+        searchPatterns();
+    }
+
+    function resetTradeFilter() {
+        document.getElementById('trade-filter-symbol').value = '';
+        document.getElementById('trade-filter-start').value = '';
+        document.getElementById('trade-filter-end').value = '';
+        document.getElementById('trade-filter-sort').value = 'desc';
+        searchTrades();
+    }
+
+    // 윈도우 스크롤 이벤트: 하단 도달 시 현재 활성 탭의 다음 페이지 로드
+    window.addEventListener('scroll', function () {
+        const scrollTop = window.scrollY || document.documentElement.scrollTop;
+        const scrollHeight = document.documentElement.scrollHeight;
+        const clientHeight = window.innerHeight;
+
+        // 하단 100px 이내 도달 시 다음 페이지 로드
+        if (scrollTop + clientHeight >= scrollHeight - 100) {
+            // 패턴 탭이 활성화 상태인지 확인
+            const patternTab = document.getElementById('tab-patterns');
+            if (patternTab.style.display !== 'none') {
+                if (!patternLast && !patternLoading) {
+                    loadPatterns(patternPage + 1);
+                }
+            }
+
+            // 거래 히스토리 탭이 활성화 상태인지 확인
+            const tradeTab = document.getElementById('tab-trades');
+            if (tradeTab.style.display !== 'none') {
+                if (!tradeLast && !tradeLoading) {
+                    loadTrades(tradePage + 1);
+                }
+            }
+        }
+    });
+
+    // 페이지 로드 시 초기화
+    document.addEventListener('DOMContentLoaded', () => {
+        loadPatterns(0);
+        loadTrades(0);
+    });
+</script>
+</body>
+</html>
