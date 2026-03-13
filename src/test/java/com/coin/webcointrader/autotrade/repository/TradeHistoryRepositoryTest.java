@@ -1,6 +1,6 @@
 package com.coin.webcointrader.autotrade.repository;
 
-import com.coin.webcointrader.config.JpaConfig;
+import com.coin.webcointrader.common.config.JpaConfig;
 import com.coin.webcointrader.common.entity.Side;
 import com.coin.webcointrader.common.entity.TradeHistory;
 import com.coin.webcointrader.common.enums.OrderResult;

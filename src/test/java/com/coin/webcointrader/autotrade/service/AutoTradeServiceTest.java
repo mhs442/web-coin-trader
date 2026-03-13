@@ -3,7 +3,7 @@ package com.coin.webcointrader.autotrade.service;
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
 import com.coin.webcointrader.autotrade.repository.QueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.client.market.BybitWebSocketClient;
+import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.Queue;
 import com.coin.webcointrader.common.entity.QueueStep;

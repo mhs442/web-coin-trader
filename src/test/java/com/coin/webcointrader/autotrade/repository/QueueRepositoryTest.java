@@ -1,6 +1,6 @@
 package com.coin.webcointrader.autotrade.repository;
 
-import com.coin.webcointrader.config.JpaConfig;
+import com.coin.webcointrader.common.config.JpaConfig;
 import com.coin.webcointrader.common.entity.Queue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;

@@ -1,7 +1,7 @@
 package com.coin.webcointrader.market.service;
 
-import com.coin.webcointrader.client.market.MarketClient;
-import com.coin.webcointrader.client.market.dto.WebSocketTickerDTO;
+import com.coin.webcointrader.common.client.market.MarketClient;
+import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.dto.response.GetKlineResponse;
 import com.coin.webcointrader.common.dto.response.OrderBookResponse;

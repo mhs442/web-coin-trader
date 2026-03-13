@@ -1,6 +1,6 @@
 package com.coin.webcointrader.trade.service;
 
-import com.coin.webcointrader.client.trade.TradeClient;
+import com.coin.webcointrader.common.client.trade.TradeClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
 import com.coin.webcointrader.common.entity.User;
