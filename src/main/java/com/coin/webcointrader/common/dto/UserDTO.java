@@ -28,6 +28,6 @@ public class UserDTO implements UserDetails {
 
     @Override
     public String getUsername() {
-        return this.username;
+        return this.phoneNumber;
     }
 }
