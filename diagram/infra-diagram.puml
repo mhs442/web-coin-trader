@@ -1,0 +1,27 @@
+@startuml
+title 코인 자동매매 시스템 - Infrastructure
+
+actor "사용자\n(사설 네트워크)" as User
+
+node "노트북 서버\nPrivate IP: 192.168.x.x" {
+
+    node "Docker Engine" {
+
+        node "Spring Boot Container" {
+            component "Auto Trading Service"
+        }
+
+        node "MariaDB Container" {
+            database "Trading DB"
+        }
+    }
+}
+
+cloud "ByBit Exchange API"
+
+User --> "Auto Trading Service" : HTTP (Internal Network)
+
+"Auto Trading Service" --> "Trading DB" : Read / Write
+"Auto Trading Service" --> "ByBit Exchange API" : Account / Order API
+
+@enduml
