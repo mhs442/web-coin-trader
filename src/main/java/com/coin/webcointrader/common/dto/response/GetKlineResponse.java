@@ -1,12 +1,12 @@
 package com.coin.webcointrader.common.dto.response;
 
-import com.coin.webcointrader.common.dto.ByBItMasterDTO;
+import com.coin.webcointrader.common.dto.BybitMasterDTO;
 import lombok.Getter;
 
 import java.util.List;
 
 @Getter
-public class GetKlineResponse extends ByBItMasterDTO {
+public class GetKlineResponse extends BybitMasterDTO {
     private Result result;      // K-라인 조회 결과
 
     @Getter

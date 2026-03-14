@@ -55,7 +55,7 @@ public class LoginService implements UserDetailsService {
      * @throws CustomException 비밀번호 불일치(PASSWORD_MISMATCH), 전화번호 중복(DUPLICATE_PHONE_NUMBER),
      *                         API Key 무효(INVALID_API_KEY) 시 예외 발생
      */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional
     public void signup(SignupRequest request) {
         // 1. 비밀번호 일치 확인
         if (!request.getPassword().equals(request.getPasswordConfirm())) {

@@ -1,6 +1,6 @@
 package com.coin.webcointrader.common.dto.response;
 
-import com.coin.webcointrader.common.dto.ByBItMasterDTO;
+import com.coin.webcointrader.common.dto.BybitMasterDTO;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Getter;
@@ -8,11 +8,9 @@ import lombok.Setter;
 
 import java.util.List;
 
-@Getter
-@Setter
+@Getter @Setter
 @JsonIgnoreProperties(ignoreUnknown = true)
-@JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
-public class FindTickerResponse extends ByBItMasterDTO {
+public class FindTickerResponse extends BybitMasterDTO {
 
     private Result result;      // 티커 조회 결과
 

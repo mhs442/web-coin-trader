@@ -1,12 +1,12 @@
 package com.coin.webcointrader.common.dto.response;
 
-import com.coin.webcointrader.common.dto.ByBItMasterDTO;
+import com.coin.webcointrader.common.dto.BybitMasterDTO;
 import lombok.Getter;
 
 import java.util.List;
 
 @Getter
-public class GetWalletBalanceResponse extends ByBItMasterDTO {
+public class GetWalletBalanceResponse extends BybitMasterDTO {
     private Result result;      // 지갑 잔고 조회 결과
 
     @Getter

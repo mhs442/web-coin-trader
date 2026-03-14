@@ -1,6 +1,6 @@
 package com.coin.webcointrader.common.dto.response;
 
-import com.coin.webcointrader.common.dto.ByBItMasterDTO;
+import com.coin.webcointrader.common.dto.BybitMasterDTO;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Getter;
@@ -10,7 +10,7 @@ import lombok.Setter;
 @Setter
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
-public class CreateOrderResponse extends ByBItMasterDTO {
+public class CreateOrderResponse extends BybitMasterDTO {
 
     private Result result;      // 주문 생성 결과
 

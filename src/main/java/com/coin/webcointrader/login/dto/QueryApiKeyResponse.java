@@ -1,6 +1,6 @@
 package com.coin.webcointrader.login.dto;
 
-import com.coin.webcointrader.common.dto.ByBItMasterDTO;
+import com.coin.webcointrader.common.dto.BybitMasterDTO;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Getter;
 import lombok.Setter;
@@ -8,7 +8,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class QueryApiKeyResponse extends ByBItMasterDTO {
+public class QueryApiKeyResponse extends BybitMasterDTO {
     private Result result;      // API Key 조회 결과
 
     @Getter
