@@ -80,11 +80,11 @@
                     <div class="trigger-input-row">
                         <div class="trigger-input-group">
                             <label for="trigger-seconds">시간(초)</label>
-                            <input type="number" id="trigger-seconds" min="1" placeholder="60">
+                            <input type="number" id="trigger-seconds" min="1">
                         </div>
                         <div class="trigger-input-group">
                             <label for="trigger-rate">상승/하락률(%)</label>
-                            <input type="number" id="trigger-rate" step="0.01" min="0.01" placeholder="1.00">
+                            <input type="number" id="trigger-rate" step="0.01" min="0.01">
                         </div>
                     </div>
                 </div>
@@ -124,11 +124,11 @@
                         <div class="pattern-settings-row">
                             <div class="pattern-setting-item">
                                 <label>금액(USDT)</label>
-                                <input type="number" id="pattern-amount" min="1" step="1" placeholder="5">
+                                <input type="number" id="pattern-amount" min="1" step="1">
                             </div>
                             <div class="pattern-setting-item">
                                 <label>레버리지</label>
-                                <input type="number" id="pattern-leverage" min="1" max="125" step="1" placeholder="1">
+                                <input type="number" id="pattern-leverage" min="1" max="125" step="1">
                             </div>
                         </div>
                         <div class="pattern-settings-row">
@@ -742,12 +742,26 @@
                 }))
             };
 
-            // TODO: API 연동 (다음 작업에서 구현)
-            console.log('큐 데이터:', JSON.stringify(queueData, null, 2));
-            alert('큐가 구성되었습니다. (API 연동은 다음 작업에서 진행)');
-
-            // 큐 표시 갱신 (트리거 정보 포함)
-            renderQueueDisplay();
+            // 큐 저장 API 호출
+            $.ajax({
+                url: '/api/autotrade/patterns',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify(queueData),
+                success: function(data) {
+                    alert('큐가 등록되었습니다.');
+                    // 입력 초기화
+                    queueSteps = [];
+                    document.getElementById('trigger-seconds').value = '';
+                    document.getElementById('trigger-rate').value = '';
+                    document.getElementById('step-number-label').textContent = '1단계';
+                    renderQueueDisplay();
+                    loadPatterns();
+                },
+                error: function(xhr) {
+                    alert('큐 등록 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                }
+            });
         }
 
         /**

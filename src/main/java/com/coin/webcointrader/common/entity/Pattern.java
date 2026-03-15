@@ -6,6 +6,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "pattern")
@@ -36,4 +38,7 @@ public class Pattern {
 
     @Column(nullable = false)
     private int patternOrder;               // 단계 내 패턴 실행 순서
+
+    @OneToMany(mappedBy = "pattern", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<PatternBlock> blocks = new ArrayList<>();  // 소속 블록 목록
 }

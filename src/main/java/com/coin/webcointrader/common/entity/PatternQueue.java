@@ -7,11 +7,12 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "pattern_queue")
-@Getter
-@Setter
+@Getter @Setter
 @NoArgsConstructor
 public class PatternQueue extends BaseEntity {
 
@@ -25,8 +26,8 @@ public class PatternQueue extends BaseEntity {
     @Column(nullable = false, length = 100)
     private String symbol;                  // 코인 심볼 (예: BTCUSDT)
 
-    @Column(nullable = false, length = 2)
-    private String useYn = "N";             // 활성화 여부 (Y: 활성, N: 비활성)
+    @Column(nullable = false)
+    private boolean isActive = false;             // 활성화 여부 (Y: 활성, N: 비활성)
 
     @Column
     private LocalDateTime activatedAt;      // 활성화 일시
@@ -48,4 +49,7 @@ public class PatternQueue extends BaseEntity {
 
     @Column
     private Integer currentBlockOrder;      // 현재 대기 중인 블록 순서 (FK 없음, 앱 레벨 관리)
+
+    @OneToMany(mappedBy = "queue", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<PatternStep> steps = new ArrayList<>();  // 소속 단계 목록
 }
