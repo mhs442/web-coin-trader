@@ -1,4 +1,4 @@
-package com.coin.webcointrader.signup.controller;
+package com.coin.webcointrader.login.controller;
 
 import com.coin.webcointrader.common.entity.User;
 import com.coin.webcointrader.login.repository.LoginRepository;
@@ -24,7 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @AutoConfigureWireMock(port = 0)
-class SignupControllerTest {
+class LoginControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
