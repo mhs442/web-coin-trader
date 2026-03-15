@@ -1,10 +1,9 @@
 package com.coin.webcointrader.autotrade.service;
 
 import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
-import com.coin.webcointrader.autotrade.repository.QueueRepository;
-import com.coin.webcointrader.common.entity.Queue;
-import com.coin.webcointrader.common.entity.QueueStep;
-import com.coin.webcointrader.common.entity.Side;
+import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
+import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.exception.CustomException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,13 +12,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.BDDMockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
 class PatternQueueServiceTest {
@@ -28,237 +28,345 @@ class PatternQueueServiceTest {
     private PatternQueueService patternQueueService;
 
     @Mock
-    private QueueRepository queueRepository;
+    private PatternQueueRepository patternQueueRepository;
 
     // ─────────────────────────────────────────────
-    // getQueues
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("getQueues: 사용자/심볼에 해당하는 큐 목록을 반환한다")
-    void getQueues_success() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue q1 = makeQueue(1L, userId, symbol, 0);
-        Queue q2 = makeQueue(2L, userId, symbol, 1);
-
-        given(queueRepository.findByUserIdAndSymbolAndDelYnOrderBySortOrderAsc(userId, symbol, "N"))
-                .willReturn(List.of(q1, q2));
-
-        // when
-        List<Queue> result = patternQueueService.getQueues(userId, symbol);
-
-        // then
-        assertThat(result).hasSize(2);
-        assertThat(result.get(0).getSortOrder()).isEqualTo(0);
-        assertThat(result.get(1).getSortOrder()).isEqualTo(1);
-    }
-
-    // ─────────────────────────────────────────────
-    // addQueue
+    // addQueue 성공
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("addQueue: 유효한 요청이면 큐를 저장하고 반환한다")
+    @DisplayName("addQueue: 유효한 요청이면 PatternQueue와 하위 엔티티를 모두 저장한다")
     void addQueue_success() {
         // given
         Long userId = 1L;
-        AddPatternRequest request = makeRequest("BTCUSDT",
-                List.of(makeStep("LONG", "0.01"), makeStep("SHORT", "0.01")));
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
 
-        given(queueRepository.countByUserIdAndSymbolAndDelYn(userId, "BTCUSDT", "N")).willReturn(0L);
-        given(queueRepository.save(any(Queue.class))).willAnswer(inv -> inv.getArgument(0));
+        given(patternQueueRepository.countByUserIdAndSymbol(userId, "BTCUSDT")).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
 
         // when
-        Queue result = patternQueueService.addQueue(userId, request);
+        PatternQueue result = patternQueueService.addQueue(userId, request);
 
         // then
+        // 큐 기본 정보 검증
         assertThat(result.getSymbol()).isEqualTo("BTCUSDT");
-        assertThat(result.getSteps()).hasSize(2);
-        assertThat(result.getSteps().get(0).getSide()).isEqualTo(Side.LONG);
-        assertThat(result.getSteps().get(1).getSide()).isEqualTo(Side.SHORT);
+        assertThat(result.getUserId()).isEqualTo(userId);
+        assertThat(result.getTriggerSeconds()).isEqualTo(60);
+        assertThat(result.getTriggerRate()).isEqualByComparingTo(new BigDecimal("1.0"));
+        assertThat(result.isActive()).isFalse();
+
+        // 단계 검증
+        assertThat(result.getSteps()).hasSize(1);
+        PatternStep step = result.getSteps().get(0);
+        assertThat(step.getStepLevel()).isEqualTo(1);
+
+        // 패턴 검증
+        assertThat(step.getPatterns()).hasSize(1);
+        Pattern pattern = step.getPatterns().get(0);
+        assertThat(pattern.getAmount()).isEqualByComparingTo(new BigDecimal("10"));
+        assertThat(pattern.getLeverage()).isEqualTo(5);
+        assertThat(pattern.getStopLossRate()).isEqualByComparingTo(new BigDecimal("1.0"));
+        assertThat(pattern.getTakeProfitRate()).isEqualByComparingTo(new BigDecimal("5.0"));
+        assertThat(pattern.getPatternOrder()).isEqualTo(1);
+
+        // 블록 검증 (조건 블록 1개 + 리프 블록 1개)
+        assertThat(pattern.getBlocks()).hasSize(2);
+        // 조건 블록
+        PatternBlock conditionBlock = pattern.getBlocks().get(0);
+        assertThat(conditionBlock.getSide()).isEqualTo(Side.LONG);
+        assertThat(conditionBlock.getBlockOrder()).isEqualTo(1);
+        assertThat(conditionBlock.isLeaf()).isFalse();
+        // 리프 블록
+        PatternBlock leafBlock = pattern.getBlocks().get(1);
+        assertThat(leafBlock.getSide()).isEqualTo(Side.LONG);
+        assertThat(leafBlock.getBlockOrder()).isEqualTo(2);
+        assertThat(leafBlock.isLeaf()).isTrue();
+
+        then(patternQueueRepository).should().save(any(PatternQueue.class));
     }
 
     @Test
-    @DisplayName("addQueue: 단계가 없으면 IllegalArgumentException 발생")
+    @DisplayName("addQueue: 2단계 + 패턴 2개 구조도 정상 저장된다")
+    void addQueue_multiStepMultiPattern_success() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeMultiStepRequest("BTCUSDT");
+
+        given(patternQueueRepository.countByUserIdAndSymbol(userId, "BTCUSDT")).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        // when
+        PatternQueue result = patternQueueService.addQueue(userId, request);
+
+        // then
+        assertThat(result.getSteps()).hasSize(2);
+        // 1단계: 패턴 2개
+        assertThat(result.getSteps().get(0).getPatterns()).hasSize(2);
+        // 2단계: 패턴 1개
+        assertThat(result.getSteps().get(1).getPatterns()).hasSize(1);
+    }
+
+    // ─────────────────────────────────────────────
+    // addQueue 검증 실패
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("addQueue: 단계가 없으면 CustomException 발생")
     void addQueue_emptySteps() {
         // given
         Long userId = 1L;
-        AddPatternRequest request = makeRequest("BTCUSDT", List.of());
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.setSteps(List.of());
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(CustomException.class)
                 .hasMessageContaining("1개 이상");
     }
 
     @Test
-    @DisplayName("addQueue: 잘못된 side 값이면 IllegalArgumentException 발생")
-    void addQueue_invalidSide() {
+    @DisplayName("addQueue: 단계가 20개를 초과하면 CustomException 발생")
+    void addQueue_tooManySteps() {
         // given
         Long userId = 1L;
-        AddPatternRequest request = makeRequest("BTCUSDT",
-                List.of(makeStep("INVALID", "0.01")));
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        // 21개 단계 생성
+        List<AddPatternRequest.StepRequest> steps = new ArrayList<>();
+        for (int i = 1; i <= 21; i++) {
+            steps.add(makeStepRequest(i, List.of(makePatternRequest())));
+        }
+        request.setSteps(steps);
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("20");
+    }
+
+    @Test
+    @DisplayName("addQueue: 한 단계에 패턴이 3개 이상이면 CustomException 발생")
+    void addQueue_tooManyPatterns() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        // 패턴 3개인 단계
+        List<AddPatternRequest.PatternRequest> threePatterns = List.of(
+                makePatternRequest(), makePatternRequest(), makePatternRequest()
+        );
+        request.setSteps(List.of(makeStepRequest(1, threePatterns)));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("2개");
+    }
+
+    @Test
+    @DisplayName("addQueue: 조건 블록이 6개 이상이면 CustomException 발생")
+    void addQueue_tooManyConditionBlocks() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        // 조건 블록 6개인 패턴
+        AddPatternRequest.PatternRequest pattern = makePatternRequest();
+        List<AddPatternRequest.BlockRequest> sixBlocks = new ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            sixBlocks.add(makeBlockRequest("LONG", i, false));
+        }
+        pattern.setConditionBlocks(sixBlocks);
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("5개");
+    }
+
+    @Test
+    @DisplayName("addQueue: 금액이 0 이하면 CustomException 발생")
+    void addQueue_zeroAmount() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        AddPatternRequest.PatternRequest pattern = makePatternRequest();
+        pattern.setAmount(BigDecimal.ZERO);
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("금액");
+    }
+
+    @Test
+    @DisplayName("addQueue: 레버리지가 0 이하면 CustomException 발생")
+    void addQueue_zeroLeverage() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        AddPatternRequest.PatternRequest pattern = makePatternRequest();
+        pattern.setLeverage(0);
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("레버리지");
+    }
+
+    @Test
+    @DisplayName("addQueue: 트리거 시간이 0 이하면 CustomException 발생")
+    void addQueue_invalidTriggerSeconds() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.setTriggerSeconds(0);
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("트리거 시간");
+    }
+
+    @Test
+    @DisplayName("addQueue: 트리거 비율이 0 이하면 CustomException 발생")
+    void addQueue_invalidTriggerRate() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.setTriggerRate(BigDecimal.ZERO);
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("트리거 비율");
+    }
+
+    @Test
+    @DisplayName("addQueue: 잘못된 side 값이면 CustomException 발생")
+    void addQueue_invalidSide() {
+        // given
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        AddPatternRequest.PatternRequest pattern = makePatternRequest();
+        pattern.setConditionBlocks(List.of(makeBlockRequest("INVALID", 1, false)));
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
                 .hasMessageContaining("LONG 또는 SHORT");
     }
 
     @Test
-    @DisplayName("addQueue: 수량이 0이하면 IllegalArgumentException 발생")
-    void addQueue_zeroQuantity() {
+    @DisplayName("addQueue: 리프 블록이 없으면 CustomException 발생")
+    void addQueue_missingLeafBlock() {
         // given
         Long userId = 1L;
-        AddPatternRequest request = makeRequest("BTCUSDT",
-                List.of(makeStep("LONG", "0")));
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+
+        AddPatternRequest.PatternRequest pattern = makePatternRequest();
+        pattern.setLeafBlock(null);
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("0보다 커야");
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("리프 블록");
     }
 
     @Test
-    @DisplayName("addQueue: 큐가 20개 이상이면 IllegalArgumentException 발생")
-    void addQueue_maxLimit() {
+    @DisplayName("addQueue: 큐가 20개 이상이면 CustomException 발생")
+    void addQueue_maxQueueLimit() {
         // given
         Long userId = 1L;
-        AddPatternRequest request = makeRequest("BTCUSDT",
-                List.of(makeStep("LONG", "0.01")));
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
 
-        given(queueRepository.countByUserIdAndSymbolAndDelYn(userId, "BTCUSDT", "N")).willReturn(20L);
+        given(patternQueueRepository.countByUserIdAndSymbol(userId, "BTCUSDT")).willReturn(20L);
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(CustomException.class)
                 .hasMessageContaining("20개");
-    }
-
-    // ─────────────────────────────────────────────
-    // deleteQueue
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("deleteQueue: 본인 큐면 소프트 삭제 후 sortOrder를 재정렬한다")
-    void deleteQueue_success() {
-        // given
-        Long userId = 1L;
-        Queue target = makeQueue(1L, userId, "BTCUSDT", 0);
-        Queue remaining = makeQueue(2L, userId, "BTCUSDT", 1);
-
-        given(queueRepository.findById(1L)).willReturn(Optional.of(target));
-        given(queueRepository.findByUserIdAndSymbolAndDelYnOrderBySortOrderAsc(userId, "BTCUSDT", "N"))
-                .willReturn(List.of(remaining));
-        given(queueRepository.save(any(Queue.class))).willAnswer(inv -> inv.getArgument(0));
-        given(queueRepository.saveAll(any())).willAnswer(inv -> inv.getArgument(0));
-
-        // when
-        patternQueueService.deleteQueue(userId, 1L);
-
-        // then
-        assertThat(target.getDelYn()).isEqualTo("Y");
-        assertThat(remaining.getSortOrder()).isEqualTo(0); // 재정렬됨
-    }
-
-    @Test
-    @DisplayName("deleteQueue: 다른 사용자의 큐를 삭제하면 IllegalArgumentException 발생")
-    void deleteQueue_unauthorized() {
-        // given
-        Long ownerId = 1L;
-        Long attackerId = 2L;
-        Queue queue = makeQueue(1L, ownerId, "BTCUSDT", 0);
-
-        given(queueRepository.findById(1L)).willReturn(Optional.of(queue));
-
-        // when & then
-        assertThatThrownBy(() -> patternQueueService.deleteQueue(attackerId, 1L))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("권한");
-    }
-
-    // ─────────────────────────────────────────────
-    // toggleActive
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("toggleActive: Y → N으로 토글된다")
-    void toggleActive_yToN() {
-        // given
-        Long userId = 1L;
-        Queue queue = makeQueue(1L, userId, "BTCUSDT", 0);
-        queue.setUseYn("Y");
-
-        given(queueRepository.findById(1L)).willReturn(Optional.of(queue));
-        given(queueRepository.save(any(Queue.class))).willAnswer(inv -> inv.getArgument(0));
-
-        // when
-        Queue result = patternQueueService.toggleActive(userId, 1L);
-
-        // then
-        assertThat(result.getUseYn()).isEqualTo("N");
-    }
-
-    @Test
-    @DisplayName("toggleActive: N → Y로 토글된다")
-    void toggleActive_nToY() {
-        // given
-        Long userId = 1L;
-        Queue queue = makeQueue(1L, userId, "BTCUSDT", 0);
-        queue.setUseYn("N");
-
-        given(queueRepository.findById(1L)).willReturn(Optional.of(queue));
-        given(queueRepository.save(any(Queue.class))).willAnswer(inv -> inv.getArgument(0));
-
-        // when
-        Queue result = patternQueueService.toggleActive(userId, 1L);
-
-        // then
-        assertThat(result.getUseYn()).isEqualTo("Y");
-    }
-
-    @Test
-    @DisplayName("toggleActive: 다른 사용자의 큐를 토글하면 IllegalArgumentException 발생")
-    void toggleActive_unauthorized() {
-        // given
-        Queue queue = makeQueue(1L, 1L, "BTCUSDT", 0);
-        given(queueRepository.findById(1L)).willReturn(Optional.of(queue));
-
-        // when & then
-        assertThatThrownBy(() -> patternQueueService.toggleActive(99L, 1L))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("권한");
     }
 
     // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private Queue makeQueue(Long id, Long userId, String symbol, int sortOrder) {
-        Queue q = new Queue();
-        q.setId(id);
-        q.setUserId(userId);
-        q.setSymbol(symbol);
-        q.setSortOrder(sortOrder);
-        q.setUseYn("Y");
-        q.setDelYn("N");
-        q.setCreatedAt(LocalDateTime.now());
-        return q;
+    /**
+     * 기본 요청 생성 (1단계, 1패턴, 조건블록 1개 + 리프블록 1개)
+     */
+    private AddPatternRequest makeFullRequest(String symbol) {
+        AddPatternRequest request = new AddPatternRequest();
+        request.setSymbol(symbol);
+        request.setTriggerSeconds(60);
+        request.setTriggerRate(new BigDecimal("1.0"));
+        request.setSteps(List.of(
+                makeStepRequest(1, List.of(makePatternRequest()))
+        ));
+        return request;
     }
 
-    private AddPatternRequest makeRequest(String symbol, List<AddPatternRequest.StepRequest> steps) {
-        AddPatternRequest req = new AddPatternRequest();
-        req.setSymbol(symbol);
-        req.setSteps(steps);
-        return req;
+    /**
+     * 다단계 요청 생성 (2단계, 1단계에 패턴 2개, 2단계에 패턴 1개)
+     */
+    private AddPatternRequest makeMultiStepRequest(String symbol) {
+        AddPatternRequest request = new AddPatternRequest();
+        request.setSymbol(symbol);
+        request.setTriggerSeconds(60);
+        request.setTriggerRate(new BigDecimal("1.0"));
+
+        // 1단계: 패턴 2개 (L:L, S:S)
+        AddPatternRequest.PatternRequest pattern1 = makePatternRequest();
+        AddPatternRequest.PatternRequest pattern2 = makePatternRequest();
+        pattern2.setConditionBlocks(List.of(makeBlockRequest("SHORT", 1, false)));
+        pattern2.setLeafBlock(makeBlockRequest("SHORT", 2, true));
+
+        // 2단계: 패턴 1개
+        AddPatternRequest.PatternRequest pattern3 = makePatternRequest();
+        pattern3.setAmount(new BigDecimal("20"));
+
+        request.setSteps(List.of(
+                makeStepRequest(1, List.of(pattern1, pattern2)),
+                makeStepRequest(2, List.of(pattern3))
+        ));
+        return request;
     }
 
-    private AddPatternRequest.StepRequest makeStep(String side, String quantity) {
+    private AddPatternRequest.StepRequest makeStepRequest(int stepOrder,
+                                                           List<AddPatternRequest.PatternRequest> patterns) {
         AddPatternRequest.StepRequest step = new AddPatternRequest.StepRequest();
-        step.setSide(side);
-        step.setQuantity(quantity);
+        step.setStepOrder(stepOrder);
+        step.setPatterns(patterns);
         return step;
+    }
+
+    /**
+     * 기본 패턴 생성 (L:L 구조, 10달러, 레버리지 5배, 손절 1%, 익절 5%)
+     */
+    private AddPatternRequest.PatternRequest makePatternRequest() {
+        AddPatternRequest.PatternRequest pattern = new AddPatternRequest.PatternRequest();
+        pattern.setAmount(new BigDecimal("10"));
+        pattern.setLeverage(5);
+        pattern.setStopLossRate(new BigDecimal("1.0"));
+        pattern.setTakeProfitRate(new BigDecimal("5.0"));
+        pattern.setConditionBlocks(List.of(makeBlockRequest("LONG", 1, false)));
+        pattern.setLeafBlock(makeBlockRequest("LONG", 2, true));
+        return pattern;
+    }
+
+    private AddPatternRequest.BlockRequest makeBlockRequest(String side, int blockOrder, boolean isLeaf) {
+        AddPatternRequest.BlockRequest block = new AddPatternRequest.BlockRequest();
+        block.setSide(side);
+        block.setBlockOrder(blockOrder);
+        block.setIsLeaf(isLeaf);
+        return block;
     }
 }

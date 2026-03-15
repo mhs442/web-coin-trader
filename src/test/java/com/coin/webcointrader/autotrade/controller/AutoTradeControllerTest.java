@@ -1,8 +1,8 @@
 package com.coin.webcointrader.autotrade.controller;
 
-import com.coin.webcointrader.autotrade.repository.QueueRepository;
+import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.Queue;
+import com.coin.webcointrader.common.entity.PatternQueue;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,8 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
+import java.math.BigDecimal;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
@@ -35,7 +34,7 @@ class AutoTradeControllerTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private QueueRepository queueRepository;
+    private PatternQueueRepository patternQueueRepository;
 
     // 다른 테스트 클래스와 충돌하지 않도록 고유 userId 사용
     private static final Long USER_ID = 100L;
@@ -62,7 +61,7 @@ class AutoTradeControllerTest {
 
     @AfterEach
     void tearDown() {
-        queueRepository.deleteAll();
+        patternQueueRepository.deleteAll();
         WireMock.reset();
     }
 
@@ -74,7 +73,7 @@ class AutoTradeControllerTest {
     @DisplayName("GET /api/autotrade/patterns: 사용자의 패턴 큐 목록을 JSON 배열로 반환한다")
     void getPatterns_returnsQueueList() throws Exception {
         // given
-        queueRepository.save(makeQueue(USER_ID, "BTCUSDT", 0));
+        patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
 
         // when & then
         mockMvc.perform(get("/api/autotrade/patterns")
@@ -82,7 +81,9 @@ class AutoTradeControllerTest {
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray())
-                .andExpect(jsonPath("$.length()").value(1));
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].symbol").value("BTCUSDT"))
+                .andExpect(jsonPath("$[0].triggerSeconds").value(60));
     }
 
     // ─────────────────────────────────────────────
@@ -98,14 +99,29 @@ class AutoTradeControllerTest {
                         .content("""
                                 {
                                     "symbol": "BTCUSDT",
-                                    "steps": [{"side": "LONG", "quantity": "0.01"}]
+                                    "triggerSeconds": 60,
+                                    "triggerRate": 1.0,
+                                    "steps": [{
+                                        "stepOrder": 1,
+                                        "patterns": [{
+                                            "amount": 10,
+                                            "leverage": 5,
+                                            "stopLossRate": 1.0,
+                                            "takeProfitRate": 5.0,
+                                            "conditionBlocks": [{"side": "LONG", "blockOrder": 1, "isLeaf": false}],
+                                            "leafBlock": {"side": "LONG", "blockOrder": 2, "isLeaf": true}
+                                        }]
+                                    }]
                                 }
                                 """)
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").exists())
-                .andExpect(jsonPath("$.useYn").value("Y"))
-                .andExpect(jsonPath("$.steps").isArray());
+                .andExpect(jsonPath("$.active").value(false))
+                .andExpect(jsonPath("$.triggerSeconds").value(60))
+                .andExpect(jsonPath("$.steps").isArray())
+                .andExpect(jsonPath("$.steps[0].patterns[0].amount").value(10))
+                .andExpect(jsonPath("$.steps[0].patterns[0].blocks").isArray());
     }
 
     // ─────────────────────────────────────────────
@@ -113,10 +129,10 @@ class AutoTradeControllerTest {
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("DELETE /api/autotrade/patterns/{id}: 큐를 소프트 삭제하고 status:ok를 반환한다")
+    @DisplayName("DELETE /api/autotrade/patterns/{id}: 큐를 삭제하고 status:ok를 반환한다")
     void deletePattern_returnsOk() throws Exception {
         // given
-        Queue q = queueRepository.save(makeQueue(USER_ID, "BTCUSDT", 0));
+        PatternQueue q = patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
 
         // when & then
         mockMvc.perform(delete("/api/autotrade/patterns/" + q.getId())
@@ -145,15 +161,14 @@ class AutoTradeControllerTest {
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private Queue makeQueue(Long userId, String symbol, int sortOrder) {
-        Queue q = new Queue();
+    private PatternQueue makePatternQueue(Long userId, String symbol) {
+        PatternQueue q = new PatternQueue();
         q.setUserId(userId);
         q.setSymbol(symbol);
-        q.setSortOrder(sortOrder);
-        q.setUseYn("Y");
-        q.setDelYn("N");
-        q.setCreatedAt(LocalDateTime.now());
-        q.setSteps(new ArrayList<>());
+        q.setTriggerSeconds(60);
+        q.setTriggerRate(new BigDecimal("1.0"));
+        q.setActive(false);
+        q.setFull(false);
         return q;
     }
 }
