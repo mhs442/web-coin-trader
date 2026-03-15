@@ -1,11 +1,10 @@
 package com.coin.webcointrader.mypage.service;
 
-import com.coin.webcointrader.autotrade.repository.QueueRepository;
+import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.dto.response.PageResponse;
-import com.coin.webcointrader.common.entity.Queue;
-import com.coin.webcointrader.common.entity.Side;
-import com.coin.webcointrader.common.entity.TradeHistory;
+import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.entity.Pattern;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.mypage.dto.MyPagePatternResponse;
 import com.coin.webcointrader.mypage.dto.TradeHistoryResponse;
@@ -23,7 +22,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
@@ -37,7 +35,7 @@ class MyPageServiceTest {
     private MyPageService myPageService;
 
     @Mock
-    private QueueRepository queueRepository;
+    private PatternQueueRepository patternQueueRepository;
 
     @Mock
     private TradeHistoryRepository tradeHistoryRepository;
@@ -51,9 +49,9 @@ class MyPageServiceTest {
     void getPatterns_noDateRange() {
         // given
         Long userId = 1L;
-        Queue q = makeQueue(1L, userId, "BTCUSDT");
-        Page<Queue> page = new PageImpl<>(List.of(q));
-        given(queueRepository.findByUserIdAndDelYn(eq(userId), eq("N"), any(Pageable.class)))
+        PatternQueue q = makePatternQueue(1L, userId, "BTCUSDT");
+        Page<PatternQueue> page = new PageImpl<>(List.of(q));
+        given(patternQueueRepository.findByUserId(eq(userId), any(Pageable.class)))
                 .willReturn(page);
 
         // when
@@ -62,6 +60,7 @@ class MyPageServiceTest {
         // then
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(result.getContent().get(0).getTriggerSeconds()).isEqualTo(60);
     }
 
     @Test
@@ -69,10 +68,10 @@ class MyPageServiceTest {
     void getPatterns_withDateRange() {
         // given
         Long userId = 1L;
-        Queue q = makeQueue(1L, userId, "BTCUSDT");
-        Page<Queue> page = new PageImpl<>(List.of(q));
-        given(queueRepository.findByUserIdAndDelYnAndCreatedAtBetween(
-                eq(userId), eq("N"), any(), any(), any(Pageable.class)))
+        PatternQueue q = makePatternQueue(1L, userId, "BTCUSDT");
+        Page<PatternQueue> page = new PageImpl<>(List.of(q));
+        given(patternQueueRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Pageable.class)))
                 .willReturn(page);
 
         // when
@@ -81,8 +80,8 @@ class MyPageServiceTest {
 
         // then
         assertThat(result.getContent()).hasSize(1);
-        then(queueRepository).should().findByUserIdAndDelYnAndCreatedAtBetween(
-                eq(userId), eq("N"), any(), any(), any(Pageable.class));
+        then(patternQueueRepository).should().findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Pageable.class));
     }
 
     @Test
@@ -90,9 +89,9 @@ class MyPageServiceTest {
     void getPatterns_withSymbolFilter() {
         // given
         Long userId = 1L;
-        Queue btc = makeQueue(1L, userId, "BTCUSDT");
-        Queue eth = makeQueue(2L, userId, "ETHUSDT");
-        given(queueRepository.findByUserIdAndDelYn(eq(userId), eq("N"), any(Sort.class)))
+        PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
+        PatternQueue eth = makePatternQueue(2L, userId, "ETHUSDT");
+        given(patternQueueRepository.findByUserId(eq(userId), any(Sort.class)))
                 .willReturn(List.of(btc, eth));
 
         // when
@@ -101,6 +100,32 @@ class MyPageServiceTest {
         // then
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
+    }
+
+    @Test
+    @DisplayName("getPatterns: 계층 구조(단계→패턴→블록)가 응답에 포함된다")
+    void getPatterns_includesHierarchy() {
+        // given
+        Long userId = 1L;
+        PatternQueue q = makePatternQueueWithSteps(1L, userId, "BTCUSDT");
+        Page<PatternQueue> page = new PageImpl<>(List.of(q));
+        given(patternQueueRepository.findByUserId(eq(userId), any(Pageable.class)))
+                .willReturn(page);
+
+        // when
+        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, null, null, null, "desc", 0, 20);
+
+        // then
+        MyPagePatternResponse response = result.getContent().get(0);
+        // 단계 검증
+        assertThat(response.getSteps()).hasSize(1);
+        assertThat(response.getSteps().get(0).getStepLevel()).isEqualTo(1);
+        // 패턴 검증
+        assertThat(response.getSteps().get(0).getPatterns()).hasSize(1);
+        assertThat(response.getSteps().get(0).getPatterns().get(0).getAmount())
+                .isEqualByComparingTo(new BigDecimal("10"));
+        // 블록 검증
+        assertThat(response.getSteps().get(0).getPatterns().get(0).getBlocks()).hasSize(2);
     }
 
     // ─────────────────────────────────────────────
@@ -168,16 +193,56 @@ class MyPageServiceTest {
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private Queue makeQueue(Long id, Long userId, String symbol) {
-        Queue q = new Queue();
+    /**
+     * 기본 PatternQueue 생성 (하위 엔티티 없음)
+     */
+    private PatternQueue makePatternQueue(Long id, Long userId, String symbol) {
+        PatternQueue q = new PatternQueue();
         q.setId(id);
         q.setUserId(userId);
         q.setSymbol(symbol);
-        q.setSortOrder(0);
-        q.setUseYn("Y");
-        q.setDelYn("N");
-        q.setCreatedAt(LocalDateTime.now());
-        q.setSteps(new ArrayList<>());
+        q.setActive(false);
+        q.setTriggerSeconds(60);
+        q.setTriggerRate(new BigDecimal("1.0"));
+        q.setFull(false);
+        ReflectionTestUtils.setField(q, "createdAt", LocalDateTime.now());
+        return q;
+    }
+
+    /**
+     * 계층 구조 포함 PatternQueue 생성 (1단계, 1패턴, 2블록)
+     */
+    private PatternQueue makePatternQueueWithSteps(Long id, Long userId, String symbol) {
+        PatternQueue q = makePatternQueue(id, userId, symbol);
+
+        // 블록 생성
+        PatternBlock condBlock = new PatternBlock();
+        condBlock.setSide(Side.LONG);
+        condBlock.setBlockOrder(1);
+        condBlock.setLeaf(false);
+
+        PatternBlock leafBlock = new PatternBlock();
+        leafBlock.setSide(Side.LONG);
+        leafBlock.setBlockOrder(2);
+        leafBlock.setLeaf(true);
+
+        // 패턴 생성
+        Pattern pattern = new Pattern();
+        pattern.setPatternOrder(1);
+        pattern.setAmount(new BigDecimal("10"));
+        pattern.setLeverage(5);
+        pattern.setStopLossRate(new BigDecimal("1.0"));
+        pattern.setTakeProfitRate(new BigDecimal("5.0"));
+        pattern.getBlocks().add(condBlock);
+        pattern.getBlocks().add(leafBlock);
+
+        // 단계 생성
+        PatternStep step = new PatternStep();
+        step.setStepLevel(1);
+        step.setFull(false);
+        step.getPatterns().add(pattern);
+
+        q.getSteps().add(step);
         return q;
     }
 
@@ -191,7 +256,6 @@ class MyPageServiceTest {
         h.setExecutedPrice(new BigDecimal("50000"));
         h.setOrderResult(OrderResult.SUCCESS);
         h.setQueueStepId(1L);
-        // createdAt은 BaseEntity @CreatedDate로 자동 설정되나, 테스트에서는 직접 주입
         ReflectionTestUtils.setField(h, "createdAt", LocalDateTime.now());
         return h;
     }
