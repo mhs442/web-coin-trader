@@ -19,4 +19,5 @@ public class AutoTradeStatusResponse {
     private int currentBlockOrder;  // 현재 블록 순서
     private long elapsedSeconds;    // 트리거 경과 시간(초)
     private BigDecimal changeRate;  // 트리거 변동률(%)
+    private BigDecimal amount;      // 투입 금액 (USDT)
 }

@@ -184,6 +184,7 @@ public class AutoTradeService {
         // WebSocket 실시간 가격 조회
         long elapsedSeconds = 0;
         BigDecimal changeRate = null;
+        BigDecimal amount = null;
 
         FindTickerResponse.TickerInfo wsTicker = marketService.getWsTicker(symbol);
         String currentPrice = wsTicker != null ? wsTicker.getLastPrice() : null;
@@ -194,9 +195,14 @@ public class AutoTradeService {
                 elapsedSeconds = calculateTriggerTime(state.getBaseTime());
                 changeRate = calculateTriggerRate(state.getBasePrice(), currentPrice);
             }
-            // BLOCK_MATCHING: 변동률만 (진입가 대비)
+            // BLOCK_MATCHING: 변동률 (진입가 대비) + 투입 금액
             else if (state.getPhase() == TradePhase.BLOCK_MATCHING && state.getEntryPrice() != null) {
                 changeRate = calculateTriggerRate(state.getEntryPrice(), currentPrice);
+                // 활성 패턴에서 투입 금액 조회
+                Pattern activePattern = findPatternById(firstQueue, state.getActivePatternId());
+                if (activePattern != null) {
+                    amount = activePattern.getAmount();
+                }
             }
         }
 
@@ -209,6 +215,7 @@ public class AutoTradeService {
                 .currentBlockOrder(state != null ? state.getCurrentBlockOrder() : 0)
                 .elapsedSeconds(elapsedSeconds)
                 .changeRate(changeRate)
+                .amount(amount)
                 .build();
     }
 

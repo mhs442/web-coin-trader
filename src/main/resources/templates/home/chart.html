@@ -985,7 +985,9 @@
                 triggerHtml = '<div class="trigger-state-info">경과: ' + data.elapsedSeconds + '초 / 변동률: ' + rateStr + '%</div>';
             } else if (data.phase === 'BLOCK_MATCHING' && data.changeRate !== null) {
                 var rateStr = data.changeRate >= 0 ? '+' + data.changeRate.toFixed(2) : data.changeRate.toFixed(2);
-                triggerHtml = '<div class="trigger-state-info">변동률: ' + rateStr + '%</div>';
+                // 투입 금액이 있으면 함께 표시
+                var amountStr = data.amount !== null ? ' / 투입: ' + data.amount + ' USDT' : '';
+                triggerHtml = '<div class="trigger-state-info">변동률: ' + rateStr + '%' + amountStr + '</div>';
             }
 
             if (triggerHtml) {
