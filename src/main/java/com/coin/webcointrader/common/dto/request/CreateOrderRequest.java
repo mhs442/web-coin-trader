@@ -14,4 +14,5 @@ public class CreateOrderRequest {
     private String orderType;   // 주문 유형 (Market / Limit)
     private String qty;         // 주문 수량
     private String price;       // 주문 가격 (Limit 주문 시 필수)
+    private String marketUnit;  // 수량 단위 (baseCoin: 코인 수량, quoteCoin: USDT 금액)
 }

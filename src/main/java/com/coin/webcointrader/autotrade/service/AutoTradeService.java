@@ -459,6 +459,7 @@ public class AutoTradeService {
                 .side(side)
                 .orderType("Market")
                 .qty(pattern.getAmount().stripTrailingZeros().toPlainString())
+                .marketUnit("quoteCoin") // USDT 금액 기준 주문
                 .build();
 
         // TradeHistory 준비
@@ -676,6 +677,7 @@ public class AutoTradeService {
                     .side(closeSide)
                     .orderType("Market")
                     .qty(pattern.getAmount().stripTrailingZeros().toPlainString())
+                    .marketUnit("quoteCoin") // USDT 금액 기준 주문
                     .build();
 
             tradeService.placeOrder(closeRequest, session.getUserId());
