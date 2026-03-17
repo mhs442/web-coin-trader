@@ -34,6 +34,20 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
     long countByUserIdAndSymbol(Long userId, String symbol);
 
     // ─────────────────────────────────────────────
+    // 자동매매 세션용 쿼리
+    // ─────────────────────────────────────────────
+
+    /**
+     * 사용자/심볼의 활성화된 패턴 큐 목록을 생성일 오름차순으로 조회한다. (자동매매 세션 동기화용)
+     *
+     * @param userId   사용자 ID
+     * @param symbol   코인 심볼
+     * @param isActive 활성화 여부
+     * @return 활성 패턴 큐 목록 (createdAt 오름차순)
+     */
+    List<PatternQueue> findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(Long userId, String symbol, boolean isActive);
+
+    // ─────────────────────────────────────────────
     // 마이페이지용 쿼리
     // ─────────────────────────────────────────────
 

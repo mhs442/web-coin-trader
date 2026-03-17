@@ -1,9 +1,6 @@
 package com.coin.webcointrader.autotrade.controller;
 
-import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
-import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
-import com.coin.webcointrader.autotrade.dto.AutoTradeStatusResponse;
-import com.coin.webcointrader.autotrade.dto.PatternQueueResponse;
+import com.coin.webcointrader.autotrade.dto.*;
 import com.coin.webcointrader.autotrade.service.AutoTradeService;
 import com.coin.webcointrader.autotrade.service.PatternQueueService;
 import com.coin.webcointrader.common.dto.UserDTO;
@@ -98,27 +95,7 @@ public class AutoTradeController {
     @GetMapping("/status")
     public AutoTradeStatusResponse getStatus(@RequestParam String symbol,
                                              @AuthenticationPrincipal UserDTO user) {
-        boolean active = autoTradeService.isActive(user.getId(), symbol);
-
-        if (!active) {
-            return AutoTradeStatusResponse.builder()
-                    .active(false)
-                    .build();
-        }
-
-        AutoTradeSessionDTO session = autoTradeService.getSession(user.getId(), symbol);
-        Queue currentQueue = session.getQueues().get(session.getCurrentQueueIndex());
-
-        return AutoTradeStatusResponse.builder()
-                .active(true)
-                .currentPattern(currentQueue.getSteps().stream()
-                        .map(s -> s.getSide().name())
-                        .reduce((a, b) -> a + "," + b)
-                        .orElse("-"))
-                .currentStep(session.getCurrentStepIndex())
-                .previousPrice(session.getPreviousPrice())
-                .recentLog(session.getTradeLog())
-                .build();
+        return autoTradeService.getStatusResponse(user.getId(), symbol);
     }
 
     // ─────────────────────────────────────────────

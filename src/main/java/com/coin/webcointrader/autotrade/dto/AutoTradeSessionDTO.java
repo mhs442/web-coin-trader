@@ -1,11 +1,13 @@
 package com.coin.webcointrader.autotrade.dto;
 
-import com.coin.webcointrader.common.entity.Queue;
+import com.coin.webcointrader.common.entity.PatternQueue;
 import lombok.Getter;
 import lombok.Setter;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 자동매매 세션의 인메모리 상태를 관리하는 DTO.
@@ -16,11 +18,9 @@ import java.util.List;
 public class AutoTradeSessionDTO {
     private Long userId;
     private String symbol;
-    private List<Queue> queues;               // DB에서 로드한 큐 목록
-    private int currentQueueIndex;            // 현재 실행 중인 큐 인덱스
-    private int currentStepIndex;             // 현재 큐 내 진행 단계
-    private String previousPrice;             // 직전 가격 (신호 판별용)
-    private List<String> tradeLog = new ArrayList<>();  // 매매 로그 (최대 50건)
+    private List<PatternQueue> queues;                              // DB에서 로드한 패턴 큐 목록
+    private Map<Long, QueueStateDTO> queueStates = new HashMap<>(); // 큐 ID → 런타임 상태
+    private List<String> tradeLog = new ArrayList<>();              // 매매 로그 (최대 50건)
 
     /**
      * 로그를 추가한다. 50건 초과 시 가장 오래된 로그를 제거한다.

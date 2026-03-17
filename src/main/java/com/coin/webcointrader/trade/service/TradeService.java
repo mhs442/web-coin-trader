@@ -1,8 +1,13 @@
 package com.coin.webcointrader.trade.service;
 
+import com.coin.webcointrader.common.client.position.PositionClient;
 import com.coin.webcointrader.common.client.trade.TradeClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
+import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
 import com.coin.webcointrader.common.entity.User;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
@@ -22,6 +27,7 @@ import org.springframework.stereotype.Service;
 public class TradeService {
 
     private final TradeClient tradeClient;
+    private final PositionClient positionClient;
     private final LoginRepository loginRepository;
     private final AesEncryptor aesEncryptor;
 
@@ -49,7 +55,54 @@ public class TradeService {
                     .build();
         }
 
-        // 사용자 API Key 로드 및 복호화
+        setApiKeyContext(userId);
+        try {
+            return tradeClient.createOrder(request).getBody();
+        } finally {
+            UserApiKeyContext.clear();
+        }
+    }
+
+    /**
+     * Bybit에 레버리지를 설정한다.
+     * 사용자 API Key 컨텍스트를 설정한 후 레버리지 변경 API를 호출한다.
+     *
+     * @param request 레버리지 설정 요청 (category, symbol, buyLeverage, sellLeverage)
+     * @param userId  API Key를 조회할 사용자 ID
+     * @return 레버리지 설정 결과 응답
+     */
+    public SetLeverageResponse setLeverage(SetLeverageRequest request, Long userId) {
+        setApiKeyContext(userId);
+        try {
+            return positionClient.setLeverage(request).getBody();
+        } finally {
+            UserApiKeyContext.clear();
+        }
+    }
+
+    /**
+     * Bybit에 손절/익절(Trading Stop)을 설정한다.
+     * 사용자 API Key 컨텍스트를 설정한 후 Trading Stop API를 호출한다.
+     *
+     * @param request 손절/익절 설정 요청 (category, symbol, takeProfit, stopLoss, positionIdx)
+     * @param userId  API Key를 조회할 사용자 ID
+     * @return Trading Stop 설정 결과 응답
+     */
+    public SetTradingStopResponse setTradingStop(SetTradingStopRequest request, Long userId) {
+        setApiKeyContext(userId);
+        try {
+            return positionClient.setTradingStop(request).getBody();
+        } finally {
+            UserApiKeyContext.clear();
+        }
+    }
+
+    /**
+     * 사용자 API Key/Secret을 복호화하여 ThreadLocal 컨텍스트에 설정한다.
+     *
+     * @param userId 사용자 ID
+     */
+    private void setApiKeyContext(Long userId) {
         User user = loginRepository.findById(userId)
                 .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
 
@@ -57,11 +110,5 @@ public class TradeService {
                 aesEncryptor.decrypt(user.getApiKey()),
                 aesEncryptor.decrypt(user.getApiSecret())
         );
-
-        try {
-            return tradeClient.createOrder(request).getBody();
-        } finally {
-            UserApiKeyContext.clear();
-        }
     }
 }
