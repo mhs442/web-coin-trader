@@ -1,34 +1,34 @@
 package com.coin.webcointrader.autotrade.service;
 
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
-import com.coin.webcointrader.autotrade.repository.QueueRepository;
+import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
+import com.coin.webcointrader.autotrade.dto.TradePhase;
+import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
-import com.coin.webcointrader.common.entity.Queue;
-import com.coin.webcointrader.common.entity.QueueStep;
-import com.coin.webcointrader.common.entity.Side;
+import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.market.service.MarketService;
 import com.coin.webcointrader.trade.service.TradeService;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.function.BiConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,7 +38,7 @@ class AutoTradeServiceTest {
     private AutoTradeService autoTradeService;
 
     @Mock
-    private QueueRepository queueRepository;
+    private PatternQueueRepository patternQueueRepository;
 
     @Mock
     private TradeHistoryRepository tradeHistoryRepository;
@@ -59,10 +59,7 @@ class AutoTradeServiceTest {
     @Test
     @DisplayName("init: 시작 시 MarketService에 가격 리스너를 등록한다")
     void init_registersPriceListener() {
-        // when
         autoTradeService.init();
-
-        // then
         then(marketService).should(times(1)).addPriceListener(any());
     }
 
@@ -73,116 +70,75 @@ class AutoTradeServiceTest {
     @Test
     @DisplayName("syncSession: 활성 큐가 있으면 새 세션을 생성한다")
     void syncSession_createsNewSession() {
-        // given
         Long userId = 1L;
         String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
+        PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of(q));
 
-        // when
         autoTradeService.syncSession(userId, symbol);
 
-        // then
         assertThat(autoTradeService.isActive(userId, symbol)).isTrue();
-        assertThat(autoTradeService.getSession(userId, symbol)).isNotNull();
+        AutoTradeSessionDTO session = autoTradeService.getSession(userId, symbol);
+        assertThat(session).isNotNull();
+        // 큐 상태가 초기화되어야 함
+        assertThat(session.getQueueStates()).containsKey(q.getId());
+        assertThat(session.getQueueStates().get(q.getId()).getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
     }
 
     @Test
     @DisplayName("syncSession: 기존 세션이 있고 활성 큐가 있으면 세션을 갱신한다")
     void syncSession_updatesExistingSession() {
-        // given
         Long userId = 1L;
         String symbol = "BTCUSDT";
-        Queue q1 = makeQueue(1L, userId, symbol);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q1));
+        PatternQueue q1 = makePatternQueue(1L, userId, symbol, Side.LONG);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of(q1));
 
-        autoTradeService.syncSession(userId, symbol); // 세션 생성
+        autoTradeService.syncSession(userId, symbol);
 
-        Queue q2 = makeQueue(2L, userId, symbol);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q1, q2));
+        PatternQueue q2 = makePatternQueue(2L, userId, symbol, Side.SHORT);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of(q1, q2));
 
-        // when
-        autoTradeService.syncSession(userId, symbol); // 세션 갱신
+        autoTradeService.syncSession(userId, symbol);
 
-        // then
         assertThat(autoTradeService.getSession(userId, symbol).getQueues()).hasSize(2);
+        assertThat(autoTradeService.getSession(userId, symbol).getQueueStates()).hasSize(2);
     }
 
     @Test
     @DisplayName("syncSession: 활성 큐가 없으면 세션을 제거한다")
     void syncSession_removesSessionWhenNoActiveQueues() {
-        // given
         Long userId = 1L;
         String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol);
+        PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
 
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol); // 세션 생성
-
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of()); // 빈 큐
-
-        // when
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of(q));
         autoTradeService.syncSession(userId, symbol);
 
-        // then
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of());
+
+        autoTradeService.syncSession(userId, symbol);
         assertThat(autoTradeService.isActive(userId, symbol)).isFalse();
     }
 
     @Test
     @DisplayName("syncSession: WebSocket 구독을 동기화한다")
     void syncSession_syncsWebSocketSubscriptions() {
-        // given
         Long userId = 1L;
         String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
+        PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of(q));
 
-        // when
         autoTradeService.syncSession(userId, symbol);
 
-        // then - WebSocket 구독 동기화 호출 확인
         ArgumentCaptor<Set<String>> captor = ArgumentCaptor.forClass(Set.class);
         then(bybitWebSocketClient).should(atLeastOnce()).syncSubscriptions(captor.capture());
         assertThat(captor.getValue()).contains("BTCUSDT");
-    }
-
-    @Test
-    @DisplayName("syncSession: 세션 제거 시 WebSocket 구독도 동기화된다")
-    void syncSession_removeSession_syncsEmptySubscriptions() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol);
-
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
-
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of());
-
-        // when
-        autoTradeService.syncSession(userId, symbol);
-
-        // then - 빈 세트로 동기화
-        ArgumentCaptor<Set<String>> captor = ArgumentCaptor.forClass(Set.class);
-        then(bybitWebSocketClient).should(atLeast(2)).syncSubscriptions(captor.capture());
-        // 마지막 호출에서 빈 세트
-        assertThat(captor.getAllValues().get(captor.getAllValues().size() - 1)).isEmpty();
     }
 
     // ─────────────────────────────────────────────
@@ -208,115 +164,23 @@ class AutoTradeServiceTest {
     @Test
     @DisplayName("tick: 활성 세션이 없으면 marketService를 호출하지 않는다")
     void tick_doesNothingWhenNoSessions() {
-        // when
         autoTradeService.tick();
-
-        // then
         then(marketService).should(never()).getTickers();
     }
 
     @Test
     @DisplayName("tick: getTickers 응답이 null이면 처리를 중단한다")
     void tick_stopsWhenTickersNull() {
-        // given - 세션 생성 후 getTickers가 null 반환
         Long userId = 1L;
         String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
+        PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                userId, symbol, true)).willReturn(List.of(q));
         autoTradeService.syncSession(userId, symbol);
-
         given(marketService.getTickers()).willReturn(null);
 
-        // when & then - 예외 없이 처리 중단
         assertThatCode(() -> autoTradeService.tick()).doesNotThrowAnyException();
         then(tradeService).should(never()).placeOrder(any(), any());
-    }
-
-    // ─────────────────────────────────────────────
-    // processSession (신호 처리 - REST fallback)
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("processSession: 직전 가격이 없으면 초기 가격만 설정하고 주문하지 않는다")
-    void processSession_setsInitialPriceWithoutOrder() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol, Side.LONG);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
-
-        FindTickerResponse tickers = makeTickerResponse(symbol, "50000.00");
-        given(marketService.getTickers()).willReturn(tickers);
-
-        // when
-        autoTradeService.tick(); // 초기 가격 설정
-
-        // then - 주문 없음
-        then(tradeService).should(never()).placeOrder(any(), any());
-        assertThat(autoTradeService.getSession(userId, symbol).getPreviousPrice())
-                .isEqualTo("50000.00");
-    }
-
-    @Test
-    @DisplayName("processSession: 현재가 > 직전가(LONG 신호)이고 단계가 LONG이면 주문을 실행한다")
-    void processSession_executesOrderOnLongSignal() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol, Side.LONG);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
-
-        // 1tick: 초기 가격 설정
-        given(marketService.getTickers()).willReturn(makeTickerResponse(symbol, "50000.00"));
-        autoTradeService.tick();
-
-        // 2tick: 가격 상승 → LONG 신호 → 단계 LONG과 일치 → 주문
-        given(marketService.getTickers()).willReturn(makeTickerResponse(symbol, "50100.00"));
-        given(tradeHistoryRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
-
-        // when
-        autoTradeService.tick();
-
-        // then
-        then(tradeService).should(times(1)).placeOrder(any(), eq(userId));
-    }
-
-    @Test
-    @DisplayName("processSession: LONG 신호이지만 단계가 SHORT이면 다른 큐로 전환을 시도한다")
-    void processSession_switchesQueueOnSignalMismatch() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue longQ = makeQueue(1L, userId, symbol, Side.LONG, 2);
-        Queue shortQ = makeQueue(2L, userId, symbol, Side.SHORT);
-
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(shortQ, longQ)); // shortQ가 currentQueue
-        autoTradeService.syncSession(userId, symbol);
-
-        // 1tick: 초기 가격
-        given(marketService.getTickers()).willReturn(makeTickerResponse(symbol, "50000.00"));
-        autoTradeService.tick();
-
-        // 2tick: 가격 상승 → LONG 신호 → shortQ와 불일치 → longQ로 전환 후 주문
-        given(marketService.getTickers()).willReturn(makeTickerResponse(symbol, "50100.00"));
-        given(tradeHistoryRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
-
-        // when
-        autoTradeService.tick();
-
-        // then - longQ로 전환 후 주문 실행
-        then(tradeService).should(times(1)).placeOrder(any(), eq(userId));
-        assertThat(autoTradeService.getSession(userId, symbol).getCurrentQueueIndex()).isEqualTo(1);
     }
 
     // ─────────────────────────────────────────────
@@ -326,108 +190,605 @@ class AutoTradeServiceTest {
     @Test
     @DisplayName("onPriceUpdate: 활성 세션이 없으면 아무 작업도 하지 않는다")
     void onPriceUpdate_doesNothingWhenNoSessions() {
-        // when & then - 예외 없이 처리
         assertThatCode(() -> autoTradeService.onPriceUpdate("BTCUSDT", "50000.00"))
                 .doesNotThrowAnyException();
     }
 
-    @Test
-    @DisplayName("onPriceUpdate: 해당 심볼의 세션에 초기 가격을 설정한다")
-    void onPriceUpdate_setsInitialPrice() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol, Side.LONG);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
+    // ─────────────────────────────────────────────
+    // 트리거 대기 (processTriggerWait)
+    // ─────────────────────────────────────────────
 
-        // when
-        autoTradeService.onPriceUpdate("BTCUSDT", "50000.00");
+    @Nested
+    @DisplayName("processTriggerWait")
+    class TriggerWaitTest {
 
-        // then
-        assertThat(autoTradeService.getSession(userId, symbol).getPreviousPrice())
-                .isEqualTo("50000.00");
-        then(tradeService).should(never()).placeOrder(any(), any());
+        @Test
+        @DisplayName("최초 호출 시 기준가격과 시간을 설정한다")
+        void setsBasePriceOnFirstCall() {
+            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            autoTradeService.processTriggerWait(queue, state, session, "50000.00");
+
+            assertThat(state.getBasePrice()).isEqualTo("50000.00");
+            assertThat(state.getBaseTime()).isNotNull();
+            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
+        }
+
+        @Test
+        @DisplayName("트리거 시간 미달 시 대기한다")
+        void waitsWhenTimeNotElapsed() {
+            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setBasePrice("50000.00");
+            state.setBaseTime(LocalDateTime.now()); // 방금 설정됨 → 60초 미달
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            autoTradeService.processTriggerWait(queue, state, session, "51000.00");
+
+            // 아직 TRIGGER_WAIT 상태
+            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
+            assertThat(state.getDirection()).isNull();
+        }
+
+        @Test
+        @DisplayName("상승률 충족 시 LONG으로 전환한다")
+        void transitionsToLongOnRiseAboveTrigger() {
+            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setBasePrice("50000.00");
+            // 트리거 시간 경과 시뮬레이션 (61초 전)
+            state.setBaseTime(LocalDateTime.now().minusSeconds(61));
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 50600 = +1.2% (triggerRate=1.0% 초과)
+            autoTradeService.processTriggerWait(queue, state, session, "50600.00");
+
+            assertThat(state.getDirection()).isEqualTo(Side.LONG);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+        }
+
+        @Test
+        @DisplayName("하락률 충족 시 SHORT으로 전환한다")
+        void transitionsToShortOnDropBelowTrigger() {
+            // SHORT 패턴도 포함된 큐 생성
+            PatternQueue queue = makePatternQueueWithBothPatterns(1L, 1L, "BTCUSDT");
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setBasePrice("50000.00");
+            state.setBaseTime(LocalDateTime.now().minusSeconds(61));
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 49400 = -1.2% (triggerRate=1.0% 초과)
+            autoTradeService.processTriggerWait(queue, state, session, "49400.00");
+
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+        }
+
+        @Test
+        @DisplayName("변동률 미달 시 기준가격을 리셋한다")
+        void resetsBasePriceWhenRateNotMet() {
+            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setBasePrice("50000.00");
+            state.setBaseTime(LocalDateTime.now().minusSeconds(61));
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 50200 = +0.4% (triggerRate=1.0% 미달)
+            autoTradeService.processTriggerWait(queue, state, session, "50200.00");
+
+            // 기준가가 리셋되어야 함
+            assertThat(state.getBasePrice()).isEqualTo("50200.00");
+            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
+            assertThat(state.getDirection()).isNull();
+        }
     }
 
-    @Test
-    @DisplayName("onPriceUpdate: 가격 상승 시 LONG 주문을 실행한다")
-    void onPriceUpdate_executesLongOrderOnPriceIncrease() {
-        // given
-        Long userId = 1L;
-        String symbol = "BTCUSDT";
-        Queue q = makeQueue(1L, userId, symbol, Side.LONG);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, symbol, "Y", "N"))
-                .willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
-        given(tradeHistoryRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
+    // ─────────────────────────────────────────────
+    // 패턴 선택 (selectPattern)
+    // ─────────────────────────────────────────────
 
-        // 1st update: 초기 가격 설정
-        autoTradeService.onPriceUpdate("BTCUSDT", "50000.00");
+    @Nested
+    @DisplayName("selectPattern")
+    class SelectPatternTest {
 
-        // when - 2nd update: 가격 상승 → LONG 신호
-        autoTradeService.onPriceUpdate("BTCUSDT", "50100.00");
+        @Test
+        @DisplayName("LONG 방향이면 첫 블록이 LONG인 패턴을 선택한다")
+        void selectsLongPattern() {
+            PatternStep step = makeStepWithBothPatterns(1);
 
-        // then
-        then(tradeService).should(times(1)).placeOrder(any(), eq(userId));
+            Pattern result = autoTradeService.selectPattern(step, Side.LONG);
+
+            assertThat(result).isNotNull();
+            // 첫 번째 조건 블록이 LONG인 패턴
+            PatternBlock firstBlock = result.getBlocks().stream()
+                    .filter(b -> !b.isLeaf())
+                    .min(java.util.Comparator.comparingInt(PatternBlock::getBlockOrder))
+                    .orElse(null);
+            assertThat(firstBlock).isNotNull();
+            assertThat(firstBlock.getSide()).isEqualTo(Side.LONG);
+        }
+
+        @Test
+        @DisplayName("SHORT 방향이면 첫 블록이 SHORT인 패턴을 선택한다")
+        void selectsShortPattern() {
+            PatternStep step = makeStepWithBothPatterns(1);
+
+            Pattern result = autoTradeService.selectPattern(step, Side.SHORT);
+
+            assertThat(result).isNotNull();
+            PatternBlock firstBlock = result.getBlocks().stream()
+                    .filter(b -> !b.isLeaf())
+                    .min(java.util.Comparator.comparingInt(PatternBlock::getBlockOrder))
+                    .orElse(null);
+            assertThat(firstBlock).isNotNull();
+            assertThat(firstBlock.getSide()).isEqualTo(Side.SHORT);
+        }
     }
 
-    @Test
-    @DisplayName("onPriceUpdate: 다른 심볼의 세션에는 영향을 주지 않는다")
-    void onPriceUpdate_doesNotAffectOtherSymbolSessions() {
-        // given
-        Long userId = 1L;
-        Queue btcQueue = makeQueue(1L, userId, "BTCUSDT", Side.LONG);
-        given(queueRepository.findByUserIdAndSymbolAndUseYnAndDelYnOrderBySortOrderAsc(
-                userId, "BTCUSDT", "Y", "N"))
-                .willReturn(List.of(btcQueue));
-        autoTradeService.syncSession(userId, "BTCUSDT");
+    // ─────────────────────────────────────────────
+    // 신호 판별 (determineSignal)
+    // ─────────────────────────────────────────────
 
-        // when - ETHUSDT 가격 변동 (BTCUSDT 세션에 영향 없어야 함)
-        autoTradeService.onPriceUpdate("ETHUSDT", "3000.00");
+    @Nested
+    @DisplayName("determineSignal")
+    class DetermineSignalTest {
 
-        // then - BTCUSDT 세션의 previousPrice는 여전히 null
-        assertThat(autoTradeService.getSession(userId, "BTCUSDT").getPreviousPrice()).isNull();
+        @Test
+        @DisplayName("레버리지 기반 임계값으로 LONG 신호를 판별한다")
+        void detectsLongSignalWithLeverage() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            // leverage=10 → threshold=10%
+            Pattern pattern = makePatternWithLeverage(10);
+
+            // 50000 → 55500 = +11% → LONG
+            Side signal = autoTradeService.determineSignal(state, pattern, "55500.00");
+            assertThat(signal).isEqualTo(Side.LONG);
+        }
+
+        @Test
+        @DisplayName("레버리지 기반 임계값으로 SHORT 신호를 판별한다")
+        void detectsShortSignalWithLeverage() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            Pattern pattern = makePatternWithLeverage(10);
+
+            // 50000 → 44500 = -11% → SHORT
+            Side signal = autoTradeService.determineSignal(state, pattern, "44500.00");
+            assertThat(signal).isEqualTo(Side.SHORT);
+        }
+
+        @Test
+        @DisplayName("임계값 미달 시 null을 반환한다")
+        void returnsNullWhenBelowThreshold() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            Pattern pattern = makePatternWithLeverage(10);
+
+            // 50000 → 52000 = +4% (threshold=10% 미달)
+            Side signal = autoTradeService.determineSignal(state, pattern, "52000.00");
+            assertThat(signal).isNull();
+        }
+
+        @Test
+        @DisplayName("stopLossRate가 설정되면 해당 값을 임계값으로 사용한다")
+        void usesStopLossRateAsThreshold() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            // stopLossRate=5% → threshold=5%
+            Pattern pattern = makePatternWithLeverage(10);
+            pattern.setStopLossRate(new BigDecimal("5.00"));
+
+            // 50000 → 52600 = +5.2% → LONG
+            Side signal = autoTradeService.determineSignal(state, pattern, "52600.00");
+            assertThat(signal).isEqualTo(Side.LONG);
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 블록 매칭 (processBlockMatching)
+    // ─────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("processBlockMatching")
+    class BlockMatchingTest {
+
+        @Test
+        @DisplayName("임계값 미달 시 아무 작업도 하지 않는다")
+        void doesNothingWhenBelowThreshold() {
+            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L); // makePatternQueue에서 pattern id = 1*10 = 10
+            state.setCurrentBlockOrder(2);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 50100 = +0.2% (leverage=1 → threshold=100%, 미달)
+            autoTradeService.processBlockMatching(queue, state, session, "50100.00");
+
+            // 상태 변화 없음
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("리프 블록 일치 시 매도 성공하고 같은 단계를 반복한다")
+        void sellSuccessAndRepeatStep() {
+            // leverage=1 → threshold=100%로는 테스트 불가, leverage=10 사용
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+            state.setActiveStepId(10L);
+            // 리프 블록은 blockOrder=2
+            state.setCurrentBlockOrder(2);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 55500 = +11% (threshold=10%) → LONG → 리프 LONG 일치
+            autoTradeService.processBlockMatching(queue, state, session, "55500.00");
+
+            // 매도 성공 → 같은 단계 반복 (POSITION_OPEN)
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(1);
+            then(tradeService).should(times(1)).placeOrder(any(), any());
+            then(tradeHistoryRepository).should(times(1)).save(any(TradeHistory.class));
+        }
+
+        @Test
+        @DisplayName("반대 신호 시 다음 단계로 이동한다")
+        void movesToNextStepOnLiquidation() {
+            // 2단계 큐 생성
+            PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+            state.setActiveStepId(10L);
+            state.setCurrentBlockOrder(2); // 리프 블록 위치
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 44500 = -11% (threshold=10%) → SHORT → 리프 LONG과 불일치 → 청산
+            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
+
+            // 다음 단계(2)로 이동, SHORT 방향
+            assertThat(state.getCurrentStepLevel()).isEqualTo(2);
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+        }
+
+        @Test
+        @DisplayName("마지막 단계 청산 시 큐를 비활성화한다")
+        void deactivatesQueueOnLastStepLiquidation() {
+            // 1단계만 있는 큐
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+            state.setActiveStepId(10L);
+            state.setCurrentBlockOrder(2);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 청산 → 다음 단계 없음 → 큐 비활성화
+            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
+
+            assertThat(queue.isActive()).isFalse();
+            then(patternQueueRepository).should(times(1)).save(queue);
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // getStatusResponse (상태 응답 생성)
+    // ─────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("getStatusResponse")
+    class GetStatusResponseTest {
+
+        @Test
+        @DisplayName("비활성 시 active=false를 반환한다")
+        void returnsInactiveWhenNoSession() {
+            var response = autoTradeService.getStatusResponse(1L, "BTCUSDT");
+
+            assertThat(response.isActive()).isFalse();
+            assertThat(response.getChangeRate()).isNull();
+        }
+
+        @Test
+        @DisplayName("TRIGGER_WAIT 시 경과시간과 변동률을 반환한다")
+        void returnsTriggerStateOnTriggerWait() {
+            // 세션 생성
+            Long userId = 1L;
+            String symbol = "BTCUSDT";
+            PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                    userId, symbol, true)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol);
+
+            // 큐 상태에 기준가/시각 설정 (30초 전)
+            var state = autoTradeService.getSession(userId, symbol).getQueueStates().get(1L);
+            state.setBasePrice("50000.00");
+            state.setBaseTime(LocalDateTime.now().minusSeconds(30));
+
+            // WebSocket 현재가 모킹
+            FindTickerResponse.TickerInfo wsTicker = new FindTickerResponse.TickerInfo();
+            wsTicker.setLastPrice("50500.00");
+            given(marketService.getWsTicker(symbol)).willReturn(wsTicker);
+
+            var response = autoTradeService.getStatusResponse(userId, symbol);
+
+            assertThat(response.isActive()).isTrue();
+            assertThat(response.getPhase()).isEqualTo("TRIGGER_WAIT");
+            assertThat(response.getElapsedSeconds()).isGreaterThanOrEqualTo(30);
+            // 50000 → 50500 = +1.0%
+            assertThat(response.getChangeRate()).isNotNull();
+            assertThat(response.getChangeRate().doubleValue()).isCloseTo(1.0, org.assertj.core.api.Assertions.within(0.01));
+        }
+
+        @Test
+        @DisplayName("BLOCK_MATCHING 시 진입가 대비 변동률을 반환한다")
+        void returnsChangeRateOnBlockMatching() {
+            Long userId = 1L;
+            String symbol = "BTCUSDT";
+            PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                    userId, symbol, true)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol);
+
+            // BLOCK_MATCHING 상태로 설정
+            var state = autoTradeService.getSession(userId, symbol).getQueueStates().get(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            // WebSocket 현재가 모킹
+            FindTickerResponse.TickerInfo wsTicker = new FindTickerResponse.TickerInfo();
+            wsTicker.setLastPrice("52500.00");
+            given(marketService.getWsTicker(symbol)).willReturn(wsTicker);
+
+            var response = autoTradeService.getStatusResponse(userId, symbol);
+
+            assertThat(response.isActive()).isTrue();
+            assertThat(response.getPhase()).isEqualTo("BLOCK_MATCHING");
+            assertThat(response.getElapsedSeconds()).isEqualTo(0); // BLOCK_MATCHING은 경과시간 없음
+            // 50000 → 52500 = +5.0%
+            assertThat(response.getChangeRate()).isNotNull();
+            assertThat(response.getChangeRate().doubleValue()).isCloseTo(5.0, org.assertj.core.api.Assertions.within(0.01));
+        }
+
+        @Test
+        @DisplayName("WebSocket 가격이 없으면 변동률 null을 반환한다")
+        void returnsNullChangeRateWhenNoWsPrice() {
+            Long userId = 1L;
+            String symbol = "BTCUSDT";
+            PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
+                    userId, symbol, true)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol);
+
+            // WebSocket 가격 없음
+            given(marketService.getWsTicker(symbol)).willReturn(null);
+
+            var response = autoTradeService.getStatusResponse(userId, symbol);
+
+            assertThat(response.isActive()).isTrue();
+            assertThat(response.getChangeRate()).isNull();
+            assertThat(response.getElapsedSeconds()).isEqualTo(0);
+        }
     }
 
     // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private Queue makeQueue(Long id, Long userId, String symbol) {
-        return makeQueue(id, userId, symbol, Side.LONG);
+    /**
+     * 테스트용 세션 생성
+     */
+    private AutoTradeSessionDTO makeSession(Long userId, String symbol, PatternQueue queue) {
+        AutoTradeSessionDTO session = new AutoTradeSessionDTO();
+        session.setUserId(userId);
+        session.setSymbol(symbol);
+        session.setQueues(new ArrayList<>(List.of(queue)));
+        session.getQueueStates().put(queue.getId(), QueueStateDTO.initial(queue.getId()));
+        return session;
     }
 
-    private Queue makeQueue(Long id, Long userId, String symbol, Side side) {
-        return makeQueue(id, userId, symbol, side, 1);
+    /**
+     * 테스트용 PatternQueue 생성 (1단계, 1패턴, 조건블록1개 + 리프블록1개)
+     */
+    private PatternQueue makePatternQueue(Long id, Long userId, String symbol, Side leafSide) {
+        return makePatternQueueWithLeverage(id, userId, symbol, leafSide, 1);
     }
 
-    private Queue makeQueue(Long id, Long userId, String symbol, Side side, int stepCount) {
-        Queue q = new Queue();
-        q.setId(id);
-        q.setUserId(userId);
-        q.setSymbol(symbol);
-        q.setSortOrder(0);
-        q.setUseYn("Y");
-        q.setDelYn("N");
-        q.setCreatedAt(LocalDateTime.now());
+    /**
+     * 레버리지를 지정한 PatternQueue 생성
+     */
+    private PatternQueue makePatternQueueWithLeverage(Long id, Long userId, String symbol,
+                                                       Side leafSide, int leverage) {
+        PatternQueue queue = new PatternQueue();
+        queue.setId(id);
+        queue.setUserId(userId);
+        queue.setSymbol(symbol);
+        queue.setActive(true);
+        queue.setTriggerSeconds(60);
+        queue.setTriggerRate(new BigDecimal("1.0"));
+        queue.setFull(false);
+        ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
 
-        List<QueueStep> steps = new ArrayList<>();
-        for (int i = 0; i < stepCount; i++) {
-            QueueStep step = new QueueStep();
-            step.setId(id * 10 + i);
-            step.setQueue(q);
-            step.setStepOrder(i);
-            step.setSide(side);
-            step.setQuantity(new BigDecimal("0.01"));
-            steps.add(step);
-        }
+        PatternStep step = makeStep(id, leafSide, leverage, 1);
+        step.setQueue(queue);
+        queue.getSteps().add(step);
+        return queue;
+    }
 
-        q.setSteps(steps);
-        return q;
+    /**
+     * LONG, SHORT 양쪽 패턴을 가진 PatternQueue 생성
+     */
+    private PatternQueue makePatternQueueWithBothPatterns(Long id, Long userId, String symbol) {
+        PatternQueue queue = new PatternQueue();
+        queue.setId(id);
+        queue.setUserId(userId);
+        queue.setSymbol(symbol);
+        queue.setActive(true);
+        queue.setTriggerSeconds(60);
+        queue.setTriggerRate(new BigDecimal("1.0"));
+        queue.setFull(false);
+        ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
+
+        PatternStep step = makeStepWithBothPatterns(1);
+        step.setId(id * 10);
+        step.setQueue(queue);
+        queue.getSteps().add(step);
+        return queue;
+    }
+
+    /**
+     * 2단계 큐 생성 (1단계: LONG패턴, 2단계: LONG+SHORT 패턴)
+     */
+    private PatternQueue makeTwoStepQueue(Long id, Long userId, String symbol, int leverage) {
+        PatternQueue queue = new PatternQueue();
+        queue.setId(id);
+        queue.setUserId(userId);
+        queue.setSymbol(symbol);
+        queue.setActive(true);
+        queue.setTriggerSeconds(60);
+        queue.setTriggerRate(new BigDecimal("1.0"));
+        queue.setFull(false);
+        ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
+
+        // 1단계: LONG 패턴
+        PatternStep step1 = makeStep(id, Side.LONG, leverage, 1);
+        step1.setQueue(queue);
+        queue.getSteps().add(step1);
+
+        // 2단계: LONG + SHORT 패턴
+        PatternStep step2 = makeStepWithBothPatterns(2);
+        step2.setId(id * 10 + 1);
+        step2.setQueue(queue);
+        // 패턴에 레버리지 설정
+        step2.getPatterns().forEach(p -> p.setLeverage(leverage));
+        queue.getSteps().add(step2);
+
+        return queue;
+    }
+
+    /**
+     * 단일 방향 패턴을 가진 단계 생성
+     */
+    private PatternStep makeStep(Long queueId, Side side, int leverage, int stepLevel) {
+        // 조건 블록
+        PatternBlock condBlock = new PatternBlock();
+        condBlock.setId(queueId * 100 + 1);
+        condBlock.setSide(side);
+        condBlock.setBlockOrder(1);
+        condBlock.setLeaf(false);
+
+        // 리프 블록
+        PatternBlock leafBlock = new PatternBlock();
+        leafBlock.setId(queueId * 100 + 2);
+        leafBlock.setSide(side);
+        leafBlock.setBlockOrder(2);
+        leafBlock.setLeaf(true);
+
+        // 패턴
+        Pattern pattern = new Pattern();
+        pattern.setId(queueId * 10);
+        pattern.setPatternOrder(1);
+        pattern.setAmount(new BigDecimal("100"));
+        pattern.setLeverage(leverage);
+        pattern.getBlocks().add(condBlock);
+        pattern.getBlocks().add(leafBlock);
+
+        // 단계
+        PatternStep step = new PatternStep();
+        step.setId(queueId * 10);
+        step.setStepLevel(stepLevel);
+        step.setFull(false);
+        step.getPatterns().add(pattern);
+
+        return step;
+    }
+
+    /**
+     * LONG + SHORT 양쪽 패턴을 가진 단계 생성
+     */
+    private PatternStep makeStepWithBothPatterns(int stepLevel) {
+        // LONG 패턴
+        PatternBlock longCond = new PatternBlock();
+        longCond.setId(1001L);
+        longCond.setSide(Side.LONG);
+        longCond.setBlockOrder(1);
+        longCond.setLeaf(false);
+
+        PatternBlock longLeaf = new PatternBlock();
+        longLeaf.setId(1002L);
+        longLeaf.setSide(Side.LONG);
+        longLeaf.setBlockOrder(2);
+        longLeaf.setLeaf(true);
+
+        Pattern longPattern = new Pattern();
+        longPattern.setId(100L);
+        longPattern.setPatternOrder(1);
+        longPattern.setAmount(new BigDecimal("100"));
+        longPattern.setLeverage(1);
+        longPattern.getBlocks().add(longCond);
+        longPattern.getBlocks().add(longLeaf);
+
+        // SHORT 패턴
+        PatternBlock shortCond = new PatternBlock();
+        shortCond.setId(2001L);
+        shortCond.setSide(Side.SHORT);
+        shortCond.setBlockOrder(1);
+        shortCond.setLeaf(false);
+
+        PatternBlock shortLeaf = new PatternBlock();
+        shortLeaf.setId(2002L);
+        shortLeaf.setSide(Side.SHORT);
+        shortLeaf.setBlockOrder(2);
+        shortLeaf.setLeaf(true);
+
+        Pattern shortPattern = new Pattern();
+        shortPattern.setId(200L);
+        shortPattern.setPatternOrder(2);
+        shortPattern.setAmount(new BigDecimal("100"));
+        shortPattern.setLeverage(1);
+        shortPattern.getBlocks().add(shortCond);
+        shortPattern.getBlocks().add(shortLeaf);
+
+        PatternStep step = new PatternStep();
+        step.setStepLevel(stepLevel);
+        step.setFull(true);
+        step.getPatterns().add(longPattern);
+        step.getPatterns().add(shortPattern);
+
+        return step;
+    }
+
+    /**
+     * 레버리지만 지정한 패턴 생성 (신호 판별 테스트용)
+     */
+    private Pattern makePatternWithLeverage(int leverage) {
+        Pattern pattern = new Pattern();
+        pattern.setId(1L);
+        pattern.setLeverage(leverage);
+        pattern.setAmount(new BigDecimal("100"));
+        return pattern;
     }
 
     private FindTickerResponse makeTickerResponse(String symbol, String price) {
