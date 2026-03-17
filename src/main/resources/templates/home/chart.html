@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>코인 상세 차트</title>
     <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 </head>
 <body>
@@ -65,9 +66,10 @@
             <!-- 패턴 관리 큐 (SRS 20, 21번) - 등록된 큐의 단계/패턴 계층 표시 -->
             <div class="side-pattern-manage-panel">
                 <h3>패턴 관리 큐</h3>
-                <div id="queue-display" class="queue-display">
-                    <div class="pattern-manage-empty">등록된 큐가 없습니다. 아래에서 큐를 구성해주세요.</div>
-                </div>
+                <!-- 서버에 저장된 큐 목록 -->
+                <div id="server-queues" class="queue-display"></div>
+                <!-- 로컬에서 구성 중인 큐 미리보기 -->
+                <div id="local-queue-preview" class="queue-display"></div>
             </div>
 
             <!-- 큐 설정 영역 -->
@@ -152,13 +154,6 @@
                     </div>
                 </div>
 
-                <!-- 상태 표시 -->
-                <div id="autotrade-status" class="autotrade-status" style="display: none;">
-                    <div>현재 패턴: <strong id="status-pattern">-</strong></div>
-                    <div>현재 단계: <strong id="status-step">-</strong></div>
-                    <div>이전 가격: <strong id="status-prev-price">-</strong></div>
-                    <div id="trade-log" class="trade-log"></div>
-                </div>
             </div>
         </div>
     </div>
@@ -176,7 +171,6 @@
             loadChart('1');
             loadOrderBook();
             loadPatterns();
-            checkAutoTradeStatus();
         });
 
         function loadChart(interval) {
@@ -200,17 +194,22 @@
         }
 
         function fetchAndDraw(isInitial) {
-            fetch(`/api/kline?symbol=${symbol}&interval=${currentInterval}`)
-                .then(res => res.json())
-                .then(data => {
+            $.ajax({
+                url: '/api/kline',
+                type: 'GET',
+                data: { symbol: symbol, interval: currentInterval },
+                success: function(data) {
                     // retCode는 String("0") 또는 Number(0)일 수 있으므로 동등 비교 사용
                     if (data.retCode == '0' && data.result && data.result.list) {
                         updateChart(data.result.list, isInitial);
                     } else {
                         console.error('Failed to load data', data);
                     }
-                })
-                .catch(err => console.error(err));
+                },
+                error: function(xhr, status, err) {
+                    console.error(err);
+                }
+            });
         }
 
         function updateChart(klineData, isInitial) {
@@ -322,15 +321,20 @@
 
         function loadOrderBook() {
             // 1초마다 호가창 데이터 갱신
-            orderBookFetchIntervalId = setInterval(() => {
-                fetch(`/api/orderbook?symbol=${symbol}`)
-                    .then(res => res.json())
-                    .then(data => {
+            orderBookFetchIntervalId = setInterval(function() {
+                $.ajax({
+                    url: '/api/orderbook',
+                    type: 'GET',
+                    data: { symbol: symbol },
+                    success: function(data) {
                         if (data.retCode == '0' && data.result) {
                             updateOrderBookUI(data.result.a, data.result.b);
                         }
-                    })
-                    .catch(err => console.error('Error fetching order book:', err));
+                    },
+                    error: function(xhr, status, err) {
+                        console.error('Error fetching order book:', err);
+                    }
+                });
             }, 1000);
         }
 
@@ -394,63 +398,151 @@
         const MAX_STEPS = 20;           // 큐당 단계 최대 20개
         const MAX_PATTERNS_PER_STEP = 2; // 단계당 패턴 최대 2개
 
+        /**
+         * 서버에 저장된 큐 목록을 API로 조회하여 렌더링
+         */
         function loadPatterns() {
-            // 현재는 큐 데이터를 로컬에서 관리 (API 연동은 다음 작업)
-            renderQueueDisplay();
+            $.ajax({
+                url: '/api/autotrade/patterns',
+                type: 'GET',
+                data: { symbol: symbol },
+                success: function(data) {
+                    renderServerQueues(data);
+                    // 큐 카드 렌더링 완료 후 활성 단계 하이라이트 적용
+                    checkAutoTradeStatus();
+                },
+                error: function(xhr, status, err) {
+                    console.error('큐 목록 조회 실패:', err);
+                }
+            });
         }
 
         /**
-         * 큐 표시 영역에 등록된 단계/패턴을 계층적으로 렌더링
+         * 서버에서 조회한 큐 목록을 계층적으로 렌더링
+         * @param queues API 응답 배열 (PatternQueueResponse[])
+         */
+        function renderServerQueues(queues) {
+            var $container = $('#server-queues');
+
+            if (!queues || queues.length === 0) {
+                $container.html('<div class="pattern-manage-empty">등록된 큐가 없습니다. 아래에서 큐를 구성해주세요.</div>');
+                return;
+            }
+
+            var html = queues.map(function(queue) {
+                // 단계별 렌더링
+                var stepsHtml = queue.steps.map(function(step) {
+                    var patternsHtml = step.patterns.map(function(p, pIdx) {
+                        // 블록을 조건 블록과 리프 블록으로 분리
+                        var condBlocks = p.blocks.filter(function(b) { return !b.leaf; });
+                        var leafBlocks = p.blocks.filter(function(b) { return b.leaf; });
+
+                        // 조건 블록 시각화
+                        var condHtml = condBlocks.map(function(b) {
+                            var isLong = b.side === 'LONG';
+                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                        }).join('');
+
+                        // 리프 블록 시각화
+                        var leafHtml = leafBlocks.map(function(b) {
+                            var isLong = b.side === 'LONG';
+                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                        }).join('');
+
+                        return '<div class="step-pattern-row">' +
+                            '<span class="step-pattern-label">패턴' + (pIdx + 1) + ':</span>' +
+                            '<span class="step-pattern-blocks">' + condHtml + '</span>' +
+                            '<span class="block-colon-display">:</span>' +
+                            '<span class="step-pattern-blocks">' + leafHtml + '</span>' +
+                            '<span class="step-pattern-meta">→ ' + p.amount + '$ x' + p.leverage + '</span>' +
+                            (p.stopLossRate ? '<span class="step-pattern-meta sl">SL:' + p.stopLossRate + '%</span>' : '') +
+                            (p.takeProfitRate ? '<span class="step-pattern-meta tp">TP:' + p.takeProfitRate + '%</span>' : '') +
+                            '</div>';
+                    }).join('');
+
+                    // 활성 큐의 첫 번째 단계에 하이라이트 + 뱃지 적용
+                    var isFirstStep = (step.stepLevel === queue.steps[0].stepLevel);
+                    var activeClass = (queue.active && isFirstStep) ? ' step-active' : '';
+                    var badgeHtml = (queue.active && isFirstStep)
+                        ? '<span class="step-active-badge">현재 진행 단계</span>' : '';
+
+                    return '<div class="step-card' + activeClass + '" data-step-level="' + step.stepLevel + '">' +
+                        '<div class="step-card-header">' +
+                        '<span class="step-card-title">' + step.stepLevel + '단계</span>' +
+                        badgeHtml +
+                        '</div>' +
+                        '<div class="step-card-body">' + patternsHtml + '</div>' +
+                        '</div>';
+                }).join('');
+
+                // 큐 카드: 토글 버튼 + 트리거 정보 + 단계 목록 + 삭제 버튼
+                var toggleLabel = queue.active ? 'ON' : 'OFF';
+                var toggleClass = queue.active ? 'toggle-on' : 'toggle-off';
+
+                return '<div class="server-queue-card ' + (queue.active ? 'queue-active' : 'queue-inactive') + '" data-queue-id="' + queue.id + '">' +
+                    '<div class="server-queue-header">' +
+                    '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '">' + toggleLabel + '</button>' +
+                    '<span class="queue-trigger-info">트리거: ' + queue.triggerSeconds + '초 / ' + queue.triggerRate + '%</span>' +
+                    '<button onclick="deletePattern(' + queue.id + ')" class="pattern-delete-btn">삭제</button>' +
+                    '</div>' +
+                    stepsHtml +
+                    '</div>';
+            }).join('');
+
+            $container.html(html);
+        }
+
+        /**
+         * 로컬에서 구성 중인 큐 미리보기 렌더링
          */
         function renderQueueDisplay() {
-            const container = document.getElementById('queue-display');
+            var $container = $('#local-queue-preview');
 
             if (queueSteps.length === 0) {
-                container.innerHTML = '<div class="pattern-manage-empty">등록된 큐가 없습니다. 아래에서 큐를 구성해주세요.</div>';
+                $container.html('');
                 return;
             }
 
             // 트리거 설정값 표시
-            const triggerSec = document.getElementById('trigger-seconds').value || '-';
-            const triggerRate = document.getElementById('trigger-rate').value || '-';
+            var triggerSec = $('#trigger-seconds').val() || '-';
+            var triggerRateVal = $('#trigger-rate').val() || '-';
 
-            container.innerHTML = `
-                <div class="queue-trigger-info">
-                    <span>트리거: ${triggerSec}초 / ${triggerRate}%</span>
-                </div>
-                ${queueSteps.map((step, stepIdx) => `
-                    <div class="step-card">
-                        <div class="step-card-header">
-                            <span class="step-card-title">${stepIdx + 1}단계</span>
-                            <button onclick="removeStep(${stepIdx})" class="pattern-delete-btn">삭제</button>
-                        </div>
-                        <div class="step-card-body">
-                            ${step.patterns.map((p, pIdx) => {
-                                // 조건 블록 시각화
-                                const condBlocks = p.conditionBlocks.map(side => {
-                                    const isLong = side === 'LONG';
-                                    return `<span class="block-tag ${isLong ? 'block-long' : 'block-short'}">${isLong ? 'L' : 'S'}</span>`;
-                                }).join('');
-                                // 리프 블록 시각화
-                                const leafTag = p.leafBlock
-                                    ? `<span class="block-tag ${p.leafBlock === 'LONG' ? 'block-long' : 'block-short'}">${p.leafBlock === 'LONG' ? 'L' : 'S'}</span>`
-                                    : '';
-                                return `
-                                    <div class="step-pattern-row">
-                                        <span class="step-pattern-label">패턴${pIdx + 1}:</span>
-                                        <span class="step-pattern-blocks">${condBlocks}</span>
-                                        <span class="block-colon-display">:</span>
-                                        <span class="step-pattern-blocks">${leafTag}</span>
-                                        <span class="step-pattern-meta">→ ${p.amount}$ x${p.leverage}</span>
-                                        ${p.stopLoss ? `<span class="step-pattern-meta sl">SL:${p.stopLoss}%</span>` : ''}
-                                        ${p.takeProfit ? `<span class="step-pattern-meta tp">TP:${p.takeProfit}%</span>` : ''}
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
-                    </div>
-                `).join('')}
-            `;
+            var html = '<div class="queue-trigger-info">' +
+                '<span>구성 중 — 트리거: ' + triggerSec + '초 / ' + triggerRateVal + '%</span>' +
+                '</div>';
+
+            html += queueSteps.map(function(step, stepIdx) {
+                var patternsHtml = step.patterns.map(function(p, pIdx) {
+                    // 조건 블록 시각화
+                    var condBlocks = p.conditionBlocks.map(function(side) {
+                        var isLong = side === 'LONG';
+                        return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                    }).join('');
+                    // 리프 블록 시각화
+                    var leafTag = p.leafBlock
+                        ? '<span class="block-tag ' + (p.leafBlock === 'LONG' ? 'block-long' : 'block-short') + '">' + (p.leafBlock === 'LONG' ? 'L' : 'S') + '</span>'
+                        : '';
+                    return '<div class="step-pattern-row">' +
+                        '<span class="step-pattern-label">패턴' + (pIdx + 1) + ':</span>' +
+                        '<span class="step-pattern-blocks">' + condBlocks + '</span>' +
+                        '<span class="block-colon-display">:</span>' +
+                        '<span class="step-pattern-blocks">' + leafTag + '</span>' +
+                        '<span class="step-pattern-meta">→ ' + p.amount + '$ x' + p.leverage + '</span>' +
+                        (p.stopLoss ? '<span class="step-pattern-meta sl">SL:' + p.stopLoss + '%</span>' : '') +
+                        (p.takeProfit ? '<span class="step-pattern-meta tp">TP:' + p.takeProfit + '%</span>' : '') +
+                        '</div>';
+                }).join('');
+
+                return '<div class="step-card">' +
+                    '<div class="step-card-header">' +
+                    '<span class="step-card-title">' + (stepIdx + 1) + '단계</span>' +
+                    '<button onclick="removeStep(' + stepIdx + ')" class="pattern-delete-btn">삭제</button>' +
+                    '</div>' +
+                    '<div class="step-card-body">' + patternsHtml + '</div>' +
+                    '</div>';
+            }).join('');
+
+            $container.html(html);
         }
 
         /**
@@ -765,57 +857,140 @@
         }
 
         /**
-         * 기존 호환: 패턴 삭제 (API 연동용, 현재는 미사용)
+         * 큐 활성화/비활성화 토글
          */
-        function deletePattern(id) {
-            fetch(`/api/autotrade/patterns/${id}?symbol=${symbol}`, { method: 'DELETE' })
-                .then(() => {
+        function toggleQueue(id) {
+            $.ajax({
+                url: '/api/autotrade/patterns/' + id + '/toggle',
+                type: 'PATCH',
+                success: function() {
+                    // loadPatterns 성공 콜백에서 checkAutoTradeStatus 호출
                     loadPatterns();
-                    checkAutoTradeStatus();
-                })
-                .catch(err => alert('패턴 삭제 실패: ' + err.message));
+                },
+                error: function(xhr) {
+                    alert('토글 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                }
+            });
         }
 
+        /**
+         * 패턴 큐 삭제
+         */
+        function deletePattern(id) {
+            $.ajax({
+                url: '/api/autotrade/patterns/' + id,
+                type: 'DELETE',
+                data: { symbol: symbol },
+                success: function() {
+                    // loadPatterns 성공 콜백에서 checkAutoTradeStatus 호출
+                    loadPatterns();
+                },
+                error: function(xhr) {
+                    alert('패턴 삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                }
+            });
+        }
+
+        /**
+         * 자동매매 상태를 조회하여 서버 큐 카드에 활성 단계 하이라이트를 적용한다.
+         */
         function checkAutoTradeStatus() {
-            fetch(`/api/autotrade/status?symbol=${symbol}`)
-                .then(res => res.json())
-                .then(data => {
-                    const wasActive = autoTradeActive;
+            $.ajax({
+                url: '/api/autotrade/status',
+                type: 'GET',
+                data: { symbol: symbol },
+                success: function(data) {
+                    var wasActive = autoTradeActive;
                     autoTradeActive = data.active;
-                    document.getElementById('autotrade-status').style.display = autoTradeActive ? 'block' : 'none';
+
+                    // 활성 단계 하이라이트 적용
+                    highlightActiveStep(data);
 
                     if (autoTradeActive && !wasActive) {
                         startStatusPolling();
                     } else if (!autoTradeActive && wasActive) {
                         stopStatusPolling();
                     }
-                })
-                .catch(err => console.error('상태 조회 실패:', err));
+                },
+                error: function(xhr, status, err) {
+                    console.error('상태 조회 실패:', err);
+                }
+            });
         }
 
+        /**
+         * 1초 주기로 자동매매 상태를 폴링하여 활성 단계 하이라이트를 갱신한다.
+         */
         function startStatusPolling() {
             if (autoTradeStatusInterval) clearInterval(autoTradeStatusInterval);
-            autoTradeStatusInterval = setInterval(() => {
-                fetch(`/api/autotrade/status?symbol=${symbol}`)
-                    .then(res => res.json())
-                    .then(data => {
+            autoTradeStatusInterval = setInterval(function() {
+                $.ajax({
+                    url: '/api/autotrade/status',
+                    type: 'GET',
+                    data: { symbol: symbol },
+                    success: function(data) {
                         if (!data.active) {
                             autoTradeActive = false;
-                            document.getElementById('autotrade-status').style.display = 'none';
+                            highlightActiveStep(data);
                             stopStatusPolling();
                             return;
                         }
-                        document.getElementById('status-pattern').textContent = data.currentPattern || '-';
-                        const stepParts = data.currentPattern ? data.currentPattern.split(',') : [];
-                        document.getElementById('status-step').textContent = (data.currentStep + 1) + '/' + (stepParts.length || '-');
-                        document.getElementById('status-prev-price').textContent = data.previousPrice || '-';
-                        const logEl = document.getElementById('trade-log');
-                        if (data.recentLog && data.recentLog.length > 0) {
-                            logEl.innerHTML = data.recentLog.slice(-10).reverse().map(l => `<div>${l}</div>`).join('');
-                        }
-                    })
-                    .catch(err => console.error('상태 폴링 실패:', err));
+                        highlightActiveStep(data);
+                    },
+                    error: function(xhr, status, err) {
+                        console.error('상태 폴링 실패:', err);
+                    }
+                });
             }, 1000);
+        }
+
+        /**
+         * 서버 큐 카드에서 현재 활성 큐의 진행 중인 단계에 하이라이트를 적용한다.
+         * @param data AutoTradeStatusResponse {active, currentQueueId, currentStepLevel}
+         */
+        /**
+         * 자동매매 실행 중일 때, 정확한 진행 단계로 뱃지를 이동한다.
+         * 실행 중이 아니면 renderServerQueues에서 적용한 기본 뱃지를 유지한다.
+         */
+        function highlightActiveStep(data) {
+            if (!data.active) {
+                // 실행 중이 아니면 queue-running 해제, 트리거 상태 제거
+                $('.server-queue-card').removeClass('queue-running');
+                $('.trigger-state-info').remove();
+                return;
+            }
+
+            // 현재 실행 중인 큐 카드 찾기
+            var $queueCard = $('.server-queue-card[data-queue-id="' + data.currentQueueId + '"]');
+            if ($queueCard.length === 0) {
+                return;
+            }
+
+            // 큐 카드에 실행 중 표시
+            $queueCard.addClass('queue-running');
+
+            // 해당 큐 내 기존 하이라이트/뱃지/트리거 상태 초기화 후 재적용
+            $queueCard.find('.step-card').removeClass('step-active');
+            $queueCard.find('.step-active-badge').remove();
+            $queueCard.find('.trigger-state-info').remove();
+
+            var $activeStep = $queueCard.find('.step-card[data-step-level="' + data.currentStepLevel + '"]');
+            $activeStep.addClass('step-active');
+            $activeStep.find('.step-card-header').append('<span class="step-active-badge">현재 진행 단계</span>');
+
+            // 트리거 상태 표시 (큐 헤더 하단에 빨간색)
+            var triggerHtml = '';
+            if (data.phase === 'TRIGGER_WAIT' && data.changeRate !== null) {
+                var rateStr = data.changeRate >= 0 ? '+' + data.changeRate.toFixed(2) : data.changeRate.toFixed(2);
+                triggerHtml = '<div class="trigger-state-info">경과: ' + data.elapsedSeconds + '초 / 변동률: ' + rateStr + '%</div>';
+            } else if (data.phase === 'BLOCK_MATCHING' && data.changeRate !== null) {
+                var rateStr = data.changeRate >= 0 ? '+' + data.changeRate.toFixed(2) : data.changeRate.toFixed(2);
+                triggerHtml = '<div class="trigger-state-info">변동률: ' + rateStr + '%</div>';
+            }
+
+            if (triggerHtml) {
+                $queueCard.find('.server-queue-header').after(triggerHtml);
+            }
         }
 
         function stopStatusPolling() {

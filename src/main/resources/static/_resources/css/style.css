@@ -441,12 +441,40 @@ body {
 
 /* 단계 카드 */
 .step-card {
-    border: 1px solid #dee2e6;
+    border: 2px solid #dee2e6;
     border-radius: 6px;
     margin-bottom: 8px;
     background-color: #fff;
     overflow: hidden;
+    transition: background-color 0.3s;
 }
+
+/* 현재 진행 중인 단계 헤더 하이라이트 */
+.step-card.step-active .step-card-header {
+    background-color: #c9dbff;
+}
+
+/* 현재 진행 단계 뱃지 */
+.step-active-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #1a56db;
+    background-color: #e1ecff;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+
+/* 트리거 상태 정보 (경과시간, 변동률) */
+.trigger-state-info {
+    color: #dc2626;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    text-align: right;
+}
+
+/* 현재 실행 중인 큐 카드 표시 (자동매매 실행 중) */
 
 .step-card-header {
     display: flex;
@@ -716,6 +744,36 @@ body {
 
 .pattern-delete-btn:hover {
     text-decoration: underline;
+}
+
+/* 큐 토글 버튼 */
+.queue-toggle-btn {
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: bold;
+    padding: 3px 10px;
+    flex-shrink: 0;
+}
+
+.queue-toggle-btn.toggle-on {
+    background: #28a745;
+    color: #fff;
+}
+
+.queue-toggle-btn.toggle-off {
+    background: #6c757d;
+    color: #fff;
+}
+
+.queue-toggle-btn:hover {
+    opacity: 0.85;
+}
+
+/* 비활성 큐 카드 흐리게 표시 */
+.server-queue-card.queue-inactive {
+    opacity: 0.55;
 }
 
 /* 블록 태그 (Long=초록, Short=빨강) */
