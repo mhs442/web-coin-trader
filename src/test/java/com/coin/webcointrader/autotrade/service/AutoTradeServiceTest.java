@@ -588,6 +588,8 @@ class AutoTradeServiceTest {
             // 50000 → 50500 = +1.0%
             assertThat(response.getChangeRate()).isNotNull();
             assertThat(response.getChangeRate().doubleValue()).isCloseTo(1.0, org.assertj.core.api.Assertions.within(0.01));
+            // TRIGGER_WAIT 상태에서는 투입 금액 null
+            assertThat(response.getAmount()).isNull();
         }
 
         @Test
@@ -600,11 +602,12 @@ class AutoTradeServiceTest {
                     userId, symbol, true)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol);
 
-            // BLOCK_MATCHING 상태로 설정
+            // BLOCK_MATCHING 상태로 설정 (활성 패턴 ID 포함)
             var state = autoTradeService.getSession(userId, symbol).getQueueStates().get(1L);
             state.setPhase(TradePhase.BLOCK_MATCHING);
             state.setDirection(Side.LONG);
             state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L); // makeStep에서 pattern.id = queueId * 10 = 10
 
             // WebSocket 현재가 모킹
             FindTickerResponse.TickerInfo wsTicker = new FindTickerResponse.TickerInfo();
@@ -619,6 +622,9 @@ class AutoTradeServiceTest {
             // 50000 → 52500 = +5.0%
             assertThat(response.getChangeRate()).isNotNull();
             assertThat(response.getChangeRate().doubleValue()).isCloseTo(5.0, org.assertj.core.api.Assertions.within(0.01));
+            // 투입 금액 = 100 USDT (makeStep에서 설정)
+            assertThat(response.getAmount()).isNotNull();
+            assertThat(response.getAmount()).isEqualByComparingTo(new BigDecimal("100"));
         }
 
         @Test
@@ -639,6 +645,8 @@ class AutoTradeServiceTest {
             assertThat(response.isActive()).isTrue();
             assertThat(response.getChangeRate()).isNull();
             assertThat(response.getElapsedSeconds()).isEqualTo(0);
+            // WebSocket 가격 없으면 투입 금액도 null
+            assertThat(response.getAmount()).isNull();
         }
     }
 
