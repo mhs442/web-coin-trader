@@ -603,7 +603,8 @@ public class AutoTradeService {
 
     /**
      * 진입가 대비 변동률로 매매 신호를 판별한다.
-     * 임계값 = stopLossRate/takeProfitRate (설정 시) 또는 100/leverage (SRS 17)
+     * 수익 임계값 = takeProfitRate (설정 시) 또는 100/leverage (SRS 17)
+     * 손실 임계값 = stopLossRate (설정 시) 또는 100/leverage (SRS 17)
      *
      * @param state        큐 상태 (진입가, 방향 정보)
      * @param pattern      현재 패턴 (레버리지, 손절/익절률)
@@ -619,31 +620,32 @@ public class AutoTradeService {
                 .divide(entry, 6, RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(100));
 
-        // 임계값 결정: 손절/익절 설정 우선, 미설정 시 레버리지 기반 (SRS 17)
-        BigDecimal threshold;
-        if (pattern.getStopLossRate() != null) {
-            threshold = pattern.getStopLossRate();
-        } else if (pattern.getTakeProfitRate() != null) {
-            threshold = pattern.getTakeProfitRate();
-        } else {
-            threshold = BigDecimal.valueOf(100).divide(
-                    BigDecimal.valueOf(pattern.getLeverage()), 6, RoundingMode.HALF_UP);
-        }
+        // 레버리지 기반 기본 임계값 (SRS 17)
+        BigDecimal leverageThreshold = BigDecimal.valueOf(100).divide(
+                BigDecimal.valueOf(pattern.getLeverage()), 6, RoundingMode.HALF_UP);
 
-        // LONG 포지션: +threshold → LONG(수익), -threshold → SHORT(손실)
-        // SHORT 포지션: -threshold → SHORT(수익), +threshold → LONG(손실)
+        // 수익 임계값: 익절률 설정 시 해당 값, 미설정 시 레버리지 기반
+        BigDecimal profitThreshold = pattern.getTakeProfitRate() != null
+                ? pattern.getTakeProfitRate() : leverageThreshold;
+
+        // 손실 임계값: 손절률 설정 시 해당 값, 미설정 시 레버리지 기반
+        BigDecimal lossThreshold = pattern.getStopLossRate() != null
+                ? pattern.getStopLossRate() : leverageThreshold;
+
+        // LONG 포지션: +profitThreshold → LONG(수익), -lossThreshold → SHORT(손실)
+        // SHORT 포지션: -profitThreshold → SHORT(수익), +lossThreshold → LONG(손실)
         if (state.getDirection() == Side.LONG) {
-            if (changeRate.compareTo(threshold) >= 0) {
+            if (changeRate.compareTo(profitThreshold) >= 0) {
                 return Side.LONG;
             }
-            if (changeRate.compareTo(threshold.negate()) <= 0) {
+            if (changeRate.compareTo(lossThreshold.negate()) <= 0) {
                 return Side.SHORT;
             }
         } else {
-            if (changeRate.compareTo(threshold.negate()) <= 0) {
+            if (changeRate.compareTo(profitThreshold.negate()) <= 0) {
                 return Side.SHORT;
             }
-            if (changeRate.compareTo(threshold) >= 0) {
+            if (changeRate.compareTo(lossThreshold) >= 0) {
                 return Side.LONG;
             }
         }
