@@ -4,8 +4,8 @@
   "settings": {
     "width": 2000,
     "height": 2000,
-    "scrollTop": -634,
-    "scrollLeft": -92.5264,
+    "scrollTop": -437.9998,
+    "scrollLeft": 0,
     "zoomLevel": 0.82,
     "show": 511,
     "database": 4,
@@ -240,6 +240,7 @@
           "oZxuI0ap9E9S3QYM9Ok7-",
           "JakzEE2tgjKeQjnmRFkwj",
           "XwuyFuJTf7g8m9OdD_LPM",
+          "WMkK6MQhypEuQMEcq7gu6",
           "UfHKoV2s_kdjfKgDF1Y1C",
           "lNKrVaM15T_xVTc7WzVVZ",
           "FkspqfKp7KG0wvCTt91AG",
@@ -252,6 +253,7 @@
           "oZxuI0ap9E9S3QYM9Ok7-",
           "JakzEE2tgjKeQjnmRFkwj",
           "XwuyFuJTf7g8m9OdD_LPM",
+          "WMkK6MQhypEuQMEcq7gu6",
           "UfHKoV2s_kdjfKgDF1Y1C",
           "lNKrVaM15T_xVTc7WzVVZ",
           "FkspqfKp7KG0wvCTt91AG",
@@ -267,7 +269,7 @@
           "color": ""
         },
         "meta": {
-          "updateAt": 1773063897082,
+          "updateAt": 1773581939607,
           "createAt": 1772965150147
         }
       },
@@ -511,7 +513,7 @@
       "2D5oEl7aIRuLHe7A-TTmc": {
         "id": "2D5oEl7aIRuLHe7A-TTmc",
         "tableId": "j2wp-uA3o4JclVYORRM8L",
-        "name": "use_yn",
+        "name": "is_active",
         "comment": "활성화 여부",
         "dataType": "boolean",
         "default": "false",
@@ -524,7 +526,7 @@
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1772966709478,
+          "updateAt": 1773736835011,
           "createAt": 1772963872461
         }
       },
@@ -1386,6 +1388,26 @@
         "meta": {
           "updateAt": 1772965649287,
           "createAt": 1772965626952
+        }
+      },
+      "WMkK6MQhypEuQMEcq7gu6": {
+        "id": "WMkK6MQhypEuQMEcq7gu6",
+        "tableId": "MrDtBus79nrT4FbyLYIev",
+        "name": "amount",
+        "comment": "주문 금액 (USDT)",
+        "dataType": "decimal(20, 8)",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 60,
+          "widthComment": 92,
+          "widthDataType": 84,
+          "widthDefault": 60
+        },
+        "meta": {
+          "updateAt": 1773582037158,
+          "createAt": 1773581905826
         }
       }
     },
