@@ -379,18 +379,67 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("stopLossRate가 설정되면 해당 값을 임계값으로 사용한다")
-        void usesStopLossRateAsThreshold() {
+        @DisplayName("손절 5%, 익절 10% LONG일 때 +5.2%는 신호 없음 (익절 임계값 미달)")
+        void noSignalWhenBelowProfitThreshold() {
             QueueStateDTO state = QueueStateDTO.initial(1L);
             state.setDirection(Side.LONG);
             state.setEntryPrice("50000.00");
 
-            // stopLossRate=5% → threshold=5%
+            // stopLossRate=5%, takeProfitRate=10%
+            Pattern pattern = makePatternWithLeverage(10);
+            pattern.setStopLossRate(new BigDecimal("5.00"));
+            pattern.setTakeProfitRate(new BigDecimal("10.00"));
+
+            // 50000 → 52600 = +5.2% (익절 10% 미달, 손절 -5% 미달)
+            Side signal = autoTradeService.determineSignal(state, pattern, "52600.00");
+            assertThat(signal).isNull();
+        }
+
+        @Test
+        @DisplayName("손절 5%, 익절 10% LONG일 때 +10% 도달 시 수익 신호")
+        void profitSignalAtTakeProfitRate() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            Pattern pattern = makePatternWithLeverage(10);
+            pattern.setStopLossRate(new BigDecimal("5.00"));
+            pattern.setTakeProfitRate(new BigDecimal("10.00"));
+
+            // 50000 → 55000 = +10% → LONG(수익)
+            Side signal = autoTradeService.determineSignal(state, pattern, "55000.00");
+            assertThat(signal).isEqualTo(Side.LONG);
+        }
+
+        @Test
+        @DisplayName("손절 5%, 익절 10% LONG일 때 -5% 도달 시 손실 신호")
+        void lossSignalAtStopLossRate() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            Pattern pattern = makePatternWithLeverage(10);
+            pattern.setStopLossRate(new BigDecimal("5.00"));
+            pattern.setTakeProfitRate(new BigDecimal("10.00"));
+
+            // 50000 → 47500 = -5% → SHORT(손실)
+            Side signal = autoTradeService.determineSignal(state, pattern, "47500.00");
+            assertThat(signal).isEqualTo(Side.SHORT);
+        }
+
+        @Test
+        @DisplayName("손절만 설정 시 수익 임계값은 레버리지 기반으로 적용된다")
+        void usesLeverageForProfitWhenOnlyStopLossSet() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+
+            // stopLossRate=5%, takeProfitRate=null → 수익 임계값=100/10=10%
             Pattern pattern = makePatternWithLeverage(10);
             pattern.setStopLossRate(new BigDecimal("5.00"));
 
-            // 50000 → 52600 = +5.2% → LONG
-            Side signal = autoTradeService.determineSignal(state, pattern, "52600.00");
+            // 50000 → 55500 = +11% → LONG(수익, 레버리지 기반 10% 초과)
+            Side signal = autoTradeService.determineSignal(state, pattern, "55500.00");
             assertThat(signal).isEqualTo(Side.LONG);
         }
     }
