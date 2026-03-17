@@ -105,7 +105,7 @@ class TradeHistoryRepositoryTest {
         h.setUserId(userId);
         h.setSymbol(symbol);
         h.setSide(Side.LONG);
-        h.setQuantity(new BigDecimal("0.01"));
+        h.setAmount(new BigDecimal("100"));
         h.setExecutedPrice(new BigDecimal("50000"));
         h.setOrderResult(OrderResult.SUCCESS);
         h.setQueueStepId(1L);
