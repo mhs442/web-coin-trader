@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -60,7 +61,8 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
 
     // 티커 데이터 수신 콜백
-    private Consumer<WebSocketTickerDTO> tickerCallback;
+    @Setter
+    private Consumer<WebSocketTickerDTO> tickerCallback;    // WebSocketTickerDTO를 처리할 콜백 함수
 
     // heartbeat 스케줄러
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
@@ -105,15 +107,6 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 log.warn("WebSocket 세션 종료 중 오류: {}", e.getMessage());
             }
         }
-    }
-
-    /**
-     * 티커 데이터 수신 콜백을 등록한다.
-     *
-     * @param callback WebSocketTickerDTO를 처리할 콜백 함수
-     */
-    public void setTickerCallback(Consumer<WebSocketTickerDTO> callback) {
-        this.tickerCallback = callback;
     }
 
     /**
@@ -212,6 +205,9 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
         try {
             // pong 응답이나 구독 확인 메시지는 무시
             JsonNode node = objectMapper.readTree(payload);
+
+            log.info("WebSocket 수신 데이터 : {}", node.toString());
+
             if (node.has("op")) {
                 // op 필드가 있으면 제어 메시지 (pong, subscribe 응답 등)
                 return;
