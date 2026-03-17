@@ -173,7 +173,7 @@
                                         <tr>
                                             <th>#</th>
                                             <th>패턴</th>
-                                            <th>수량</th>
+                                            <th>금액</th>
                                             <th>상태</th>
                                             <th>등록일</th>
                                         </tr>
@@ -308,7 +308,7 @@
                         '<td>' + t.createdAt + '</td>' +
                         '<td><strong>' + t.symbol + '</strong></td>' +
                         '<td class="' + sideClass + '">' + t.side + '</td>' +
-                        '<td class="mono-cell">' + t.quantity + '</td>' +
+                        '<td class="mono-cell">' + t.amount + '</td>' +
                         '<td class="mono-cell">' + t.executedPrice + '</td>' +
                         '<td><span class="' + statusClass + '">' + t.orderStatus + '</span></td>' +
                         '<td class="error-cell">' + (t.errorMessage || '-') + '</td>';

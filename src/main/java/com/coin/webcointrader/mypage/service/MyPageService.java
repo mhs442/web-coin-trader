@@ -235,7 +235,7 @@ public class MyPageService {
                 .id(h.getId())
                 .symbol(h.getSymbol())
                 .side(h.getSide().name())
-                .quantity(h.getQuantity().stripTrailingZeros().toPlainString())
+                .amount(h.getAmount().stripTrailingZeros().toPlainString())
                 .executedPrice(h.getExecutedPrice().stripTrailingZeros().toPlainString())
                 .orderStatus(h.getOrderResult().name())
                 .errorMessage(h.getErrorMessage())

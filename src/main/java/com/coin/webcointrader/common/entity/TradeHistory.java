@@ -38,7 +38,7 @@ public class TradeHistory extends BaseEntity {
     private Side side;                  // 매매 방향 (LONG / SHORT)
 
     @Column(nullable = false, precision = 20, scale = 8)
-    private BigDecimal quantity;        // 주문 수량
+    private BigDecimal amount;          // 주문 금액 (USDT)
 
     @Column(nullable = false, precision = 20, scale = 8)
     private BigDecimal executedPrice;   // 체결 가격

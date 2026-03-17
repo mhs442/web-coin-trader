@@ -9,7 +9,7 @@ public class TradeHistoryResponse {
     private Long id;                // 거래 히스토리 PK
     private String symbol;          // 종목 심볼
     private String side;            // 매매 방향 (LONG / SHORT)
-    private String quantity;        // 주문 수량
+    private String amount;          // 주문 금액 (USDT)
     private String executedPrice;   // 체결 가격
     private String orderStatus;     // 주문 결과 (SUCCESS / FAILED)
     private String errorMessage;    // 오류 메시지 (FAILED 시)
