@@ -1,11 +1,13 @@
 package com.coin.webcointrader.market.service;
 
+import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.client.market.MarketClient;
 import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.dto.response.GetKlineResponse;
 import com.coin.webcointrader.common.dto.response.OrderBookResponse;
 import com.coin.webcointrader.common.enums.Category;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -28,6 +30,16 @@ import java.util.function.BiConsumer;
 public class MarketService {
 
     private final MarketClient marketClient;
+    private final BybitWebSocketClient bybitWebSocketClient;
+
+    /**
+     * 애플리케이션 시작 시 WebSocket 티커 콜백을 등록한다.
+     */
+    @PostConstruct
+    public void init() {
+        bybitWebSocketClient.setTickerCallback(this::onTickerUpdate);
+        log.info("WebSocket 티커 콜백 등록 완료");
+    }
 
     // REST 폴링 캐시 (대시보드용)
     private final AtomicReference<FindTickerResponse> cachedTickers = new AtomicReference<>();
