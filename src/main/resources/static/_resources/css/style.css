@@ -177,8 +177,57 @@ body {
 }
 
 #chart {
+    position: relative; /* 범위 선택 오버레이 기준 */
     width: 100%;
     min-height: 500px; /* ApexCharts height와 동일하게 보장 */
+}
+
+/* 범위 선택 정보 오버레이 */
+.range-info-overlay {
+    position: absolute;
+    top: 50px;
+    right: 15px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.range-info-overlay.range-up {
+    color: #16a34a;
+    border-color: #16a34a;
+}
+
+.range-info-overlay.range-down {
+    color: #dc2626;
+    border-color: #dc2626;
+}
+
+.range-info-overlay .range-info-rate {
+    font-size: 1rem;
+}
+
+.range-info-overlay .range-info-diff,
+.range-info-overlay .range-info-candles {
+    opacity: 0.8;
+}
+
+.range-info-overlay .range-info-close {
+    cursor: pointer;
+    margin-left: 4px;
+    opacity: 0.5;
+    font-size: 0.9rem;
+}
+
+.range-info-overlay .range-info-close:hover {
+    opacity: 1;
 }
 
 /* 시간 간격 버튼 */
