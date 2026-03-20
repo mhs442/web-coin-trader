@@ -165,7 +165,12 @@
         let isUserZoomed = false;       // 사용자가 줌한 상태인지
         let zoomedMinX = null;          // 줌한 X축 최소값
         let zoomedMaxX = null;          // 줌한 X축 최대값
-        let chartSeriesData = [];       // 범위 선택용 캔들 데이터 캐시
+        let chartSeriesData = [];       // 캔들 데이터 캐시
+        let rangeStartCandle = null;    // 범위 측정 시작 캔들
+        let rangeEndCandle = null;      // 범위 측정 끝 캔들
+        let rangeClickState = 0;        // 0: 대기, 1: 시작 선택됨, 2: 결과 표시 중
+        let rangeAnnotations = [];      // 현재 표시 중인 annotation 설정 저장
+        let rangeOverlayHtml = '';      // 결과 오버레이 HTML 저장
         let klineFetchIntervalId = null;
         let orderBookFetchIntervalId = null;
         let autoTradeActive = false;
@@ -236,14 +241,20 @@
 
             // 차트가 이미 존재하면 데이터만 업데이트 (줌 상태 유지)
             if (!isInitial && chart) {
-                chart.updateSeries([{
-                    data: seriesData
-                }]).then(() => {
-                    // 사용자가 줌한 상태일 때만 복구
-                    if (isUserZoomed && zoomedMinX && zoomedMaxX) {
-                        chart.zoomX(zoomedMinX, zoomedMaxX);
+                // updateOptions에 annotations를 포함하여 차트 갱신 시에도 annotation 유지
+                var opts = {
+                    series: [{ data: seriesData }],
+                    annotations: {
+                        xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); })
                     }
-                });
+                };
+                // 줌 상태일 때 xaxis 범위를 함께 지정하여 줌 풀림 방지
+                if (isUserZoomed && zoomedMinX && zoomedMaxX) {
+                    opts.xaxis = { min: zoomedMinX, max: zoomedMaxX };
+                }
+                chart.updateOptions(opts, false, false);
+                // 오버레이 복원 (DOM에서 제거되었을 경우)
+                restoreRangeOverlay();
                 return;
             }
 
@@ -285,14 +296,10 @@
                                 }
                             }
                         },
-                        selection: function(chartContext, { xaxis }) {
-                            // 범위 선택 시 시작/끝 가격 변동 표시
-                            showRangeInfo(xaxis.min, xaxis.max);
+                        // 캔들 클릭으로 범위 측정
+                        dataPointSelection: function(event, chartContext, config) {
+                            handleCandleClick(config.dataPointIndex, event);
                         }
-                    },
-                    selection: {
-                        enabled: true,
-                        type: 'x'
                     },
                     defaultLocale: 'ko',
                     locales: [{
@@ -336,6 +343,19 @@
                     tooltip: {
                         enabled: true
                     }
+                },
+                plotOptions: {
+                    candlestick: {
+                        colors: {
+                            upward: '#28a745',
+                            downward: '#dc3545'
+                        }
+                    }
+                },
+                states: {
+                    active: {
+                        filter: { type: 'none' }  // 클릭 시 캔들 어두워지는 효과 제거
+                    }
                 }
             };
 
@@ -349,53 +369,141 @@
         }
 
         /**
-         * 범위 선택 시 시작/끝 캔들의 가격 변동 정보를 오버레이로 표시한다.
-         * @param minX 선택 범위 시작 타임스탬프
-         * @param maxX 선택 범위 끝 타임스탬프
+         * 캔들 클릭 핸들러 (범위 측정)
+         * 1번째 클릭: 시작 캔들에 수직선 표시, 2번째 클릭: 변동률을 캔들 아래에 표시, 3번째 클릭: 초기화
+         * @param dataPointIndex 클릭된 캔들의 인덱스
+         * @param event 마우스 이벤트 (위치 계산용)
          */
-        function showRangeInfo(minX, maxX) {
-            if (chartSeriesData.length === 0) return;
+        function handleCandleClick(dataPointIndex, event) {
+            if (dataPointIndex < 0 || dataPointIndex >= chartSeriesData.length) return;
 
-            // 선택 범위에 가장 가까운 캔들 찾기
-            var startCandle = null, endCandle = null;
-            var startIdx = 0, endIdx = 0;
-            var minStartDiff = Infinity, minEndDiff = Infinity;
+            var clickedCandle = chartSeriesData[dataPointIndex];
 
-            chartSeriesData.forEach(function(candle, idx) {
-                var time = candle.x.getTime();
-                var startDiff = Math.abs(time - minX);
-                var endDiff = Math.abs(time - maxX);
-                if (startDiff < minStartDiff) { minStartDiff = startDiff; startCandle = candle; startIdx = idx; }
-                if (endDiff < minEndDiff) { minEndDiff = endDiff; endCandle = candle; endIdx = idx; }
-            });
+            // 상태 2(결과 표시 중) → 초기화
+            if (rangeClickState === 2) {
+                resetRangeInfo();
+                return;
+            }
 
-            if (!startCandle || !endCandle || startIdx === endIdx) return;
+            // 상태 0(대기) → 시작 캔들 저장 + 수직선 표시
+            if (rangeClickState === 0) {
+                rangeStartCandle = { index: dataPointIndex, candle: clickedCandle };
+                rangeClickState = 1;
 
-            // candle.y = [open, high, low, close]
-            var startPrice = startCandle.y[3]; // 시작 캔들 종가
-            var endPrice = endCandle.y[3];     // 끝 캔들 종가
-            var diff = endPrice - startPrice;
-            var rate = (diff / startPrice) * 100;
-            var candleCount = Math.abs(endIdx - startIdx);
+                // 시작 캔들 annotation 설정 저장 + 추가
+                var startAnnotation = {
+                    id: 'range-start',
+                    x: clickedCandle.x.getTime(),
+                    borderColor: '#007bff',
+                    strokeDashArray: 4,
+                    label: {
+                        text: '시작: ' + clickedCandle.y[3].toLocaleString(),
+                        borderColor: '#007bff',
+                        style: {
+                            color: '#fff',
+                            background: '#007bff',
+                            fontSize: '11px',
+                            padding: { left: 6, right: 6, top: 2, bottom: 2 }
+                        }
+                    }
+                };
+                rangeAnnotations = [JSON.parse(JSON.stringify(startAnnotation))];
+                chart.addXaxisAnnotation(startAnnotation);
+                return;
+            }
 
-            // 상승/하락 색상 결정
-            var sign = diff >= 0 ? '+' : '';
-            var colorClass = diff >= 0 ? 'range-up' : 'range-down';
+            // 상태 1(시작 선택됨) → 끝 캔들 확정, 변동률 표시
+            if (rangeClickState === 1) {
+                if (dataPointIndex === rangeStartCandle.index) return;
 
-            var html = '<div class="range-info-overlay ' + colorClass + '">' +
-                '<span class="range-info-rate">' + sign + rate.toFixed(2) + '%</span>' +
-                '<span class="range-info-diff">' + sign + diff.toFixed(2) + '</span>' +
-                '<span class="range-info-candles">' + candleCount + '개 캔들</span>' +
-                '<span class="range-info-close" onclick="hideRangeInfo()">✕</span>' +
-                '</div>';
+                var startCandle = rangeStartCandle.candle;
+                var endCandle = clickedCandle;
 
-            // 기존 오버레이 제거 후 새로 추가
-            $('.range-info-overlay').remove();
-            $('#chart').append(html);
+                // candle.y = [open, high, low, close]
+                var startPrice = startCandle.y[3];
+                var endPrice = endCandle.y[3];
+                var diff = endPrice - startPrice;
+                var rate = (diff / startPrice) * 100;
+                var candleCount = Math.abs(dataPointIndex - rangeStartCandle.index);
+
+                var sign = diff >= 0 ? '+' : '';
+                var colorClass = diff >= 0 ? 'range-up' : 'range-down';
+                var borderColor = diff >= 0 ? '#28a745' : '#dc3545';
+
+                // 끝 캔들 annotation 설정 저장 + 추가
+                var endAnnotation = {
+                    id: 'range-end',
+                    x: endCandle.x.getTime(),
+                    borderColor: borderColor,
+                    strokeDashArray: 4,
+                    label: {
+                        text: '끝: ' + endPrice.toLocaleString(),
+                        borderColor: borderColor,
+                        style: {
+                            color: '#fff',
+                            background: borderColor,
+                            fontSize: '11px',
+                            padding: { left: 6, right: 6, top: 2, bottom: 2 }
+                        }
+                    }
+                };
+                rangeAnnotations.push(JSON.parse(JSON.stringify(endAnnotation)));
+                rangeEndCandle = { index: dataPointIndex, candle: endCandle };
+                chart.addXaxisAnnotation(endAnnotation);
+
+                // 클릭 위치 기준으로 오버레이를 캔들 아래에 배치
+                var chartEl = document.getElementById('chart');
+                var chartRect = chartEl.getBoundingClientRect();
+                var posX = event.clientX - chartRect.left;
+                var posY = event.clientY - chartRect.top + 20;
+
+                // 오버레이가 차트 오른쪽 밖으로 나가지 않도록 보정
+                if (posX + 200 > chartRect.width) {
+                    posX = chartRect.width - 210;
+                }
+
+                $('.range-info-overlay').remove();
+                rangeOverlayHtml = '<div class="range-info-overlay ' + colorClass + '" ' +
+                    'style="position:absolute; top:' + posY + 'px; left:' + posX + 'px; right:auto;">' +
+                    '<span class="range-info-rate">' + sign + rate.toFixed(2) + '%</span>' +
+                    '<span class="range-info-diff">' + sign + diff.toFixed(2) + '</span>' +
+                    '<span class="range-info-candles">' + candleCount + '개 캔들</span>' +
+                    '<span class="range-info-close" onclick="resetRangeInfo()">✕</span>' +
+                    '</div>';
+                $('#chart').append(rangeOverlayHtml);
+
+                rangeClickState = 2;
+                return;
+            }
         }
 
-        function hideRangeInfo() {
+        /**
+         * 범위 측정 상태 초기화 (annotation + 오버레이 제거)
+         */
+        function resetRangeInfo() {
+            rangeStartCandle = null;
+            rangeEndCandle = null;
+            rangeClickState = 0;
+            rangeAnnotations = [];
+            rangeOverlayHtml = '';
             $('.range-info-overlay').remove();
+            // 수직선 annotation 제거
+            if (chart) {
+                chart.removeAnnotation('range-start');
+                chart.removeAnnotation('range-end');
+            }
+        }
+
+        /**
+         * 데이터 갱신 후 범위 측정 annotation을 복원한다.
+         */
+        /**
+         * 오버레이 복원 (차트 갱신 시 DOM에서 제거되므로)
+         */
+        function restoreRangeOverlay() {
+            if (rangeOverlayHtml && $('.range-info-overlay').length === 0) {
+                $('#chart').append(rangeOverlayHtml);
+            }
         }
 
         function loadOrderBook() {
