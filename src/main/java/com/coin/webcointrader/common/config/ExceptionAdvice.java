@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @ControllerAdvice
@@ -23,6 +24,13 @@ public class ExceptionAdvice {
             log.error("오류가 발생하였습니다 : {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ExceptionMessage.OTHER_ERROR.getMessage());
         }
+    }
 
+    @ExceptionHandler(NoResourceFoundException.class)
+    public Object handleNotFound(NoResourceFoundException e, HttpServletRequest request) {
+        if (request.getHeader("Accept") != null && request.getHeader("Accept").contains("text/html")) {
+            return "error/4xx";
+        }
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ExceptionMessage.NOT_FOUND_RESOURCE.getMessage());
     }
 }

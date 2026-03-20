@@ -29,7 +29,8 @@ public enum ExceptionMessage {
     EXCEED_MAX_QUEUES(HttpStatus.BAD_REQUEST, "큐는 심볼당 최대 20개까지 등록할 수 있습니다."),
     QUEUE_NOT_FOUND(HttpStatus.BAD_REQUEST, "큐를 찾을 수 없습니다."),
     QUEUE_UNAUTHORIZED(HttpStatus.FORBIDDEN, "큐에 대한 권한이 없습니다."),
-    OTHER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "오류가 발생하였습니다.")
+    OTHER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "오류가 발생하였습니다."),
+    NOT_FOUND_RESOURCE(HttpStatus.NOT_FOUND, "요청한 리소스를 찾을 수 없습니다.")
     ;
 
     private final HttpStatus status;
