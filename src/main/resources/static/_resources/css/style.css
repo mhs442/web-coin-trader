@@ -182,11 +182,9 @@ body {
     min-height: 500px; /* ApexCharts height와 동일하게 보장 */
 }
 
-/* 범위 선택 정보 오버레이 */
+/* 범위 측정 정보 오버레이 (캔들 클릭 시 해당 위치에 표시) */
 .range-info-overlay {
     position: absolute;
-    top: 50px;
-    right: 15px;
     z-index: 10;
     display: flex;
     align-items: center;
@@ -1133,13 +1131,36 @@ body {
     margin-bottom: 28px;
 }
 
+.mypage-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e9ecef;
+}
+
 .mypage-section-title {
     font-size: 1.1rem;
     font-weight: 600;
     color: #343a40;
-    margin: 0 0 12px 0;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #e9ecef;
+    margin: 0;
+}
+
+.chart-link-btn {
+    display: inline-block;
+    padding: 6px 14px;
+    background-color: #007bff;
+    color: #fff;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 0.8rem;
+    font-weight: 600;
+    transition: background-color 0.2s;
+}
+
+.chart-link-btn:hover {
+    background-color: #0056b3;
 }
 
 .mypage-table-wrapper {

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>마이페이지</title>
     <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
 </head>
 <body>
 <div class="mypage-container">
@@ -165,7 +166,10 @@
                         section.className = 'mypage-section';
                         section.setAttribute('data-symbol', sym);
                         section.innerHTML = `
-                            <h3 class="mypage-section-title">${sym}</h3>
+                            <div class="mypage-section-header">
+                                <h3 class="mypage-section-title">${sym}</h3>
+                                <a href="/chart?symbol=${sym}" class="chart-link-btn">차트로 이동 →</a>
+                            </div>
                             <div class="mypage-table-wrapper">
                                 <table class="mypage-table">
                                     <thead>
@@ -173,6 +177,7 @@
                                             <th>#</th>
                                             <th>상태</th>
                                             <th>등록일</th>
+                                            <th>관리</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -189,17 +194,27 @@
                         const rowId = 'pattern-detail-' + p.id;
 
                         // 활성화 상태
+                        const statusId = 'status-' + p.id;
                         const status = p.active
-                            ? '<span class="status-active">활성</span>'
-                            : '<span class="status-inactive">비활성</span>';
+                            ? '<span id="' + statusId + '" class="status-active">활성</span>'
+                            : '<span id="' + statusId + '" class="status-inactive">비활성</span>';
+
+                        // 토글/삭제 버튼
+                        const toggleBtnClass = p.active ? 'queue-toggle-btn toggle-on' : 'queue-toggle-btn toggle-off';
+                        const toggleBtnText = p.active ? 'ON' : 'OFF';
+                        const actionBtns =
+                            '<button id="toggle-' + p.id + '" class="' + toggleBtnClass + '" onclick="event.stopPropagation(); toggleQueueActive(' + p.id + ', \'' + p.symbol + '\')">' + toggleBtnText + '</button> ' +
+                            '<button class="pattern-delete-btn" onclick="event.stopPropagation(); deleteQueue(' + p.id + ', \'' + p.symbol + '\')">삭제</button>';
 
                         // 요약 행 (클릭 시 드롭다운 토글)
                         const summaryRow = document.createElement('tr');
                         summaryRow.className = 'pattern-summary-row';
+                        summaryRow.setAttribute('data-queue-id', p.id);
                         summaryRow.innerHTML =
                             '<td><span class="pattern-toggle-icon" id="icon-' + rowId + '">▶</span> ' + patternIndex + '</td>' +
                             '<td>' + status + '</td>' +
-                            '<td>' + p.createdAt + '</td>';
+                            '<td>' + p.createdAt + '</td>' +
+                            '<td>' + actionBtns + '</td>';
                         summaryRow.onclick = function() { togglePatternDetail(rowId); };
                         tbody.appendChild(summaryRow);
 
@@ -209,7 +224,7 @@
                         detailRow.className = 'pattern-detail-row';
                         detailRow.style.display = 'none';
 
-                        let detailHtml = '<td colspan="3"><div class="pattern-detail">';
+                        let detailHtml = '<td colspan="4"><div class="pattern-detail">';
 
                         // 큐 트리거 정보
                         detailHtml += '<div class="pattern-detail-trigger">' +
@@ -235,9 +250,13 @@
                                     '<span class="pattern-detail-meta-item sl">손절: ' + (pat.stopLossRate || '-') + '%</span>' +
                                     '</div>';
 
-                                // 블록 목록
+                                // 블록 목록 (isLeaf 블록 앞에 : 구분자 표시)
                                 detailHtml += '<div class="pattern-detail-blocks">';
-                                pat.blocks.forEach(b => {
+                                pat.blocks.forEach((b, idx) => {
+                                    // 현재 블록이 leaf이면 앞에 콜론 구분자 추가
+                                    if (b.leaf) {
+                                        detailHtml += '<span class="block-colon-display">:</span>';
+                                    }
                                     const isLong = b.side === 'LONG';
                                     detailHtml += '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' +
                                         (isLong ? 'L' : 'S') + '</span>';
@@ -267,6 +286,50 @@
                 loadingEl.style.display = 'none';
                 patternLoading = false;
             });
+    }
+
+    // === 큐 활성화/비활성화 토글 ===
+    function toggleQueueActive(queueId, symbol) {
+        $.ajax({
+            url: '/api/autotrade/patterns/' + queueId + '/toggle',
+            type: 'PATCH',
+            success: function(data) {
+                const isActive = data.active;
+
+                // 상태 텍스트 업데이트
+                const statusEl = document.getElementById('status-' + queueId);
+                statusEl.className = isActive ? 'status-active' : 'status-inactive';
+                statusEl.textContent = isActive ? '활성' : '비활성';
+
+                // 토글 버튼 업데이트
+                const toggleBtn = document.getElementById('toggle-' + queueId);
+                toggleBtn.className = isActive ? 'queue-toggle-btn toggle-on' : 'queue-toggle-btn toggle-off';
+                toggleBtn.textContent = isActive ? 'ON' : 'OFF';
+            },
+            error: function() {
+                alert('상태 변경에 실패했습니다.');
+            }
+        });
+    }
+
+    // === 큐 삭제 ===
+    function deleteQueue(queueId, symbol) {
+        if (!confirm('해당 큐를 삭제하시겠습니까?')) return;
+
+        $.ajax({
+            url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol,
+            type: 'DELETE',
+            success: function() {
+                // 요약 행 + 상세 행 제거
+                const summaryRow = document.querySelector('tr[data-queue-id="' + queueId + '"]');
+                const detailRow = document.getElementById('pattern-detail-' + queueId);
+                if (summaryRow) summaryRow.remove();
+                if (detailRow) detailRow.remove();
+            },
+            error: function() {
+                alert('삭제에 실패했습니다.');
+            }
+        });
     }
 
     // === 패턴 상세 드롭다운 토글 ===
