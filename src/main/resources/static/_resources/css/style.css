@@ -1221,6 +1221,115 @@ body {
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 
+/* 패턴 상세 드롭다운 */
+.pattern-detail-row td {
+    padding: 0 !important;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.pattern-detail {
+    padding: 16px 20px;
+    background-color: #f8f9fa;
+}
+
+.pattern-detail-trigger {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+    font-size: 0.82rem;
+    color: #495057;
+}
+
+.pattern-detail-trigger span {
+    background-color: #e9ecef;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.pattern-detail-step {
+    background-color: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+
+.pattern-detail-step-header {
+    padding: 8px 12px;
+    background-color: #e9ecef;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #343a40;
+}
+
+.pattern-detail-pattern {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f3f5;
+}
+
+.pattern-detail-pattern:last-child {
+    border-bottom: none;
+}
+
+.pattern-detail-pattern-header {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 6px;
+}
+
+.pattern-detail-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+.pattern-detail-meta-item {
+    font-size: 0.75rem;
+    font-family: monospace;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background-color: #f1f3f5;
+    color: #495057;
+}
+
+.pattern-detail-meta-item.tp {
+    color: #28a745;
+}
+
+.pattern-detail-meta-item.sl {
+    color: #dc3545;
+}
+
+.pattern-detail-blocks {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+/* 클릭 가능한 패턴 행 */
+.mypage-table tbody tr.pattern-summary-row {
+    cursor: pointer;
+}
+
+.mypage-table tbody tr.pattern-summary-row:hover {
+    background-color: #e9ecef;
+}
+
+.pattern-toggle-icon {
+    display: inline-block;
+    width: 16px;
+    font-size: 0.75rem;
+    color: #868e96;
+    transition: transform 0.2s;
+}
+
+.pattern-toggle-icon.open {
+    transform: rotate(90deg);
+}
+
 /* 거래 히스토리 필터 */
 .trade-filter {
     display: flex;

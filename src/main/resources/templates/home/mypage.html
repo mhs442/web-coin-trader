@@ -158,7 +158,6 @@
                     let tbody;
 
                     if (section) {
-                        // 기존 섹션에 행 추가
                         tbody = section.querySelector('tbody');
                     } else {
                         // 새 심볼 섹션 생성
@@ -172,8 +171,6 @@
                                     <thead>
                                         <tr>
                                             <th>#</th>
-                                            <th>패턴</th>
-                                            <th>금액</th>
                                             <th>상태</th>
                                             <th>등록일</th>
                                         </tr>
@@ -186,26 +183,76 @@
                         tbody = section.querySelector('tbody');
                     }
 
-                    // 각 패턴 행 추가
+                    // 각 큐 행 추가 (요약 행 + 상세 드롭다운)
                     items.forEach(p => {
                         patternIndex++;
-                        const blocks = p.steps.map(s => {
-                            const isLong = s.side === 'LONG';
-                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
-                        }).join(' ');
-                        const qty = p.steps.map(s => s.quantity).join(', ');
-                        const status = p.useYn === 'Y'
+                        const rowId = 'pattern-detail-' + p.id;
+
+                        // 활성화 상태
+                        const status = p.active
                             ? '<span class="status-active">활성</span>'
                             : '<span class="status-inactive">비활성</span>';
 
-                        const tr = document.createElement('tr');
-                        tr.innerHTML =
-                            '<td>' + patternIndex + '</td>' +
-                            '<td>' + blocks + '</td>' +
-                            '<td class="mono-cell">' + qty + '</td>' +
+                        // 요약 행 (클릭 시 드롭다운 토글)
+                        const summaryRow = document.createElement('tr');
+                        summaryRow.className = 'pattern-summary-row';
+                        summaryRow.innerHTML =
+                            '<td><span class="pattern-toggle-icon" id="icon-' + rowId + '">▶</span> ' + patternIndex + '</td>' +
                             '<td>' + status + '</td>' +
                             '<td>' + p.createdAt + '</td>';
-                        tbody.appendChild(tr);
+                        summaryRow.onclick = function() { togglePatternDetail(rowId); };
+                        tbody.appendChild(summaryRow);
+
+                        // 상세 드롭다운 행 (큐 → 단계 → 패턴 → 블록 계층)
+                        const detailRow = document.createElement('tr');
+                        detailRow.id = rowId;
+                        detailRow.className = 'pattern-detail-row';
+                        detailRow.style.display = 'none';
+
+                        let detailHtml = '<td colspan="3"><div class="pattern-detail">';
+
+                        // 큐 트리거 정보
+                        detailHtml += '<div class="pattern-detail-trigger">' +
+                            '<span>기준 시간: ' + p.triggerSeconds + '초</span>' +
+                            '<span>기준 비율: ' + p.triggerRate + '%</span>' +
+                            '</div>';
+
+                        // 단계별 상세 정보
+                        p.steps.forEach(step => {
+                            detailHtml += '<div class="pattern-detail-step">';
+                            detailHtml += '<div class="pattern-detail-step-header">단계 ' + step.stepLevel + '</div>';
+
+                            // 각 패턴 상세
+                            step.patterns.forEach(pat => {
+                                detailHtml += '<div class="pattern-detail-pattern">';
+                                detailHtml += '<div class="pattern-detail-pattern-header">패턴 ' + pat.patternOrder + '</div>';
+
+                                // 메타 정보 (금액, 레버리지, 익절, 손절)
+                                detailHtml += '<div class="pattern-detail-meta">' +
+                                    '<span class="pattern-detail-meta-item">금액: ' + pat.amount + ' USDT</span>' +
+                                    '<span class="pattern-detail-meta-item">레버리지: ' + pat.leverage + 'x</span>' +
+                                    '<span class="pattern-detail-meta-item tp">익절: ' + (pat.takeProfitRate || '-') + '%</span>' +
+                                    '<span class="pattern-detail-meta-item sl">손절: ' + (pat.stopLossRate || '-') + '%</span>' +
+                                    '</div>';
+
+                                // 블록 목록
+                                detailHtml += '<div class="pattern-detail-blocks">';
+                                pat.blocks.forEach(b => {
+                                    const isLong = b.side === 'LONG';
+                                    detailHtml += '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' +
+                                        (isLong ? 'L' : 'S') + '</span>';
+                                });
+                                detailHtml += '</div>';
+
+                                detailHtml += '</div>';
+                            });
+
+                            detailHtml += '</div>';
+                        });
+
+                        detailHtml += '</div></td>';
+                        detailRow.innerHTML = detailHtml;
+                        tbody.appendChild(detailRow);
                     });
                 }
 
@@ -220,6 +267,20 @@
                 loadingEl.style.display = 'none';
                 patternLoading = false;
             });
+    }
+
+    // === 패턴 상세 드롭다운 토글 ===
+    function togglePatternDetail(rowId) {
+        const detailRow = document.getElementById(rowId);
+        const icon = document.getElementById('icon-' + rowId);
+        // 상세 행이 숨겨져 있으면 표시, 표시 중이면 숨김
+        if (detailRow.style.display === 'none') {
+            detailRow.style.display = '';
+            icon.classList.add('open');
+        } else {
+            detailRow.style.display = 'none';
+            icon.classList.remove('open');
+        }
     }
 
     // === 검색 버튼: 패턴 초기화 후 첫 페이지 로드 ===
