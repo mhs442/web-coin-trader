@@ -52,15 +52,6 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
     // ─────────────────────────────────────────────
 
     /**
-     * 사용자의 전체 패턴 큐를 동적 정렬로 조회한다. (심볼 검색 시 Java 필터용)
-     *
-     * @param userId 사용자 ID
-     * @param sort   정렬 조건
-     * @return 패턴 큐 목록
-     */
-    List<PatternQueue> findByUserId(Long userId, Sort sort);
-
-    /**
      * 사용자의 패턴 큐를 날짜 범위 + 동적 정렬로 조회한다. (심볼 검색 시 Java 필터용)
      *
      * @param userId 사용자 ID
@@ -70,15 +61,6 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
      * @return 패턴 큐 목록
      */
     List<PatternQueue> findByUserIdAndCreatedAtBetween(Long userId, LocalDateTime start, LocalDateTime end, Sort sort);
-
-    /**
-     * 사용자의 전체 패턴 큐를 페이징 조회한다.
-     *
-     * @param userId   사용자 ID
-     * @param pageable 페이징 조건
-     * @return 패턴 큐 페이지
-     */
-    Page<PatternQueue> findByUserId(Long userId, Pageable pageable);
 
     /**
      * 사용자의 패턴 큐를 날짜 범위 + 페이징 조회한다.

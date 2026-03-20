@@ -6,7 +6,9 @@ import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.common.entity.Pattern;
 import com.coin.webcointrader.common.entity.PatternQueue;
 import com.coin.webcointrader.common.entity.TradeHistory;
+import com.coin.webcointrader.mypage.dto.MyPagePatternRequest;
 import com.coin.webcointrader.mypage.dto.MyPagePatternResponse;
+import com.coin.webcointrader.mypage.dto.TradeHistoryRequest;
 import com.coin.webcointrader.mypage.dto.TradeHistoryResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -15,9 +17,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
@@ -38,52 +37,30 @@ public class MyPageService {
      * 심볼 키워드가 없으면 DB 페이징, 있으면 전체 조회 후 Java 필터 + 수동 페이징.
      *
      * @param userId    사용자 ID
-     * @param symbol    심볼 검색 키워드 (null 또는 빈 문자열이면 전체 조회)
-     * @param startDate 조회 시작일 (yyyy-MM-dd, null이면 날짜 필터 미적용)
-     * @param endDate   조회 종료일 (yyyy-MM-dd, null이면 날짜 필터 미적용)
-     * @param sort      정렬 방향 ("asc" 또는 그 외, 기본 내림차순)
-     * @param page      페이지 번호 (0-based)
-     * @param size      페이지 크기
+     * @param request   검색조건을 담은 객체
      * @return 페이징된 패턴 응답
      */
-    public PageResponse<MyPagePatternResponse> getPatterns(Long userId, String symbol,
-                                                            String startDate, String endDate,
-                                                            String sort, int page, int size) {
-        Sort dbSort = buildSort("createdAt", sort);
-        boolean hasDateRange = hasValue(startDate) && hasValue(endDate);
+    public PageResponse<MyPagePatternResponse> getPatterns(Long userId, MyPagePatternRequest request) {
+        Sort dbSort = buildSort("createdAt", request.getSort());
 
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
-        if (hasValue(symbol)) {
+        if (hasValue(request.getSymbol())) {
             List<PatternQueue> queues;
-            if (hasDateRange) {
-                LocalDateTime start = LocalDate.parse(startDate).atStartOfDay();
-                LocalDateTime end = LocalDate.parse(endDate).atTime(LocalTime.MAX);
-                queues = patternQueueRepository.findByUserIdAndCreatedAtBetween(userId, start, end, dbSort);
-            } else {
-                queues = patternQueueRepository.findByUserId(userId, dbSort);
-            }
+            queues = patternQueueRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
 
-            // 코인 텍스트 포함 검색 (LIKE '%keyword%' — 인덱스 불가, Java 필터)
-            String keyword = symbol.toUpperCase();
+            String keyword = request.getSymbol().toUpperCase();
             List<MyPagePatternResponse> filtered = queues.stream()
                     .filter(q -> q.getSymbol().toUpperCase().contains(keyword))
                     .map(this::toPatternResponse)
                     .toList();
 
-            return PageResponse.fromList(filtered, page, size);
+            return PageResponse.fromList(filtered, request.getPage(), request.getSize());
         }
 
         // 심볼 키워드 없으면 DB 페이징 사용
-        Pageable pageable = PageRequest.of(page, size, dbSort);
+        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
         Page<PatternQueue> queuePage;
-        if (hasDateRange) {
-            LocalDateTime start = LocalDate.parse(startDate).atStartOfDay();
-            LocalDateTime end = LocalDate.parse(endDate).atTime(LocalTime.MAX);
-            queuePage = patternQueueRepository.findByUserIdAndCreatedAtBetween(userId, start, end, pageable);
-        } else {
-            queuePage = patternQueueRepository.findByUserId(userId, pageable);
-        }
-
+        queuePage = patternQueueRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
         return PageResponse.from(queuePage, this::toPatternResponse);
     }
 
@@ -91,52 +68,30 @@ public class MyPageService {
      * 사용자의 거래 히스토리를 페이징하여 조회한다.
      * 심볼 키워드가 없으면 DB 페이징, 있으면 전체 조회 후 Java 필터 + 수동 페이징.
      *
-     * @param userId    사용자 ID
-     * @param symbol    심볼 검색 키워드 (null 또는 빈 문자열이면 전체 조회)
-     * @param startDate 조회 시작일 (yyyy-MM-dd, null이면 날짜 필터 미적용)
-     * @param endDate   조회 종료일 (yyyy-MM-dd, null이면 날짜 필터 미적용)
-     * @param sort      정렬 방향 ("asc" 또는 그 외, 기본 내림차순)
-     * @param page      페이지 번호 (0-based)
-     * @param size      페이지 크기
+     * @param userId  사용자 ID
+     * @param request 검색조건을 담은 객체
      * @return 페이징된 거래 히스토리 응답
      */
-    public PageResponse<TradeHistoryResponse> getTradeHistories(Long userId, String symbol,
-                                                                  String startDate, String endDate,
-                                                                  String sort, int page, int size) {
-        Sort dbSort = buildSort("createdAt", sort);
-        boolean hasDateRange = hasValue(startDate) && hasValue(endDate);
+    public PageResponse<TradeHistoryResponse> getTradeHistories(Long userId, TradeHistoryRequest request) {
+        Sort dbSort = buildSort("createdAt", request.getSort());
 
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
-        if (hasValue(symbol)) {
-            List<TradeHistory> histories;
-            if (hasDateRange) {
-                LocalDateTime start = LocalDate.parse(startDate).atStartOfDay();
-                LocalDateTime end = LocalDate.parse(endDate).atTime(LocalTime.MAX);
-                histories = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, start, end, dbSort);
-            } else {
-                histories = tradeHistoryRepository.findByUserId(userId, dbSort);
-            }
+        if (hasValue(request.getSymbol())) {
+            List<TradeHistory> histories = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
 
-            // 코인 텍스트 포함 검색 (LIKE '%keyword%' — 인덱스 불가, Java 필터)
-            String keyword = symbol.toUpperCase();
+            // 심볼 키워드 %LIKE% 사용 없이 자바단에서 필터링 -> index사용 불가
+            String keyword = request.getSymbol().toUpperCase();
             List<TradeHistoryResponse> filtered = histories.stream()
                     .filter(h -> h.getSymbol().toUpperCase().contains(keyword))
                     .map(this::toTradeResponse)
                     .toList();
 
-            return PageResponse.fromList(filtered, page, size);
+            return PageResponse.fromList(filtered, request.getPage(), request.getSize());
         }
 
         // 심볼 키워드 없으면 DB 페이징 사용
-        Pageable pageable = PageRequest.of(page, size, dbSort);
-        Page<TradeHistory> historyPage;
-        if (hasDateRange) {
-            LocalDateTime start = LocalDate.parse(startDate).atStartOfDay();
-            LocalDateTime end = LocalDate.parse(endDate).atTime(LocalTime.MAX);
-            historyPage = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, start, end, pageable);
-        } else {
-            historyPage = tradeHistoryRepository.findByUserId(userId, pageable);
-        }
+        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
+        Page<TradeHistory> historyPage = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
 
         return PageResponse.from(historyPage, this::toTradeResponse);
     }
