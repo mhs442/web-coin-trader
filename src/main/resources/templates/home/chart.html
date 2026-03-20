@@ -162,6 +162,10 @@
         const symbol = [[${symbol}]];
         let chart = null;
         let currentInterval = '1';
+        let isUserZoomed = false;       // 사용자가 줌한 상태인지
+        let zoomedMinX = null;          // 줌한 X축 최소값
+        let zoomedMaxX = null;          // 줌한 X축 최대값
+        let chartSeriesData = [];       // 범위 선택용 캔들 데이터 캐시
         let klineFetchIntervalId = null;
         let orderBookFetchIntervalId = null;
         let autoTradeActive = false;
@@ -180,6 +184,11 @@
                 chart = null;
             }
             currentInterval = interval;
+
+            // 줌 상태 초기화
+            isUserZoomed = false;
+            zoomedMinX = null;
+            zoomedMaxX = null;
             
             // 기존 폴링 중단
             if (klineFetchIntervalId) clearInterval(klineFetchIntervalId);
@@ -222,17 +231,17 @@
                 };
             }).reverse();
 
+            // 캔들 데이터 캐시 (범위 선택용)
+            chartSeriesData = seriesData;
+
             // 차트가 이미 존재하면 데이터만 업데이트 (줌 상태 유지)
             if (!isInitial && chart) {
-                const minX = chart.w.globals.minX;
-                const maxX = chart.w.globals.maxX;
-
                 chart.updateSeries([{
                     data: seriesData
                 }]).then(() => {
-                    // 데이터 업데이트 후 기존 줌 상태가 있다면 복구
-                    if (minX && maxX) {
-                        chart.zoomX(minX, maxX);
+                    // 사용자가 줌한 상태일 때만 복구
+                    if (isUserZoomed && zoomedMinX && zoomedMaxX) {
+                        chart.zoomX(zoomedMinX, zoomedMaxX);
                     }
                 });
                 return;
@@ -253,6 +262,18 @@
                         autoScaleYaxis: true // X축 줌에 맞춰 Y축 스케일 자동 조정
                     },
                     events: {
+                        zoomed: function(chartContext, { xaxis }) {
+                            // 사용자 줌 상태 저장
+                            isUserZoomed = true;
+                            zoomedMinX = xaxis.min;
+                            zoomedMaxX = xaxis.max;
+                        },
+                        beforeResetZoom: function() {
+                            // 줌 초기화 시 상태 해제
+                            isUserZoomed = false;
+                            zoomedMinX = null;
+                            zoomedMaxX = null;
+                        },
                         beforeZoom: function(chartContext, { xaxis }) {
                             // 1분(60000ms) 미만으로 확대 방지
                             if (xaxis.max - xaxis.min < 60000) {
@@ -263,7 +284,15 @@
                                     }
                                 }
                             }
+                        },
+                        selection: function(chartContext, { xaxis }) {
+                            // 범위 선택 시 시작/끝 가격 변동 표시
+                            showRangeInfo(xaxis.min, xaxis.max);
                         }
+                    },
+                    selection: {
+                        enabled: true,
+                        type: 'x'
                     },
                     defaultLocale: 'ko',
                     locales: [{
@@ -317,6 +346,56 @@
         function getIntervalLabel(interval) {
             if (interval === '60') return '1시간';
             return interval + '분';
+        }
+
+        /**
+         * 범위 선택 시 시작/끝 캔들의 가격 변동 정보를 오버레이로 표시한다.
+         * @param minX 선택 범위 시작 타임스탬프
+         * @param maxX 선택 범위 끝 타임스탬프
+         */
+        function showRangeInfo(minX, maxX) {
+            if (chartSeriesData.length === 0) return;
+
+            // 선택 범위에 가장 가까운 캔들 찾기
+            var startCandle = null, endCandle = null;
+            var startIdx = 0, endIdx = 0;
+            var minStartDiff = Infinity, minEndDiff = Infinity;
+
+            chartSeriesData.forEach(function(candle, idx) {
+                var time = candle.x.getTime();
+                var startDiff = Math.abs(time - minX);
+                var endDiff = Math.abs(time - maxX);
+                if (startDiff < minStartDiff) { minStartDiff = startDiff; startCandle = candle; startIdx = idx; }
+                if (endDiff < minEndDiff) { minEndDiff = endDiff; endCandle = candle; endIdx = idx; }
+            });
+
+            if (!startCandle || !endCandle || startIdx === endIdx) return;
+
+            // candle.y = [open, high, low, close]
+            var startPrice = startCandle.y[3]; // 시작 캔들 종가
+            var endPrice = endCandle.y[3];     // 끝 캔들 종가
+            var diff = endPrice - startPrice;
+            var rate = (diff / startPrice) * 100;
+            var candleCount = Math.abs(endIdx - startIdx);
+
+            // 상승/하락 색상 결정
+            var sign = diff >= 0 ? '+' : '';
+            var colorClass = diff >= 0 ? 'range-up' : 'range-down';
+
+            var html = '<div class="range-info-overlay ' + colorClass + '">' +
+                '<span class="range-info-rate">' + sign + rate.toFixed(2) + '%</span>' +
+                '<span class="range-info-diff">' + sign + diff.toFixed(2) + '</span>' +
+                '<span class="range-info-candles">' + candleCount + '개 캔들</span>' +
+                '<span class="range-info-close" onclick="hideRangeInfo()">✕</span>' +
+                '</div>';
+
+            // 기존 오버레이 제거 후 새로 추가
+            $('.range-info-overlay').remove();
+            $('#chart').append(html);
+        }
+
+        function hideRangeInfo() {
+            $('.range-info-overlay').remove();
         }
 
         function loadOrderBook() {
