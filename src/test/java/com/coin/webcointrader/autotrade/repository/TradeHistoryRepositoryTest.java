@@ -34,28 +34,6 @@ class TradeHistoryRepositoryTest {
     }
 
     // ─────────────────────────────────────────────
-    // findByUserId (Sort)
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("findByUserId: Sort를 적용하여 해당 사용자의 거래 히스토리만 반환한다")
-    void findByUserId_withSort() {
-        // given
-        TradeHistory h1 = makeTradeHistory(USER_ID, SYMBOL);
-        TradeHistory h2 = makeTradeHistory(USER_ID, SYMBOL);
-        TradeHistory other = makeTradeHistory(2L, "ETHUSDT"); // 다른 사용자
-        tradeHistoryRepository.saveAll(List.of(h1, h2, other));
-
-        // when
-        Sort sort = Sort.by(Sort.Direction.DESC, "createdAt");
-        List<TradeHistory> result = tradeHistoryRepository.findByUserId(USER_ID, sort);
-
-        // then
-        assertThat(result).hasSize(2);
-        assertThat(result).allMatch(h -> h.getUserId().equals(USER_ID));
-    }
-
-    // ─────────────────────────────────────────────
     // findByUserIdAndCreatedAtBetween (Sort)
     // ─────────────────────────────────────────────
 

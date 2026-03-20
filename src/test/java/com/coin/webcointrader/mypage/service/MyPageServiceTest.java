@@ -6,7 +6,9 @@ import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.entity.Pattern;
 import com.coin.webcointrader.common.enums.OrderResult;
+import com.coin.webcointrader.mypage.dto.MyPagePatternRequest;
 import com.coin.webcointrader.mypage.dto.MyPagePatternResponse;
+import com.coin.webcointrader.mypage.dto.TradeHistoryRequest;
 import com.coin.webcointrader.mypage.dto.TradeHistoryResponse;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,27 +47,8 @@ class MyPageServiceTest {
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("getPatterns: 날짜 범위가 없으면 전체 큐를 페이징 조회한다")
-    void getPatterns_noDateRange() {
-        // given
-        Long userId = 1L;
-        PatternQueue q = makePatternQueue(1L, userId, "BTCUSDT");
-        Page<PatternQueue> page = new PageImpl<>(List.of(q));
-        given(patternQueueRepository.findByUserId(eq(userId), any(Pageable.class)))
-                .willReturn(page);
-
-        // when
-        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, null, null, null, "desc", 0, 20);
-
-        // then
-        assertThat(result.getContent()).hasSize(1);
-        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
-        assertThat(result.getContent().get(0).getTriggerSeconds()).isEqualTo(60);
-    }
-
-    @Test
-    @DisplayName("getPatterns: 날짜 범위가 있으면 날짜 범위로 페이징 조회한다")
-    void getPatterns_withDateRange() {
+    @DisplayName("getPatterns: 기본 검색조건으로 패턴 큐를 페이징 조회한다")
+    void getPatterns_defaultRequest() {
         // given
         Long userId = 1L;
         PatternQueue q = makePatternQueue(1L, userId, "BTCUSDT");
@@ -74,14 +57,15 @@ class MyPageServiceTest {
                 eq(userId), any(), any(), any(Pageable.class)))
                 .willReturn(page);
 
+        MyPagePatternRequest request = new MyPagePatternRequest();
+
         // when
-        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(
-                userId, null, "2024-01-01", "2024-12-31", "desc", 0, 20);
+        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, request);
 
         // then
         assertThat(result.getContent()).hasSize(1);
-        then(patternQueueRepository).should().findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class));
+        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(result.getContent().get(0).getTriggerSeconds()).isEqualTo(60);
     }
 
     @Test
@@ -91,11 +75,15 @@ class MyPageServiceTest {
         Long userId = 1L;
         PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
         PatternQueue eth = makePatternQueue(2L, userId, "ETHUSDT");
-        given(patternQueueRepository.findByUserId(eq(userId), any(Sort.class)))
+        given(patternQueueRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Sort.class)))
                 .willReturn(List.of(btc, eth));
 
+        MyPagePatternRequest request = new MyPagePatternRequest();
+        request.setSymbol("BTC");
+
         // when
-        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, "BTC", null, null, "desc", 0, 20);
+        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, request);
 
         // then
         assertThat(result.getContent()).hasSize(1);
@@ -109,11 +97,14 @@ class MyPageServiceTest {
         Long userId = 1L;
         PatternQueue q = makePatternQueueWithSteps(1L, userId, "BTCUSDT");
         Page<PatternQueue> page = new PageImpl<>(List.of(q));
-        given(patternQueueRepository.findByUserId(eq(userId), any(Pageable.class)))
+        given(patternQueueRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Pageable.class)))
                 .willReturn(page);
 
+        MyPagePatternRequest request = new MyPagePatternRequest();
+
         // when
-        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, null, null, null, "desc", 0, 20);
+        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, request);
 
         // then
         MyPagePatternResponse response = result.getContent().get(0);
@@ -133,26 +124,8 @@ class MyPageServiceTest {
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("getTradeHistories: 날짜 범위가 없으면 전체 거래 히스토리를 페이징 조회한다")
-    void getTradeHistories_noDateRange() {
-        // given
-        Long userId = 1L;
-        TradeHistory history = makeTradeHistory(1L, userId, "BTCUSDT");
-        Page<TradeHistory> page = new PageImpl<>(List.of(history));
-        given(tradeHistoryRepository.findByUserId(eq(userId), any(Pageable.class)))
-                .willReturn(page);
-
-        // when
-        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(userId, null, null, null, "desc", 0, 20);
-
-        // then
-        assertThat(result.getContent()).hasSize(1);
-        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
-    }
-
-    @Test
-    @DisplayName("getTradeHistories: 날짜 범위가 있으면 날짜 범위로 페이징 조회한다")
-    void getTradeHistories_withDateRange() {
+    @DisplayName("getTradeHistories: 기본 검색조건으로 거래 히스토리를 페이징 조회한다")
+    void getTradeHistories_defaultRequest() {
         // given
         Long userId = 1L;
         TradeHistory history = makeTradeHistory(1L, userId, "BTCUSDT");
@@ -161,14 +134,14 @@ class MyPageServiceTest {
                 eq(userId), any(), any(), any(Pageable.class)))
                 .willReturn(page);
 
+        TradeHistoryRequest request = new TradeHistoryRequest();
+
         // when
-        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(
-                userId, null, "2024-01-01", "2024-12-31", "desc", 0, 20);
+        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(userId, request);
 
         // then
         assertThat(result.getContent()).hasSize(1);
-        then(tradeHistoryRepository).should().findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class));
+        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
     }
 
     @Test
@@ -178,11 +151,16 @@ class MyPageServiceTest {
         Long userId = 1L;
         TradeHistory btc = makeTradeHistory(1L, userId, "BTCUSDT");
         TradeHistory eth = makeTradeHistory(2L, userId, "ETHUSDT");
-        given(tradeHistoryRepository.findByUserId(eq(userId), any(Sort.class)))
+        given(tradeHistoryRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Sort.class)))
                 .willReturn(List.of(btc, eth));
 
+        TradeHistoryRequest request = new TradeHistoryRequest();
+        request.setSymbol("ETH");
+        request.setSort("asc");
+
         // when
-        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(userId, "ETH", null, null, "asc", 0, 20);
+        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(userId, request);
 
         // then
         assertThat(result.getContent()).hasSize(1);
