@@ -111,7 +111,6 @@ public class AutoTradeController {
                 .id(queue.getId())
                 .symbol(queue.getSymbol())
                 .active(queue.isActive())
-                .triggerSeconds(queue.getTriggerSeconds())
                 .triggerRate(queue.getTriggerRate())
                 .steps(stepResponses)
                 .build();

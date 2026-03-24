@@ -67,7 +67,6 @@ public class PatternQueueService {
         PatternQueue queue = new PatternQueue();
         queue.setUserId(userId);
         queue.setSymbol(request.getSymbol());
-        queue.setTriggerSeconds(request.getTriggerSeconds());
         queue.setTriggerRate(request.getTriggerRate());
         queue.setActive(false);
 
@@ -164,12 +163,9 @@ public class PatternQueueService {
     // ─────────────────────────────────────────────
 
     /**
-     * 트리거 설정값 검증 (시간 > 0, 비율 > 0)
+     * 트리거 설정값 검증 (비율 > 0)
      */
     private void validateTrigger(AddPatternRequest request) {
-        if (request.getTriggerSeconds() == null || request.getTriggerSeconds() <= 0) {
-            throw new CustomException(ExceptionMessage.INVALID_TRIGGER_TIME);
-        }
         if (request.getTriggerRate() == null || request.getTriggerRate().compareTo(BigDecimal.ZERO) <= 0) {
             throw new CustomException(ExceptionMessage.INVALID_TRIGGER_RATE);
         }

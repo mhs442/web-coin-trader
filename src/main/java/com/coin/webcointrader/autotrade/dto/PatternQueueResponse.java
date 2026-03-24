@@ -16,7 +16,6 @@ public class PatternQueueResponse {
     private Long id;                        // 큐 ID
     private String symbol;                  // 코인 심볼
     private boolean active;                  // 활성화 여부
-    private Integer triggerSeconds;         // 트리거 기준 시간 (초)
     private BigDecimal triggerRate;         // 트리거 기준 비율 (%)
     private List<StepResponse> steps;       // 단계 목록
 

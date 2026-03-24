@@ -192,7 +192,9 @@ public class AutoTradeService {
         if (state != null && currentPrice != null) {
             // TRIGGER_WAIT: 경과시간 + 변동률 (기준가 대비)
             if (state.getPhase() == TradePhase.TRIGGER_WAIT && state.getBasePrice() != null) {
-                elapsedSeconds = calculateTriggerTime(state.getBaseTime());
+                if (state.getBaseTime() != null) {
+                    elapsedSeconds = Duration.between(state.getBaseTime(), LocalDateTime.now()).getSeconds();
+                }
                 changeRate = calculateTriggerRate(state.getBasePrice(), currentPrice);
             }
             // BLOCK_MATCHING: 변동률 (진입가 대비) + 투입 금액
@@ -217,15 +219,6 @@ public class AutoTradeService {
                 .changeRate(changeRate)
                 .amount(amount)
                 .build();
-    }
-
-    /**
-     * 기준시간으로부터 경과된 시간을 반환한다.
-     * @param baseTime 활성화된 기준 시간
-     * @return 기준시간과 현재 시간의 차이 (long 타입)
-     */
-    public long calculateTriggerTime(LocalDateTime baseTime) {
-         return Duration.between(baseTime, LocalDateTime.now()).getSeconds();
     }
 
 
@@ -338,8 +331,7 @@ public class AutoTradeService {
 
     /**
      * 트리거 조건을 확인하여 매매 방향을 결정한다.
-     * triggerSeconds초 후 triggerRate% 이상 변동 시 방향 결정,
-     * 미달 시 기준가/시각을 리셋하여 재대기한다.
+     * 큐 활성화 시점 기준가 대비 triggerRate% 이상 변동 시 즉시 방향 결정한다.
      *
      * @param queue        현재 큐
      * @param state        큐 런타임 상태
@@ -348,18 +340,13 @@ public class AutoTradeService {
      */
     void processTriggerWait(PatternQueue queue, QueueStateDTO state,
                             AutoTradeSessionDTO session, String currentPrice) {
-        // 최초 호출 시 기준가/시각 설정
+        // 최초 호출 시 기준가 설정
         if (state.getBasePrice() == null) {
             state.setBasePrice(currentPrice);
             state.setBaseTime(LocalDateTime.now());
             session.addLog(now() + " [트리거 대기] 큐 #" + queue.getId()
                     + " 기준가: " + currentPrice);
             return;
-        }
-
-        // 트리거 시간 경과 확인
-        if (this.calculateTriggerTime(state.getBaseTime()) < queue.getTriggerSeconds()) {
-            return; // 아직 대기 시간 미달
         }
 
         // 변동률 계산
@@ -381,14 +368,7 @@ public class AutoTradeService {
             transitionToPositionOpen(queue, state, session);
             session.addLog(now() + " [트리거 충족] 큐 #" + queue.getId()
                     + " 방향: SHORT (변동률: " + changeRate.setScale(2, RoundingMode.HALF_UP) + "%)");
-            return;
         }
-
-        // 변동률 미달 → 기준가/시각 리셋, 재대기
-        state.setBasePrice(currentPrice);
-        state.setBaseTime(LocalDateTime.now());
-        session.addLog(now() + " [트리거 미달] 큐 #" + queue.getId()
-                + " 변동률: " + changeRate.setScale(2, RoundingMode.HALF_UP) + "% → 재대기");
     }
 
     /**

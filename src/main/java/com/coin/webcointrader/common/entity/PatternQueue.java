@@ -32,9 +32,6 @@ public class PatternQueue extends BaseEntity {
     @Column
     private LocalDateTime activatedAt;      // 활성화 일시
 
-    @Column(nullable = false)
-    private Integer triggerSeconds;         // 트리거 기준 시간 (초)
-
     @Column(nullable = false, precision = 5, scale = 2)
     private BigDecimal triggerRate;         // 트리거 기준 상승률 (%)
 
