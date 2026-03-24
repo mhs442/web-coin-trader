@@ -317,11 +317,18 @@ public class AutoTradeService {
      */
     private void processQueue(PatternQueue queue, QueueStateDTO state,
                               AutoTradeSessionDTO session, String currentPrice) {
-        // 페이즈별 분기 처리
-        switch (state.getPhase()) {
-            case TRIGGER_WAIT -> processTriggerWait(queue, state, session, currentPrice);
-            case POSITION_OPEN -> processPositionOpen(queue, state, session, currentPrice);
-            case BLOCK_MATCHING -> processBlockMatching(queue, state, session, currentPrice);
+        // 중복 실행 방지: 이미 처리 중이면 스킵
+        if (!state.tryLock()) return;
+
+        try {
+            // 페이즈별 분기 처리
+            switch (state.getPhase()) {
+                case TRIGGER_WAIT -> processTriggerWait(queue, state, session, currentPrice);
+                case POSITION_OPEN -> processPositionOpen(queue, state, session, currentPrice);
+                case BLOCK_MATCHING -> processBlockMatching(queue, state, session, currentPrice);
+            }
+        } finally {
+            state.unlock();
         }
     }
 

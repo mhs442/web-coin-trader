@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 큐별 자동매매 런타임 상태를 관리하는 DTO.
@@ -29,6 +30,25 @@ public class QueueStateDTO {
 
     // 포지션 상태
     private String entryPrice;         // 포지션 진입가
+
+    // 처리 중 플래그 (중복 주문 방지)
+    private final AtomicBoolean processing = new AtomicBoolean(false);
+
+    /**
+     * 처리 락을 시도한다. 이미 처리 중이면 false를 반환한다.
+     *
+     * @return 락 획득 성공 시 true, 이미 처리 중이면 false
+     */
+    public boolean tryLock() {
+        return processing.compareAndSet(false, true);
+    }
+
+    /**
+     * 처리 락을 해제한다.
+     */
+    public void unlock() {
+        processing.set(false);
+    }
 
     /**
      * 초기 상태로 생성한다. (TRIGGER_WAIT 페이즈)
