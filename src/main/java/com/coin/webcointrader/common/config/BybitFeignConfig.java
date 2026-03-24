@@ -5,6 +5,7 @@ import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import feign.RequestInterceptor;
 import feign.RequestTemplate;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 
@@ -15,6 +16,7 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 
+@Slf4j
 public class BybitFeignConfig {
 
     @Value("${bybit.api.recv-window:5000}")
@@ -45,6 +47,7 @@ public class BybitFeignConfig {
                                      String apiKey, String apiSecret) {
         String queryString = template.queryLine().startsWith("?") ? template.queryLine().substring(1) : template.queryLine();
         String body = template.body() != null ? new String(template.body(), StandardCharsets.UTF_8) : "";
+        log.debug("[Bybit API 호출 데이터] = {} {} body={}", template.method(), template.url(), body);
 
         // Bybit V5 서명 규칙: timestamp + apiKey + recvWindow + (queryString or body)
         String str2Sign = timestamp + apiKey + recvWindow + queryString + body;
