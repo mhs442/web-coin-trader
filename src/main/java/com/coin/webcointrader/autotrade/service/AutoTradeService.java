@@ -446,6 +446,16 @@ public class AutoTradeService {
             log.warn("레버리지 설정 실패 (계속 진행): {}", e.getMessage());
         }
 
+        // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
+        String qty = marketService.convertUsdtToQty(
+                session.getSymbol(), pattern.getAmount(), new BigDecimal(currentPrice));
+        if (qty == null) {
+            session.addLog(now() + " [진입 실패] 수량 변환 실패: " + session.getSymbol()
+                    + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
+            deactivateQueue(queue, state, session, "수량 변환 실패");
+            return;
+        }
+
         // 시장가 주문 실행
         CreateOrderRequest orderRequest = CreateOrderRequest.builder()
                 .category(Category.LINEAR.getCategory())
@@ -456,6 +466,10 @@ public class AutoTradeService {
                 .marketUnit("quoteCoin") // USDT 금액 기준 주문
                 .build();
 
+        // 실제 투입 금액 계산: qty × 현재가 (qtyStep 내림으로 인한 차이 반영)
+        BigDecimal actualAmount = new BigDecimal(qty).multiply(new BigDecimal(currentPrice))
+                .setScale(2, RoundingMode.HALF_UP);
+
         // TradeHistory 준비
         TradeHistory history = new TradeHistory();
         history.setQueueStepId(state.getActiveStepId());
@@ -463,6 +477,7 @@ public class AutoTradeService {
         history.setSymbol(session.getSymbol());
         history.setSide(state.getDirection());
         history.setAmount(pattern.getAmount());
+        history.setAmount(actualAmount);
 
         try {
             tradeService.placeOrder(orderRequest, session.getUserId());
@@ -663,15 +678,35 @@ public class AutoTradeService {
         history.setSymbol(session.getSymbol());
         history.setSide(state.getDirection());
         history.setAmount(pattern.getAmount());
-
         try {
+            // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
+            String closeQty = marketService.convertUsdtToQty(
+                    session.getSymbol(), pattern.getAmount(), new BigDecimal(currentPrice));
+            if (closeQty == null) {
+                session.addLog(now() + " [매도 실패] 수량 변환 실패: " + session.getSymbol()
+                        + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
+                deactivateQueue(queue, state, session, "수량 변환 실패");
+                return;
+            }
+
+            // 실제 투입 금액 계산: qty × 현재가
+            BigDecimal actualAmount = new BigDecimal(closeQty).multiply(new BigDecimal(currentPrice))
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            TradeHistory history = new TradeHistory();
+            history.setQueueStepId(state.getActiveStepId());
+            history.setUserId(session.getUserId());
+            history.setSymbol(session.getSymbol());
+            history.setSide(state.getDirection());
+            history.setAmount(actualAmount);
+
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
                     .category(Category.LINEAR.getCategory())
                     .symbol(session.getSymbol())
                     .side(closeSide)
                     .orderType("Market")
-                    .qty(pattern.getAmount().stripTrailingZeros().toPlainString())
-                    .marketUnit("quoteCoin") // USDT 금액 기준 주문
+                    .qty(closeQty)
+                    .reduceOnly(true) // 포지션 청산 전용 (새 포지션 열림 방지)
                     .build();
 
             tradeService.placeOrder(closeRequest, session.getUserId());
@@ -680,7 +715,7 @@ public class AutoTradeService {
             history.setOrderResult(OrderResult.SUCCESS);
 
             session.addLog(now() + " [매도 성공] " + closeSide + " "
-                    + pattern.getAmount().stripTrailingZeros().toPlainString() + "$ "
+                    + actualAmount.stripTrailingZeros().toPlainString() + "$ "
                     + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
 
             // 같은 단계 반복: 블록 리셋 → POSITION_OPEN (즉시 재진입)
@@ -707,6 +742,62 @@ public class AutoTradeService {
                                    Side liquidationDirection, String currentPrice) {
         session.addLog(now() + " [청산] " + liquidationDirection + " 발생"
                 + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
+
+        // 기존 포지션 시장가 청산 (진입 방향의 반대)
+        String closeSide = state.getDirection() == Side.LONG ? "Sell" : "Buy";
+
+        try {
+            // USDT 금액을 코인 수량으로 변환
+            String closeQty = marketService.convertUsdtToQty(
+                    session.getSymbol(), currentPattern.getAmount(), new BigDecimal(currentPrice));
+            if (closeQty == null) {
+                session.addLog(now() + " [청산 실패] 수량 변환 실패: " + session.getSymbol());
+                deactivateQueue(queue, state, session, "청산 수량 변환 실패");
+                return;
+            }
+
+            // 실제 투입 금액 계산: qty × 현재가
+            BigDecimal actualAmount = new BigDecimal(closeQty).multiply(new BigDecimal(currentPrice))
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            TradeHistory history = new TradeHistory();
+            history.setQueueStepId(state.getActiveStepId());
+            history.setUserId(session.getUserId());
+            history.setSymbol(session.getSymbol());
+            history.setSide(state.getDirection());
+            history.setAmount(actualAmount);
+
+            CreateOrderRequest closeRequest = CreateOrderRequest.builder()
+                    .category(Category.LINEAR.getCategory())
+                    .symbol(session.getSymbol())
+                    .side(closeSide)
+                    .orderType("Market")
+                    .qty(closeQty)
+                    .reduceOnly(true) // 포지션 청산 전용
+                    .build();
+
+            tradeService.placeOrder(closeRequest, session.getUserId(), history);
+
+            // 청산 주문 성공: 이력 저장
+            history.setExecutedPrice(new BigDecimal(currentPrice));
+            history.setOrderResult(OrderResult.SUCCESS);
+            tradeHistoryRepository.save(history);
+
+            // 투자 히스토리 저장 (포지션 사이클 완료 기록)
+            saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
+                    session.getSymbol(), state.getDirection(),
+                    state.getEntryPrice(), currentPrice, actualAmount);
+
+            session.addLog(now() + " [청산 완료] " + closeSide + " "
+                    + actualAmount.stripTrailingZeros().toPlainString() + "$ "
+                    + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
+
+        } catch (Exception e) {
+            // 청산 주문 실패 → 큐 비활성화
+            session.addLog(now() + " [청산 실패] " + e.getMessage());
+            deactivateQueue(queue, state, session, "청산 주문 실패: " + e.getMessage());
+            return;
+        }
 
         // 다음 단계로 이동
         int nextStepLevel = state.getCurrentStepLevel() + 1;

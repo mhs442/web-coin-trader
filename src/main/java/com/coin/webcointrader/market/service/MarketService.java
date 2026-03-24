@@ -13,6 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -39,6 +41,7 @@ public class MarketService {
     public void init() {
         bybitWebSocketClient.setTickerCallback(this::onTickerUpdate);
         log.info("WebSocket 티커 콜백 등록 완료");
+        refreshQtyStepCache();
     }
 
     // REST 폴링 캐시 (대시보드용)
@@ -49,6 +52,9 @@ public class MarketService {
 
     // 가격 변동 리스너 목록 (BiConsumer<심볼, 현재가>)
     private final List<BiConsumer<String, String>> priceListeners = new CopyOnWriteArrayList<>();
+
+    // 종목별 qtyStep 캐시 (심볼 → qtyStep, 예: "BTCUSDT" → "0.001")
+    private final ConcurrentHashMap<String, String> qtyStepCache = new ConcurrentHashMap<>();
 
     /**
      * 1초마다 Bybit API를 호출하여 Ticker 정보를 가져와 내부 캐시를 업데이트합니다.
@@ -160,6 +166,85 @@ public class MarketService {
      */
     public OrderBookResponse getOrderBook(String symbol) {
         return marketClient.getOrderBook(Category.LINEAR.getCategory(), symbol, 50).getBody();
+    }
+
+    /**
+     * Bybit에서 전체 Linear 종목의 qtyStep을 조회하여 캐시에 저장한다.
+     * 애플리케이션 시작 시 호출되며, 캐시가 비어있을 때도 호출된다.
+     */
+    public void refreshQtyStepCache() {
+        try {
+            GetInstrumentsInfoResponse response = marketClient.getInstrumentsInfo(
+                    Category.LINEAR.getCategory()).getBody();
+
+            if (response != null && response.getResult() != null
+                    && response.getResult().getList() != null) {
+                for (GetInstrumentsInfoResponse.InstrumentInfo info : response.getResult().getList()) {
+                    if (info.getSymbol() != null && info.getLotSizeFilter() != null
+                            && info.getLotSizeFilter().getQtyStep() != null) {
+                        qtyStepCache.put(info.getSymbol(), info.getLotSizeFilter().getQtyStep());
+                    }
+                }
+                log.info("qtyStep 캐시 초기화 완료: {}개 종목", qtyStepCache.size());
+            }
+        } catch (Exception e) {
+            log.error("qtyStep 캐시 초기화 실패: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 특정 심볼의 qtyStep을 반환한다.
+     * 캐시에 없으면 갱신을 시도한다.
+     *
+     * @param symbol 종목 심볼 (예: "BTCUSDT")
+     * @return qtyStep 문자열 (예: "0.001"), 조회 실패 시 null
+     */
+    public String getQtyStep(String symbol) {
+        String qtyStep = qtyStepCache.get(symbol);
+        // 캐시 미스 시 갱신 시도
+        if (qtyStep == null) {
+            refreshQtyStepCache();
+            qtyStep = qtyStepCache.get(symbol);
+        }
+        return qtyStep;
+    }
+
+    /**
+     * USDT 금액을 코인 수량으로 변환한다.
+     * qtyStep 단위에 맞춰 내림(floor) 처리한다.
+     *
+     * <p>계산식: qty = floor(usdtAmount / currentPrice / qtyStep) * qtyStep</p>
+     *
+     * @param symbol       종목 심볼 (예: "BTCUSDT")
+     * @param usdtAmount   USDT 금액 (예: 15)
+     * @param currentPrice 현재가 (예: 87000.5)
+     * @return 코인 수량 문자열 (예: "0.001"), 변환 실패 시 null
+     */
+    public String convertUsdtToQty(String symbol, BigDecimal usdtAmount, BigDecimal currentPrice) {
+        String qtyStepStr = getQtyStep(symbol);
+        if (qtyStepStr == null) {
+            log.error("qtyStep 조회 실패: symbol={}", symbol);
+            return null;
+        }
+
+        BigDecimal qtyStep = new BigDecimal(qtyStepStr);
+        // 소수점 자릿수 계산 (예: "0.001" → scale=3)
+        int scale = qtyStep.stripTrailingZeros().scale();
+        if (scale < 0) scale = 0;
+
+        // qty = floor(usdtAmount / currentPrice / qtyStep) * qtyStep
+        BigDecimal rawQty = usdtAmount.divide(currentPrice, scale + 4, RoundingMode.HALF_UP);
+        BigDecimal steps = rawQty.divide(qtyStep, 0, RoundingMode.DOWN); // 내림
+        BigDecimal qty = steps.multiply(qtyStep);
+
+        // 최소 수량 체크 (0 이하면 주문 불가)
+        if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("변환 결과 수량이 0: symbol={}, usdtAmount={}, currentPrice={}, qtyStep={}",
+                    symbol, usdtAmount, currentPrice, qtyStep);
+            return null;
+        }
+
+        return qty.stripTrailingZeros().toPlainString();
     }
 
     // ─────────────────────────────────────────────
