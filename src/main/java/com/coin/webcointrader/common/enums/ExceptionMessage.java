@@ -15,7 +15,6 @@ public enum ExceptionMessage {
     ENCRYPTION_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "암호화에 실패하였습니다."),
     DECRYPTION_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "복호화에 실패하였습니다."),
     INVALID_ENCRYPTION_KEY(HttpStatus.INTERNAL_SERVER_ERROR, "유효하지 않은 encryption key입니다."),
-    INVALID_TRIGGER_TIME(HttpStatus.BAD_REQUEST, "트리거 시간(초)은 0초보다 커야 합니다."),
     INVALID_TRIGGER_RATE(HttpStatus.BAD_REQUEST, "트리거 비율(%)은 0보다 커야 합니다."),
     EMPTY_STEPS(HttpStatus.BAD_REQUEST, "단계를 1개 이상 입력해야 합니다."),
     EXCEED_MAX_STEPS(HttpStatus.BAD_REQUEST, "단계는 최대 20개까지 등록할 수 있습니다."),
@@ -29,6 +28,10 @@ public enum ExceptionMessage {
     EXCEED_MAX_QUEUES(HttpStatus.BAD_REQUEST, "큐는 심볼당 최대 20개까지 등록할 수 있습니다."),
     QUEUE_NOT_FOUND(HttpStatus.BAD_REQUEST, "큐를 찾을 수 없습니다."),
     QUEUE_UNAUTHORIZED(HttpStatus.FORBIDDEN, "큐에 대한 권한이 없습니다."),
+    ORDER_FAILED(HttpStatus.BAD_REQUEST, "주문 실행 실패"),
+    SET_LEVERAGE_FAILED(HttpStatus.BAD_REQUEST, "레버리지 설정 실패"),
+    SET_TRADING_STOP_FAILED(HttpStatus.BAD_REQUEST, "손절/익절 설정 실패"),
+    SWITCH_MARGIN_MODE_FAILED(HttpStatus.BAD_REQUEST, "마진 모드 변경 실패"),
     OTHER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "오류가 발생하였습니다."),
     NOT_FOUND_RESOURCE(HttpStatus.NOT_FOUND, "요청한 리소스를 찾을 수 없습니다.")
     ;
