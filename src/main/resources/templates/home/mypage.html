@@ -7,6 +7,7 @@
     <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
 </head>
 <body>
+<div th:replace="~{fragments/header :: walletHeader}"></div>
 <div class="mypage-container">
     <div class="mypage-header">
         <a href="/dashboard" class="back-link">← 대시보드로 돌아가기</a>
@@ -15,8 +16,9 @@
 
     <!-- 탭 메뉴 -->
     <div class="mypage-tabs">
-        <button class="mypage-tab active" onclick="switchTab('patterns')">등록된 패턴</button>
-        <button class="mypage-tab" onclick="switchTab('trades')">거래 히스토리</button>
+        <button class="mypage-tab active" data-tab="patterns" onclick="switchTab('patterns')">등록된 패턴</button>
+        <button class="mypage-tab" data-tab="trades" onclick="switchTab('trades')">거래 히스토리</button>
+        <button class="mypage-tab" data-tab="investments" onclick="switchTab('investments')">투자 히스토리</button>
     </div>
 
     <!-- 패턴 탭 -->
@@ -76,6 +78,50 @@
         <div id="trade-container" class="mypage-scroll-wrapper"></div>
         <div id="trade-scroll-loading" class="scroll-loading" style="display: none;">데이터 로딩 중...</div>
     </div>
+
+    <!-- 투자 히스토리 탭 -->
+    <div id="tab-investments" class="mypage-tab-content" style="display: none;">
+        <div class="trade-filter">
+            <div class="filter-group">
+                <label for="inv-filter-symbol">코인</label>
+                <input type="text" id="inv-filter-symbol" placeholder="예: BTC">
+            </div>
+            <div class="filter-group">
+                <label for="inv-filter-start">시작일</label>
+                <input type="date" id="inv-filter-start">
+            </div>
+            <div class="filter-group">
+                <label for="inv-filter-end">종료일</label>
+                <input type="date" id="inv-filter-end">
+            </div>
+            <div class="filter-group">
+                <label for="inv-filter-sort">정렬</label>
+                <select id="inv-filter-sort">
+                    <option value="desc">최신순</option>
+                    <option value="asc">오래된순</option>
+                </select>
+            </div>
+            <button class="filter-btn" onclick="searchInvestments()">검색</button>
+            <button class="filter-btn filter-reset-btn" onclick="resetInvestmentFilter()">초기화</button>
+        </div>
+        <!-- 합산 통계 카드 -->
+        <div id="investment-summary" class="investment-summary-card">
+            <div class="summary-item">
+                <span class="summary-label">전체 이익금</span>
+                <span id="summary-profit" class="summary-value text-green">0</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">전체 손해금</span>
+                <span id="summary-loss" class="summary-value text-red">0</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">총액</span>
+                <span id="summary-net" class="summary-value">0</span>
+            </div>
+        </div>
+        <div id="investment-container" class="mypage-scroll-wrapper"></div>
+        <div id="investment-scroll-loading" class="scroll-loading" style="display: none;">데이터 로딩 중...</div>
+    </div>
 </div>
 
 <script>
@@ -92,17 +138,19 @@
     let tradeLast = false;
     let tradeLoading = false;
 
+    // 투자 히스토리 페이징 상태
+    let investmentPage = 0;
+    let investmentLast = false;
+    let investmentLoading = false;
+
     function switchTab(tab) {
+        // 모든 탭 버튼 비활성화 + 모든 탭 컨텐츠 숨김
         document.querySelectorAll('.mypage-tab').forEach(btn => btn.classList.remove('active'));
         document.querySelectorAll('.mypage-tab-content').forEach(el => el.style.display = 'none');
 
-        if (tab === 'patterns') {
-            document.querySelector('.mypage-tab:first-child').classList.add('active');
-            document.getElementById('tab-patterns').style.display = 'block';
-        } else {
-            document.querySelector('.mypage-tab:last-child').classList.add('active');
-            document.getElementById('tab-trades').style.display = 'block';
-        }
+        // 선택된 탭 활성화
+        document.querySelector('.mypage-tab[data-tab="' + tab + '"]').classList.add('active');
+        document.getElementById('tab-' + tab).style.display = 'block';
     }
 
     // === 패턴 필터 파라미터 생성 ===
@@ -228,7 +276,6 @@
 
                         // 큐 트리거 정보
                         detailHtml += '<div class="pattern-detail-trigger">' +
-                            '<span>기준 시간: ' + p.triggerSeconds + '초</span>' +
                             '<span>기준 비율: ' + p.triggerRate + '%</span>' +
                             '</div>';
 
@@ -408,7 +455,7 @@
                                         <th>일시</th>
                                         <th>코인</th>
                                         <th>방향</th>
-                                        <th>수량</th>
+                                        <th>투입 금액</th>
                                         <th>체결가</th>
                                         <th>유형</th>
                                         <th>상태</th>
@@ -483,6 +530,158 @@
         searchTrades();
     }
 
+    // === 투자 히스토리 필터 파라미터 생성 ===
+    function getInvestmentParams(page) {
+        const symbol = $('#inv-filter-symbol').val().trim();
+        const startDate = $('#inv-filter-start').val();
+        const endDate = $('#inv-filter-end').val();
+        const sort = $('#inv-filter-sort').val();
+
+        const params = new URLSearchParams();
+        if (symbol) params.append('symbol', symbol);
+        if (startDate) params.append('startDate', startDate);
+        if (endDate) params.append('endDate', endDate);
+        params.append('sort', sort);
+        params.append('page', page);
+        params.append('size', PAGE_SIZE);
+        return params;
+    }
+
+    // === 투자 히스토리 로드 (페이지 단위) ===
+    function loadInvestments(page) {
+        if (investmentLoading || investmentLast) return;
+        investmentLoading = true;
+
+        const params = getInvestmentParams(page);
+        const $loading = $('#investment-scroll-loading');
+        $loading.show();
+
+        $.ajax({
+            url: '/api/mypage/investments?' + params.toString(),
+            type: 'GET',
+            success: function(response) {
+                var pageData = response.page;
+                var summary = response.summary;
+                const $container = $('#investment-container');
+                const investments = pageData.content;
+
+                // 합산 통계 카드 업데이트 (첫 페이지 로드 시에만)
+                if (page === 0) {
+                    updateSummaryCard(summary);
+                }
+
+                // 첫 페이지인데 데이터 없으면 빈 상태 표시
+                if (page === 0 && investments.length === 0) {
+                    $container.html('<div class="mypage-empty">투자 내역이 없습니다.</div>');
+                    investmentLast = true;
+                    $loading.hide();
+                    investmentLoading = false;
+                    return;
+                }
+
+                // 첫 페이지면 테이블 구조 생성
+                var $tbody = $container.find('tbody');
+                if (page === 0 || $tbody.length === 0) {
+                    $container.html(
+                        '<div class="mypage-table-wrapper">' +
+                            '<table class="mypage-table">' +
+                                '<thead>' +
+                                    '<tr>' +
+                                        '<th>일시</th>' +
+                                        '<th>코인</th>' +
+                                        '<th>방향</th>' +
+                                        '<th>투입 금액</th>' +
+                                        '<th>진입가</th>' +
+                                        '<th>청산가</th>' +
+                                        '<th>손익금</th>' +
+                                    '</tr>' +
+                                '</thead>' +
+                                '<tbody></tbody>' +
+                            '</table>' +
+                        '</div>'
+                    );
+                    $tbody = $container.find('tbody');
+                }
+
+                // 투자 히스토리 행 추가
+                investments.forEach(function(inv) {
+                    var isLong = inv.side === 'LONG';
+                    var sideClass = isLong ? 'text-green' : 'text-red';
+
+                    // 손익금 색상: 양수=초록, 음수=빨강
+                    var profitVal = parseFloat(inv.profitLoss);
+                    var profitClass = profitVal >= 0 ? 'text-green' : 'text-red';
+                    var profitPrefix = profitVal >= 0 ? '+' : '';
+
+                    var $tr = $('<tr>');
+                    $tr.html(
+                        '<td>' + inv.createdAt + '</td>' +
+                        '<td><strong>' + inv.symbol + '</strong></td>' +
+                        '<td class="' + sideClass + '">' + inv.side + '</td>' +
+                        '<td class="mono-cell">' + inv.amount + '</td>' +
+                        '<td class="mono-cell">' + inv.entryPrice + '</td>' +
+                        '<td class="mono-cell">' + inv.exitPrice + '</td>' +
+                        '<td class="mono-cell ' + profitClass + '">' + profitPrefix + inv.profitLoss + '</td>'
+                    );
+                    $tbody.append($tr);
+                });
+
+                // 페이징 상태 업데이트
+                investmentPage = pageData.page;
+                investmentLast = pageData.last;
+                $loading.toggle(!investmentLast);
+                investmentLoading = false;
+            },
+            error: function(err) {
+                console.error('투자 히스토리 로드 실패:', err);
+                $loading.hide();
+                investmentLoading = false;
+            }
+        });
+    }
+
+    // === 검색 버튼: 투자 히스토리 초기화 후 첫 페이지 로드 ===
+    function searchInvestments() {
+        investmentPage = 0;
+        investmentLast = false;
+        investmentLoading = false;
+        $('#investment-container').html('');
+        loadInvestments(0);
+    }
+
+    function resetInvestmentFilter() {
+        $('#inv-filter-symbol').val('');
+        $('#inv-filter-start').val('');
+        $('#inv-filter-end').val('');
+        $('#inv-filter-sort').val('desc');
+        searchInvestments();
+    }
+
+    // === 합산 통계 카드 업데이트 ===
+    function updateSummaryCard(summary) {
+        var profit = parseFloat(summary.totalProfit);
+        var loss = parseFloat(summary.totalLoss);
+        var net = parseFloat(summary.netTotal);
+
+        // 이익금 (항상 초록)
+        var profitPrefix = profit > 0 ? '+' : '';
+        $('#summary-profit').text(profitPrefix + summary.totalProfit);
+
+        // 손해금 (항상 빨강)
+        $('#summary-loss').text(summary.totalLoss);
+
+        // 총액 색상: 양수=초록, 음수=빨강, 0=기본
+        var netPrefix = net > 0 ? '+' : '';
+        var $netEl = $('#summary-net');
+        $netEl.text(netPrefix + summary.netTotal);
+        $netEl.removeClass('text-green text-red');
+        if (net > 0) {
+            $netEl.addClass('text-green');
+        } else if (net < 0) {
+            $netEl.addClass('text-red');
+        }
+    }
+
     // 윈도우 스크롤 이벤트: 하단 도달 시 현재 활성 탭의 다음 페이지 로드
     window.addEventListener('scroll', function () {
         const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -506,6 +705,14 @@
                     loadTrades(tradePage + 1);
                 }
             }
+
+            // 투자 히스토리 탭이 활성화 상태인지 확인
+            const investmentTab = document.getElementById('tab-investments');
+            if (investmentTab.style.display !== 'none') {
+                if (!investmentLast && !investmentLoading) {
+                    loadInvestments(investmentPage + 1);
+                }
+            }
         }
     });
 
@@ -513,6 +720,7 @@
     document.addEventListener('DOMContentLoaded', () => {
         loadPatterns(0);
         loadTrades(0);
+        loadInvestments(0);
     });
 </script>
 </body>

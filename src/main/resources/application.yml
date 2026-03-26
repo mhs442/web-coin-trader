@@ -17,6 +17,7 @@ spring:
 logging:
   level:
     org.hibernate.orm.jdbc.bind: TRACE
+    com.coin.webcointrader.common.config.BybitFeignConfig: DEBUG
 
 bybit:
   api:
