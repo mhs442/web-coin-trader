@@ -2,10 +2,7 @@ package com.coin.webcointrader.mypage.controller;
 
 import com.coin.webcointrader.common.dto.UserDTO;
 import com.coin.webcointrader.common.dto.response.PageResponse;
-import com.coin.webcointrader.mypage.dto.MyPagePatternRequest;
-import com.coin.webcointrader.mypage.dto.MyPagePatternResponse;
-import com.coin.webcointrader.mypage.dto.TradeHistoryRequest;
-import com.coin.webcointrader.mypage.dto.TradeHistoryResponse;
+import com.coin.webcointrader.mypage.dto.*;
 import com.coin.webcointrader.mypage.service.MyPageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -44,5 +41,18 @@ public class MyPageApiController {
     public PageResponse<TradeHistoryResponse> getTrades(
             @AuthenticationPrincipal UserDTO user, TradeHistoryRequest request) {
         return myPageService.getTradeHistories(user.getId(), request);
+    }
+
+    /**
+     * 사용자의 투자 히스토리를 페이징하여 조회한다.
+     *
+     * @param user    인증된 사용자 정보
+     * @param request 검색조건을 담은 객체
+     * @return 페이징된 투자 히스토리 응답
+     */
+    @GetMapping("/investments")
+    public InvestmentHistoryPageResponse getInvestments(
+            @AuthenticationPrincipal UserDTO user, InvestmentHistoryRequest request) {
+        return myPageService.getInvestmentHistories(user.getId(), request);
     }
 }

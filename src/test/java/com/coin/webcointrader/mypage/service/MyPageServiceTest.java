@@ -1,15 +1,14 @@
 package com.coin.webcointrader.mypage.service;
 
+import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.entity.Pattern;
 import com.coin.webcointrader.common.enums.OrderResult;
-import com.coin.webcointrader.mypage.dto.MyPagePatternRequest;
-import com.coin.webcointrader.mypage.dto.MyPagePatternResponse;
-import com.coin.webcointrader.mypage.dto.TradeHistoryRequest;
-import com.coin.webcointrader.mypage.dto.TradeHistoryResponse;
+import com.coin.webcointrader.common.enums.TradeOrderType;
+import com.coin.webcointrader.mypage.dto.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,6 +23,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
@@ -41,6 +41,9 @@ class MyPageServiceTest {
 
     @Mock
     private TradeHistoryRepository tradeHistoryRepository;
+
+    @Mock
+    private InvestmentHistoryRepository investmentHistoryRepository;
 
     // ─────────────────────────────────────────────
     // getPatterns
@@ -65,7 +68,6 @@ class MyPageServiceTest {
         // then
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
-        assertThat(result.getContent().get(0).getTriggerSeconds()).isEqualTo(60);
     }
 
     @Test
@@ -168,6 +170,101 @@ class MyPageServiceTest {
     }
 
     // ─────────────────────────────────────────────
+    // getInvestmentHistories
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getInvestmentHistories: 기본 검색조건으로 투자 히스토리와 합산 통계를 조회한다")
+    void getInvestmentHistories_defaultRequest() {
+        // given
+        Long userId = 1L;
+        InvestmentHistory history = makeInvestmentHistory(1L, userId, "BTCUSDT");
+        Page<InvestmentHistory> page = new PageImpl<>(List.of(history));
+        given(investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Pageable.class)))
+                .willReturn(page);
+        // 합산 쿼리 모킹: 이익 500, 손해 -300
+        given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any()))
+                .willReturn(summaryResult(new BigDecimal("500"), new BigDecimal("-300")));
+
+        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+
+        // when
+        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
+
+        // then - 페이징 데이터 검증
+        assertThat(result.getPage().getContent()).hasSize(1);
+        InvestmentHistoryResponse response = result.getPage().getContent().get(0);
+        assertThat(response.getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(response.getSide()).isEqualTo("LONG");
+        assertThat(response.getEntryPrice()).isEqualTo("50000");
+        assertThat(response.getExitPrice()).isEqualTo("51000");
+        assertThat(response.getProfitLoss()).isEqualTo("200");
+
+        // then - 합산 통계 검증
+        assertThat(result.getSummary().getTotalProfit()).isEqualTo("500");
+        assertThat(result.getSummary().getTotalLoss()).isEqualTo("-300");
+        assertThat(result.getSummary().getNetTotal()).isEqualTo("200");
+    }
+
+    @Test
+    @DisplayName("getInvestmentHistories: symbol 키워드가 있으면 Java 필터 후 수동 페이징 + 심볼별 합산한다")
+    void getInvestmentHistories_withSymbolFilter() {
+        // given
+        Long userId = 1L;
+        InvestmentHistory btc = makeInvestmentHistory(1L, userId, "BTCUSDT");
+        InvestmentHistory eth = makeInvestmentHistory(2L, userId, "ETHUSDT");
+        given(investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Sort.class)))
+                .willReturn(List.of(btc, eth));
+        // 심볼 필터 합산 쿼리 모킹
+        given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
+                eq(userId), any(), any(), eq("ETH")))
+                .willReturn(summaryResult(new BigDecimal("200"), BigDecimal.ZERO));
+
+        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+        request.setSymbol("ETH");
+
+        // when
+        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
+
+        // then - 페이징 데이터 검증
+        assertThat(result.getPage().getContent()).hasSize(1);
+        assertThat(result.getPage().getContent().get(0).getSymbol()).isEqualTo("ETHUSDT");
+
+        // then - 합산 통계 검증
+        assertThat(result.getSummary().getTotalProfit()).isEqualTo("200");
+        assertThat(result.getSummary().getTotalLoss()).isEqualTo("0");
+        assertThat(result.getSummary().getNetTotal()).isEqualTo("200");
+    }
+
+    @Test
+    @DisplayName("getInvestmentHistories: 데이터가 없으면 합산 통계가 모두 0이다")
+    void getInvestmentHistories_emptyReturnsZeroSummary() {
+        // given
+        Long userId = 1L;
+        Page<InvestmentHistory> emptyPage = new PageImpl<>(List.of());
+        given(investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any(), any(Pageable.class)))
+                .willReturn(emptyPage);
+        given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
+                eq(userId), any(), any()))
+                .willReturn(summaryResult(BigDecimal.ZERO, BigDecimal.ZERO));
+
+        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+
+        // when
+        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
+
+        // then
+        assertThat(result.getPage().getContent()).isEmpty();
+        assertThat(result.getSummary().getTotalProfit()).isEqualTo("0");
+        assertThat(result.getSummary().getTotalLoss()).isEqualTo("0");
+        assertThat(result.getSummary().getNetTotal()).isEqualTo("0");
+    }
+
+    // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
@@ -180,7 +277,6 @@ class MyPageServiceTest {
         q.setUserId(userId);
         q.setSymbol(symbol);
         q.setActive(false);
-        q.setTriggerSeconds(60);
         q.setTriggerRate(new BigDecimal("1.0"));
         q.setFull(false);
         ReflectionTestUtils.setField(q, "createdAt", LocalDateTime.now());
@@ -224,6 +320,30 @@ class MyPageServiceTest {
         return q;
     }
 
+    /**
+     * SUM 쿼리 결과 모킹용 헬퍼: List<Object[]> 형태로 반환
+     */
+    private List<Object[]> summaryResult(BigDecimal profit, BigDecimal loss) {
+        List<Object[]> result = new ArrayList<>();
+        result.add(new Object[]{profit, loss});
+        return result;
+    }
+
+    private InvestmentHistory makeInvestmentHistory(Long id, Long userId, String symbol) {
+        InvestmentHistory h = new InvestmentHistory();
+        h.setId(id);
+        h.setUserId(userId);
+        h.setPatternStepId(1L);
+        h.setSymbol(symbol);
+        h.setSide(Side.LONG);
+        h.setEntryPrice(new BigDecimal("50000"));
+        h.setExitPrice(new BigDecimal("51000"));
+        h.setAmount(new BigDecimal("10000"));
+        h.setProfitLoss(new BigDecimal("200"));
+        ReflectionTestUtils.setField(h, "createdAt", LocalDateTime.now());
+        return h;
+    }
+
     private TradeHistory makeTradeHistory(Long id, Long userId, String symbol) {
         TradeHistory h = new TradeHistory();
         h.setId(id);
@@ -232,6 +352,7 @@ class MyPageServiceTest {
         h.setSide(Side.LONG);
         h.setAmount(new BigDecimal("100"));
         h.setExecutedPrice(new BigDecimal("50000"));
+        h.setOrderType(TradeOrderType.ENTRY.getTradeOrderType());
         h.setOrderResult(OrderResult.SUCCESS);
         h.setQueueStepId(1L);
         ReflectionTestUtils.setField(h, "createdAt", LocalDateTime.now());

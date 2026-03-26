@@ -8,8 +8,10 @@ import java.time.LocalDateTime;
 @Getter @Setter
 public class TradeHistoryRequest {
     private String symbol;
-    private LocalDateTime startDate;
-    private LocalDateTime endDate;
+    // 2022/1/1/00:00:00 부터
+    private LocalDateTime startDate = LocalDateTime.of(2022, 1, 1, 0, 0, 0, 0);
+    // 현재시간까지
+    private LocalDateTime endDate = LocalDateTime.now();
     private String sort = "desc";
     private int page = 0;
     private int size = 20;
