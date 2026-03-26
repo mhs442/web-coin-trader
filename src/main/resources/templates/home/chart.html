@@ -420,6 +420,9 @@
                 var startPrice = startCandle.y[3];
                 var endPrice = endCandle.y[3];
                 var diff = endPrice - startPrice;
+                // 가격 크기에 따른 소수점 자릿수 결정 (저가 코인 대응)
+                var absPrice = Math.abs(startPrice);
+                var diffDecimals = absPrice >= 1000 ? 2 : absPrice >= 1 ? 4 : absPrice >= 0.01 ? 6 : 8;
                 var rate = (diff / startPrice) * 100;
                 var candleCount = Math.abs(dataPointIndex - rangeStartCandle.index);
 
@@ -463,7 +466,7 @@
                 rangeOverlayHtml = '<div class="range-info-overlay ' + colorClass + '" ' +
                     'style="position:absolute; top:' + posY + 'px; left:' + posX + 'px; right:auto;">' +
                     '<span class="range-info-rate">' + sign + rate.toFixed(2) + '%</span>' +
-                    '<span class="range-info-diff">' + sign + diff.toFixed(2) + '</span>' +
+                    '<span class="range-info-diff">' + sign + diff.toFixed(diffDecimals) + '</span>' +
                     '<span class="range-info-candles">' + candleCount + '개 캔들</span>' +
                     '<span class="range-info-close" onclick="resetRangeInfo()">✕</span>' +
                     '</div>';
