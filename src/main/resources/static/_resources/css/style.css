@@ -7,6 +7,77 @@ body {
 }
 
 /* =========================================
+   Wallet Header (공통 헤더 - 지갑 잔고)
+   ========================================= */
+.wallet-header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 24px;
+    padding: 8px 32px;
+    background-color: #1a1a2e;
+    color: #e0e0e0;
+    font-size: 13px;
+    border-bottom: 1px solid #2a2a4a;
+}
+
+.wallet-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.wallet-label {
+    color: #888;
+    font-size: 12px;
+}
+
+.wallet-balance {
+    color: #4caf50;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.wallet-unit {
+    color: #888;
+    font-size: 11px;
+}
+
+.wallet-refresh {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #888;
+    font-size: 12px;
+}
+
+.wallet-refresh-icon {
+    font-size: 16px;
+    cursor: pointer;
+    transition: transform 0.3s ease;
+    user-select: none;
+}
+
+.wallet-refresh-icon:hover {
+    color: #4caf50;
+}
+
+.wallet-refresh-icon.spinning {
+    animation: spin 0.5s linear;
+}
+
+.wallet-countdown {
+    min-width: 12px;
+    text-align: center;
+    color: #666;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* =========================================
    Dashboard Styles (대시보드)
    ========================================= */
 .market-overview-container {
@@ -844,6 +915,21 @@ body {
     background-color: #dc3545;
 }
 
+/* 현재 매칭 중인 블록 깜빡임 */
+@keyframes block-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+.block-current {
+    animation: block-blink 1s ease-in-out infinite;
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
+}
+
+/* 매칭 완료된 블록 */
+.block-matched {
+    opacity: 0.4;
+}
+
 .block-remove-btn {
     background: none;
     border: none;
@@ -1230,6 +1316,36 @@ body {
     color: #dc3545;
     font-weight: 600;
     font-size: 0.82rem;
+}
+
+/* 투자 히스토리 합산 통계 카드 */
+.investment-summary-card {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.investment-summary-card .summary-item {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+
+.investment-summary-card .summary-label {
+    display: block;
+    font-size: 0.85rem;
+    color: #868e96;
+    margin-bottom: 8px;
+}
+
+.investment-summary-card .summary-value {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: 700;
+    font-family: monospace;
 }
 
 .mypage-empty {
