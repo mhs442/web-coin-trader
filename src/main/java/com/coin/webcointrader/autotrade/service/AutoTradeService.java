@@ -14,6 +14,7 @@ import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.OrderResult;
+import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.market.service.MarketService;
 import com.coin.webcointrader.trade.service.TradeService;
 import jakarta.annotation.PostConstruct;
@@ -185,6 +186,7 @@ public class AutoTradeService {
         long elapsedSeconds = 0;
         BigDecimal changeRate = null;
         BigDecimal amount = null;
+        int activePatternOrder = 0;
 
         FindTickerResponse.TickerInfo wsTicker = marketService.getWsTicker(symbol);
         String currentPrice = wsTicker != null ? wsTicker.getLastPrice() : null;
@@ -204,6 +206,7 @@ public class AutoTradeService {
                 Pattern activePattern = findPatternById(firstQueue, state.getActivePatternId());
                 if (activePattern != null) {
                     amount = activePattern.getAmount();
+                    activePatternOrder = activePattern.getPatternOrder();
                 }
             }
         }
@@ -215,6 +218,7 @@ public class AutoTradeService {
                 .phase(state != null ? state.getPhase().name() : null)
                 .direction(state != null && state.getDirection() != null ? state.getDirection().name() : null)
                 .currentBlockOrder(state != null ? state.getCurrentBlockOrder() : 0)
+                .activePatternOrder(activePatternOrder)
                 .elapsedSeconds(elapsedSeconds)
                 .changeRate(changeRate)
                 .amount(amount)

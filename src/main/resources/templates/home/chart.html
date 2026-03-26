@@ -8,6 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 </head>
 <body>
+    <div th:replace="~{fragments/header :: walletHeader}"></div>
     <div class="trade-layout-container">
         <!-- 메인 콘텐츠 (차트) -->
         <div class="main-content">
@@ -80,10 +81,6 @@
                 <div class="trigger-settings">
                     <label class="builder-label">트리거 설정</label>
                     <div class="trigger-input-row">
-                        <div class="trigger-input-group">
-                            <label for="trigger-seconds">시간(초)</label>
-                            <input type="number" id="trigger-seconds" min="1">
-                        </div>
                         <div class="trigger-input-group">
                             <label for="trigger-rate">상승/하락률(%)</label>
                             <input type="number" id="trigger-rate" step="0.01" min="0.01">
@@ -624,19 +621,19 @@
                         var condBlocks = p.blocks.filter(function(b) { return !b.leaf; });
                         var leafBlocks = p.blocks.filter(function(b) { return b.leaf; });
 
-                        // 조건 블록 시각화
+                        // 조건 블록 시각화 (data-block-order 포함)
                         var condHtml = condBlocks.map(function(b) {
                             var isLong = b.side === 'LONG';
-                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '" data-block-order="' + b.blockOrder + '">' + (isLong ? 'L' : 'S') + '</span>';
                         }).join('');
 
-                        // 리프 블록 시각화
+                        // 리프 블록 시각화 (data-block-order 포함)
                         var leafHtml = leafBlocks.map(function(b) {
                             var isLong = b.side === 'LONG';
-                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                            return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '" data-block-order="' + b.blockOrder + '">' + (isLong ? 'L' : 'S') + '</span>';
                         }).join('');
 
-                        return '<div class="step-pattern-row">' +
+                        return '<div class="step-pattern-row" data-pattern-order="' + p.patternOrder + '">' +
                             '<span class="step-pattern-label">패턴' + (pIdx + 1) + ':</span>' +
                             '<span class="step-pattern-blocks">' + condHtml + '</span>' +
                             '<span class="block-colon-display">:</span>' +
@@ -669,7 +666,7 @@
                 return '<div class="server-queue-card ' + (queue.active ? 'queue-active' : 'queue-inactive') + '" data-queue-id="' + queue.id + '">' +
                     '<div class="server-queue-header">' +
                     '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '">' + toggleLabel + '</button>' +
-                    '<span class="queue-trigger-info">트리거: ' + queue.triggerSeconds + '초 / ' + queue.triggerRate + '%</span>' +
+                    '<span class="queue-trigger-info">트리거: ' + queue.triggerRate + '%</span>' +
                     '<button onclick="deletePattern(' + queue.id + ')" class="pattern-delete-btn">삭제</button>' +
                     '</div>' +
                     stepsHtml +
@@ -691,11 +688,10 @@
             }
 
             // 트리거 설정값 표시
-            var triggerSec = $('#trigger-seconds').val() || '-';
             var triggerRateVal = $('#trigger-rate').val() || '-';
 
             var html = '<div class="queue-trigger-info">' +
-                '<span>구성 중 — 트리거: ' + triggerSec + '초 / ' + triggerRateVal + '%</span>' +
+                '<span>구성 중 — 트리거: ' + triggerRateVal + '%</span>' +
                 '</div>';
 
             html += queueSteps.map(function(step, stepIdx) {
@@ -983,13 +979,8 @@
                 return;
             }
 
-            const triggerSeconds = document.getElementById('trigger-seconds').value;
             const triggerRate = document.getElementById('trigger-rate').value;
 
-            if (!triggerSeconds || parseInt(triggerSeconds) <= 0) {
-                alert('트리거 시간(초)을 입력해주세요.');
-                return;
-            }
             if (!triggerRate || parseFloat(triggerRate) <= 0) {
                 alert('트리거 상승/하락률(%)을 입력해주세요.');
                 return;
@@ -998,7 +989,6 @@
             // 큐 데이터 구성
             const queueData = {
                 symbol: symbol,
-                triggerSeconds: parseInt(triggerSeconds),
                 triggerRate: parseFloat(triggerRate),
                 steps: queueSteps.map((step, stepIdx) => ({
                     stepOrder: stepIdx + 1,
@@ -1031,7 +1021,6 @@
                     alert('큐가 등록되었습니다.');
                     // 입력 초기화
                     queueSteps = [];
-                    document.getElementById('trigger-seconds').value = '';
                     document.getElementById('trigger-rate').value = '';
                     document.getElementById('step-number-label').textContent = '1단계';
                     renderQueueDisplay();
@@ -1120,6 +1109,9 @@
                             autoTradeActive = false;
                             highlightActiveStep(data);
                             stopStatusPolling();
+                            // 큐 목록 새로고침 (비활성화 상태 반영)
+                            loadPatterns();
+                            alert('자동매매가 중지되었습니다. 주문 실패로 큐가 비활성화되었습니다.');
                             return;
                         }
                         highlightActiveStep(data);
@@ -1156,16 +1148,32 @@
             // 큐 카드에 실행 중 표시
             $queueCard.addClass('queue-running');
 
-            // 해당 큐 내 기존 하이라이트/뱃지/트리거 상태 초기화 후 재적용
+            // 해당 큐 내 기존 하이라이트/뱃지/트리거 상태/블록 상태 초기화 후 재적용
             $queueCard.find('.step-card').removeClass('step-active');
             $queueCard.find('.step-active-badge').remove();
             $queueCard.find('.trigger-state-info').remove();
+            $queueCard.find('.block-tag').removeClass('block-current block-matched');
 
             var $activeStep = $queueCard.find('.step-card[data-step-level="' + data.currentStepLevel + '"]');
             $activeStep.addClass('step-active');
             $activeStep.find('.step-card-header').append('<span class="step-active-badge">현재 진행 단계</span>');
 
-            // 트리거 상태 표시 (큐 헤더 하단에 빨간색)
+            // BLOCK_MATCHING: 활성 패턴의 블록에 진행 상태 표시
+            if (data.phase === 'BLOCK_MATCHING' && data.activePatternOrder > 0) {
+                var $patternRow = $activeStep.find('.step-pattern-row[data-pattern-order="' + data.activePatternOrder + '"]');
+                $patternRow.find('.block-tag').each(function() {
+                    var blockOrder = parseInt($(this).data('block-order'));
+                    if (blockOrder < data.currentBlockOrder) {
+                        // 매칭 완료된 블록
+                        $(this).addClass('block-matched');
+                    } else if (blockOrder === data.currentBlockOrder) {
+                        // 현재 매칭 중인 블록
+                        $(this).addClass('block-current');
+                    }
+                });
+            }
+
+            // 트리거 상태 표시 (큐 헤더 하단)
             var triggerHtml = '';
             if (data.phase === 'TRIGGER_WAIT' && data.changeRate !== null) {
                 var rateStr = data.changeRate >= 0 ? '+' + data.changeRate.toFixed(2) : data.changeRate.toFixed(2);
