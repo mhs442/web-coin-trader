@@ -51,7 +51,6 @@ class PatternQueueServiceTest {
         // 큐 기본 정보 검증
         assertThat(result.getSymbol()).isEqualTo("BTCUSDT");
         assertThat(result.getUserId()).isEqualTo(userId);
-        assertThat(result.getTriggerSeconds()).isEqualTo(60);
         assertThat(result.getTriggerRate()).isEqualByComparingTo(new BigDecimal("1.0"));
         assertThat(result.isActive()).isFalse();
 
@@ -220,20 +219,6 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("addQueue: 트리거 시간이 0 이하면 CustomException 발생")
-    void addQueue_invalidTriggerSeconds() {
-        // given
-        Long userId = 1L;
-        AddPatternRequest request = makeFullRequest("BTCUSDT");
-        request.setTriggerSeconds(0);
-
-        // when & then
-        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
-                .isInstanceOf(CustomException.class)
-                .hasMessageContaining("트리거 시간");
-    }
-
-    @Test
     @DisplayName("addQueue: 트리거 비율이 0 이하면 CustomException 발생")
     void addQueue_invalidTriggerRate() {
         // given
@@ -306,7 +291,7 @@ class PatternQueueServiceTest {
     private AddPatternRequest makeFullRequest(String symbol) {
         AddPatternRequest request = new AddPatternRequest();
         request.setSymbol(symbol);
-        request.setTriggerSeconds(60);
+
         request.setTriggerRate(new BigDecimal("1.0"));
         request.setSteps(List.of(
                 makeStepRequest(1, List.of(makePatternRequest()))
@@ -320,7 +305,7 @@ class PatternQueueServiceTest {
     private AddPatternRequest makeMultiStepRequest(String symbol) {
         AddPatternRequest request = new AddPatternRequest();
         request.setSymbol(symbol);
-        request.setTriggerSeconds(60);
+
         request.setTriggerRate(new BigDecimal("1.0"));
 
         // 1단계: 패턴 2개 (L:L, S:S)

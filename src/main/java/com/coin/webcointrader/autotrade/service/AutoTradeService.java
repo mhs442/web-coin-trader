@@ -4,12 +4,12 @@ import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
 import com.coin.webcointrader.autotrade.dto.AutoTradeStatusResponse;
 import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
 import com.coin.webcointrader.autotrade.dto.TradePhase;
+import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
-import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.Category;
@@ -48,6 +48,7 @@ import java.util.stream.Collectors;
 public class AutoTradeService {
     private final PatternQueueRepository patternQueueRepository;
     private final TradeHistoryRepository tradeHistoryRepository;
+    private final InvestmentHistoryRepository investmentHistoryRepository;
     private final TradeService tradeService;
     private final MarketService marketService;
     private final BybitWebSocketClient bybitWebSocketClient;
@@ -436,6 +437,17 @@ public class AutoTradeService {
         String side = state.getDirection() == Side.LONG ? "Buy" : "Sell";
         String leverageStr = String.valueOf(pattern.getLeverage());
 
+        // 마진 모드를 Isolated로 전환 (Cross 모드 진입 방지)
+        try {
+            tradeService.switchToIsolated(session.getUserId());
+        } catch (Exception e) {
+            // Isolated 전환 실패 시 Cross 모드로 주문 방지 → 큐 비활성화
+            session.addLog(now() + " [진입 실패] 마진 모드 Isolated 전환 실패 : " + e.getMessage());
+            log.error("마진 모드 전환 실패 : queue={}, error={}", queue.getId(), e.getMessage());
+            deactivateQueue(queue, state, session, "마진 모드 전환 실패: " + e.getMessage());
+            return;
+        }
+
         // 레버리지 설정
         try {
             SetLeverageRequest leverageRequest = new SetLeverageRequest(
@@ -466,8 +478,7 @@ public class AutoTradeService {
                 .symbol(session.getSymbol())
                 .side(side)
                 .orderType("Market")
-                .qty(pattern.getAmount().stripTrailingZeros().toPlainString())
-                .marketUnit("quoteCoin") // USDT 금액 기준 주문
+                .qty(qty)
                 .build();
 
         // 실제 투입 금액 계산: qty × 현재가 (qtyStep 내림으로 인한 차이 반영)
@@ -484,11 +495,14 @@ public class AutoTradeService {
         history.setAmount(actualAmount);
 
         try {
-            tradeService.placeOrder(orderRequest, session.getUserId());
+            // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
+            tradeService.placeOrder(orderRequest, session.getUserId(), history);
 
-            // 주문 성공
+            // 주문 성공: 이력 저장
             history.setExecutedPrice(new BigDecimal(currentPrice));
             history.setOrderResult(OrderResult.SUCCESS);
+            tradeHistoryRepository.save(history);
+
             state.setEntryPrice(currentPrice);
 
             session.addLog(now() + " [진입] " + side + " "
@@ -496,71 +510,15 @@ public class AutoTradeService {
                     + session.getSymbol() + " (큐 #" + queue.getId()
                     + ", " + state.getCurrentStepLevel() + "단계, x" + pattern.getLeverage() + ")");
 
-            // TP/SL 설정 (패턴에 설정된 경우)
-            setTradingStopIfNeeded(queue, state, session, pattern, currentPrice);
-
             // BLOCK_MATCHING 전환 (첫 조건 블록은 진입 방향으로 이미 소비)
             state.setCurrentBlockOrder(2);
             state.setPhase(TradePhase.BLOCK_MATCHING);
 
         } catch (Exception e) {
-            // 주문 실패
-            history.setExecutedPrice(BigDecimal.ZERO);
-            history.setOrderResult(OrderResult.FAILED);
-            history.setErrorMessage(e.getMessage());
+            // 주문 실패 (TradeService에서 이미 history 저장 완료) → 큐 비활성화
             session.addLog(now() + " [진입 실패] " + e.getMessage());
             log.error("포지션 진입 실패: queue={}, error={}", queue.getId(), e.getMessage());
-        }
-
-        tradeHistoryRepository.save(history);
-    }
-
-    /**
-     * 패턴에 손절/익절이 설정된 경우 Bybit Trading Stop을 설정한다.
-     */
-    private void setTradingStopIfNeeded(PatternQueue queue, QueueStateDTO state,
-                                         AutoTradeSessionDTO session,
-                                         Pattern pattern, String currentPrice) {
-        // 손절/익절 모두 미설정이면 스킵
-        if (pattern.getStopLossRate() == null && pattern.getTakeProfitRate() == null) {
-            return;
-        }
-
-        BigDecimal entry = new BigDecimal(currentPrice);
-        String tpPrice = "";
-        String slPrice = "";
-
-        // LONG 포지션: 익절 = 진입가 × (1 + rate/100), 손절 = 진입가 × (1 - rate/100)
-        // SHORT 포지션: 익절 = 진입가 × (1 - rate/100), 손절 = 진입가 × (1 + rate/100)
-        boolean isLong = state.getDirection() == Side.LONG;
-
-        if (pattern.getTakeProfitRate() != null) {
-            BigDecimal tpMultiplier = isLong
-                    ? BigDecimal.ONE.add(pattern.getTakeProfitRate().divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP))
-                    : BigDecimal.ONE.subtract(pattern.getTakeProfitRate().divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP));
-            tpPrice = entry.multiply(tpMultiplier).setScale(2, RoundingMode.HALF_UP).toPlainString();
-        }
-
-        if (pattern.getStopLossRate() != null) {
-            BigDecimal slMultiplier = isLong
-                    ? BigDecimal.ONE.subtract(pattern.getStopLossRate().divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP))
-                    : BigDecimal.ONE.add(pattern.getStopLossRate().divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP));
-            slPrice = entry.multiply(slMultiplier).setScale(2, RoundingMode.HALF_UP).toPlainString();
-        }
-
-        try {
-            // positionIdx: 0=단방향(One-Way), 1=Buy(Hedge), 2=Sell(Hedge) → Isolated는 0 사용
-            SetTradingStopRequest tsRequest = new SetTradingStopRequest(
-                    Category.LINEAR.getCategory(),
-                    session.getSymbol(),
-                    tpPrice,
-                    slPrice,
-                    0
-            );
-            tradeService.setTradingStop(tsRequest, session.getUserId());
-            session.addLog(now() + " [TP/SL] TP:" + tpPrice + " SL:" + slPrice);
-        } catch (Exception e) {
-            log.warn("Trading Stop 설정 실패 (계속 진행): {}", e.getMessage());
+            deactivateQueue(queue, state, session, "주문 실패: " + e.getMessage());
         }
     }
 
@@ -611,7 +569,7 @@ public class AutoTradeService {
             }
         } else {
             // 반대 방향 → 청산 (SRS 12)
-            handleLiquidation(queue, state, session, signal, currentPrice);
+            handleLiquidation(queue, state, session, pattern, signal, currentPrice);
         }
     }
 
@@ -708,10 +666,18 @@ public class AutoTradeService {
                     .reduceOnly(true) // 포지션 청산 전용 (새 포지션 열림 방지)
                     .build();
 
-            tradeService.placeOrder(closeRequest, session.getUserId());
+            // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
+            tradeService.placeOrder(closeRequest, session.getUserId(), history);
 
+            // 주문 성공: 이력 저장
             history.setExecutedPrice(new BigDecimal(currentPrice));
             history.setOrderResult(OrderResult.SUCCESS);
+            tradeHistoryRepository.save(history);
+
+            // 투자 히스토리 저장 (포지션 사이클 완료 기록)
+            saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
+                    session.getSymbol(), state.getDirection(),
+                    state.getEntryPrice(), currentPrice, actualAmount);
 
             session.addLog(now() + " [매도 성공] " + closeSide + " "
                     + actualAmount.stripTrailingZeros().toPlainString() + "$ "
@@ -723,21 +689,25 @@ public class AutoTradeService {
             state.setPhase(TradePhase.POSITION_OPEN);
 
         } catch (Exception e) {
-            history.setExecutedPrice(BigDecimal.ZERO);
-            history.setOrderResult(OrderResult.FAILED);
-            history.setErrorMessage(e.getMessage());
+            // 주문 실패 (TradeService에서 이미 history 저장 완료) → 큐 비활성화
             session.addLog(now() + " [매도 실패] " + e.getMessage());
+            deactivateQueue(queue, state, session, "매도 실패: " + e.getMessage());
         }
-
-        tradeHistoryRepository.save(history);
     }
 
     /**
-     * 청산 처리: 다음 단계로 이동, 청산 방향의 패턴 선택 (SRS 12)
+     * 청산 처리: 기존 포지션을 시장가로 닫고, 다음 단계로 이동한다. (SRS 12)
      * 모든 단계 소진 시 큐 비활성화 (SRS 14)
+     *
+     * @param queue                현재 큐
+     * @param state                큐 런타임 상태
+     * @param session              세션
+     * @param currentPattern       현재 활성 패턴 (청산 수량 계산용)
+     * @param liquidationDirection 청산을 유발한 신호 방향
+     * @param currentPrice         현재가
      */
     private void handleLiquidation(PatternQueue queue, QueueStateDTO state,
-                                   AutoTradeSessionDTO session,
+                                   AutoTradeSessionDTO session, Pattern currentPattern,
                                    Side liquidationDirection, String currentPrice) {
         session.addLog(now() + " [청산] " + liquidationDirection + " 발생"
                 + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
@@ -833,6 +803,55 @@ public class AutoTradeService {
     // ─────────────────────────────────────────────
     // 유틸리티
     // ─────────────────────────────────────────────
+
+    /**
+     * 투자 히스토리를 저장한다. (포지션 진입 → 매도/청산 사이클 완료 기록)
+     * 손익금 계산: LONG → (exitPrice - entryPrice) / entryPrice × amount
+     *             SHORT → (entryPrice - exitPrice) / entryPrice × amount
+     *
+     * @param userId        사용자 ID
+     * @param patternStepId 패턴 단계 ID
+     * @param symbol        코인 심볼
+     * @param side          투자 방향
+     * @param entryPrice    진입가 문자열
+     * @param exitPrice     청산가 문자열
+     * @param amount        투입 금액
+     */
+    private void saveInvestmentHistory(Long userId, Long patternStepId, String symbol,
+                                       Side side, String entryPrice, String exitPrice,
+                                       BigDecimal amount) {
+        BigDecimal entry = new BigDecimal(entryPrice);
+        BigDecimal exit = new BigDecimal(exitPrice);
+
+        // 손익금 계산
+        BigDecimal profitLoss;
+        if (side == Side.LONG) {
+            // LONG: (청산가 - 진입가) / 진입가 × 투입금액
+            profitLoss = exit.subtract(entry)
+                    .divide(entry, 6, RoundingMode.HALF_UP)
+                    .multiply(amount)
+                    .setScale(4, RoundingMode.HALF_UP);
+        } else {
+            // SHORT: (진입가 - 청산가) / 진입가 × 투입금액
+            profitLoss = entry.subtract(exit)
+                    .divide(entry, 6, RoundingMode.HALF_UP)
+                    .multiply(amount)
+                    .setScale(4, RoundingMode.HALF_UP);
+        }
+
+        InvestmentHistory investmentHistory = new InvestmentHistory();
+        investmentHistory.setUserId(userId);
+        investmentHistory.setPatternStepId(patternStepId);
+        investmentHistory.setSymbol(symbol);
+        investmentHistory.setSide(side);
+        investmentHistory.setEntryPrice(entry);
+        investmentHistory.setExitPrice(exit);
+        investmentHistory.setAmount(amount);
+        investmentHistory.setProfitLoss(profitLoss);
+
+        investmentHistoryRepository.save(investmentHistory);
+        log.info("투자 히스토리 저장: symbol={}, side={}, profitLoss={}", symbol, side, profitLoss);
+    }
 
     /**
      * 단계 내에서 주어진 방향의 첫 번째 조건 블록이 일치하는 패턴을 선택한다.

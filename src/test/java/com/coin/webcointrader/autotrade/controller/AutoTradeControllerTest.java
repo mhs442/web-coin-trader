@@ -82,8 +82,7 @@ class AutoTradeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray())
                 .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].symbol").value("BTCUSDT"))
-                .andExpect(jsonPath("$[0].triggerSeconds").value(60));
+                .andExpect(jsonPath("$[0].symbol").value("BTCUSDT"));
     }
 
     // ─────────────────────────────────────────────
@@ -99,7 +98,6 @@ class AutoTradeControllerTest {
                         .content("""
                                 {
                                     "symbol": "BTCUSDT",
-                                    "triggerSeconds": 60,
                                     "triggerRate": 1.0,
                                     "steps": [{
                                         "stepOrder": 1,
@@ -118,7 +116,6 @@ class AutoTradeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.active").value(false))
-                .andExpect(jsonPath("$.triggerSeconds").value(60))
                 .andExpect(jsonPath("$.steps").isArray())
                 .andExpect(jsonPath("$.steps[0].patterns[0].amount").value(10))
                 .andExpect(jsonPath("$.steps[0].patterns[0].blocks").isArray());
@@ -165,7 +162,6 @@ class AutoTradeControllerTest {
         PatternQueue q = new PatternQueue();
         q.setUserId(userId);
         q.setSymbol(symbol);
-        q.setTriggerSeconds(60);
         q.setTriggerRate(new BigDecimal("1.0"));
         q.setActive(false);
         q.setFull(false);

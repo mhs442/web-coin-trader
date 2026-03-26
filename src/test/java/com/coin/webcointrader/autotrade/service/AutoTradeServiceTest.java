@@ -3,6 +3,7 @@ package com.coin.webcointrader.autotrade.service;
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
 import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
 import com.coin.webcointrader.autotrade.dto.TradePhase;
+import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
@@ -28,7 +29,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
+
 import static org.mockito.BDDMockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -42,6 +44,9 @@ class AutoTradeServiceTest {
 
     @Mock
     private TradeHistoryRepository tradeHistoryRepository;
+
+    @Mock
+    private InvestmentHistoryRepository investmentHistoryRepository;
 
     @Mock
     private TradeService tradeService;
@@ -180,7 +185,7 @@ class AutoTradeServiceTest {
         given(marketService.getTickers()).willReturn(null);
 
         assertThatCode(() -> autoTradeService.tick()).doesNotThrowAnyException();
-        then(tradeService).should(never()).placeOrder(any(), any());
+        then(tradeService).should(never()).placeOrder(any(), any(), any());
     }
 
     // ─────────────────────────────────────────────
@@ -217,29 +222,12 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("트리거 시간 미달 시 대기한다")
-        void waitsWhenTimeNotElapsed() {
-            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setBasePrice("50000.00");
-            state.setBaseTime(LocalDateTime.now()); // 방금 설정됨 → 60초 미달
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-
-            autoTradeService.processTriggerWait(queue, state, session, "51000.00");
-
-            // 아직 TRIGGER_WAIT 상태
-            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
-            assertThat(state.getDirection()).isNull();
-        }
-
-        @Test
         @DisplayName("상승률 충족 시 LONG으로 전환한다")
         void transitionsToLongOnRiseAboveTrigger() {
             PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
             QueueStateDTO state = QueueStateDTO.initial(1L);
             state.setBasePrice("50000.00");
-            // 트리거 시간 경과 시뮬레이션 (61초 전)
-            state.setBaseTime(LocalDateTime.now().minusSeconds(61));
+            state.setBaseTime(LocalDateTime.now());
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
             // 50000 → 50600 = +1.2% (triggerRate=1.0% 초과)
@@ -256,7 +244,7 @@ class AutoTradeServiceTest {
             PatternQueue queue = makePatternQueueWithBothPatterns(1L, 1L, "BTCUSDT");
             QueueStateDTO state = QueueStateDTO.initial(1L);
             state.setBasePrice("50000.00");
-            state.setBaseTime(LocalDateTime.now().minusSeconds(61));
+            state.setBaseTime(LocalDateTime.now());
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
             // 50000 → 49400 = -1.2% (triggerRate=1.0% 초과)
@@ -264,24 +252,6 @@ class AutoTradeServiceTest {
 
             assertThat(state.getDirection()).isEqualTo(Side.SHORT);
             assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
-        }
-
-        @Test
-        @DisplayName("변동률 미달 시 기준가격을 리셋한다")
-        void resetsBasePriceWhenRateNotMet() {
-            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setBasePrice("50000.00");
-            state.setBaseTime(LocalDateTime.now().minusSeconds(61));
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-
-            // 50000 → 50200 = +0.4% (triggerRate=1.0% 미달)
-            autoTradeService.processTriggerWait(queue, state, session, "50200.00");
-
-            // 기준가가 리셋되어야 함
-            assertThat(state.getBasePrice()).isEqualTo("50200.00");
-            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
-            assertThat(state.getDirection()).isNull();
         }
     }
 
@@ -487,18 +457,25 @@ class AutoTradeServiceTest {
             state.setCurrentBlockOrder(2);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
+            // USDT → 코인 수량 변환 mock (15USDT / 55500 ≈ 0.00027 → qtyStep 적용)
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.001");
+
             // 50000 → 55500 = +11% (threshold=10%) → LONG → 리프 LONG 일치
             autoTradeService.processBlockMatching(queue, state, session, "55500.00");
 
             // 매도 성공 → 같은 단계 반복 (POSITION_OPEN)
             assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
             assertThat(state.getCurrentBlockOrder()).isEqualTo(1);
-            then(tradeService).should(times(1)).placeOrder(any(), any());
+            // 매도 주문 실행 확인 (reduceOnly 포함)
+            then(tradeService).should(times(1)).placeOrder(any(), any(), any(TradeHistory.class));
+            // 거래 이력 저장 확인
             then(tradeHistoryRepository).should(times(1)).save(any(TradeHistory.class));
+            // 투자 히스토리 저장 확인 (포지션 사이클 완료 기록)
+            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
         }
 
         @Test
-        @DisplayName("반대 신호 시 다음 단계로 이동한다")
+        @DisplayName("반대 신호 시 기존 포지션을 청산하고 다음 단계로 이동한다")
         void movesToNextStepOnLiquidation() {
             // 2단계 큐 생성
             PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
@@ -511,8 +488,17 @@ class AutoTradeServiceTest {
             state.setCurrentBlockOrder(2); // 리프 블록 위치
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
+            // 청산 주문을 위한 모킹
+            given(marketService.convertUsdtToQty(eq("BTCUSDT"), any(), any())).willReturn("0.001");
+
             // 50000 → 44500 = -11% (threshold=10%) → SHORT → 리프 LONG과 불일치 → 청산
             autoTradeService.processBlockMatching(queue, state, session, "44500.00");
+
+            // 청산 주문 실행 검증
+            then(tradeService).should(times(1)).placeOrder(any(), eq(1L), any());
+            then(tradeHistoryRepository).should(times(1)).save(any());
+            // 투자 히스토리 저장 확인 (포지션 사이클 완료 기록)
+            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
 
             // 다음 단계(2)로 이동, SHORT 방향
             assertThat(state.getCurrentStepLevel()).isEqualTo(2);
@@ -521,7 +507,7 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("마지막 단계 청산 시 큐를 비활성화한다")
+        @DisplayName("마지막 단계 청산 시 포지션을 닫고 큐를 비활성화한다")
         void deactivatesQueueOnLastStepLiquidation() {
             // 1단계만 있는 큐
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
@@ -534,8 +520,16 @@ class AutoTradeServiceTest {
             state.setCurrentBlockOrder(2);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 청산 → 다음 단계 없음 → 큐 비활성화
+            // 청산 주문을 위한 모킹
+            given(marketService.convertUsdtToQty(eq("BTCUSDT"), any(), any())).willReturn("0.001");
+
+            // 청산 → 포지션 닫기 → 다음 단계 없음 → 큐 비활성화
             autoTradeService.processBlockMatching(queue, state, session, "44500.00");
+
+            // 청산 주문 실행 검증
+            then(tradeService).should(times(1)).placeOrder(any(), eq(1L), any());
+            // 투자 히스토리 저장 확인
+            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
 
             assertThat(queue.isActive()).isFalse();
             then(patternQueueRepository).should(times(1)).save(queue);
@@ -683,7 +677,7 @@ class AutoTradeServiceTest {
         queue.setUserId(userId);
         queue.setSymbol(symbol);
         queue.setActive(true);
-        queue.setTriggerSeconds(60);
+
         queue.setTriggerRate(new BigDecimal("1.0"));
         queue.setFull(false);
         ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
@@ -703,7 +697,7 @@ class AutoTradeServiceTest {
         queue.setUserId(userId);
         queue.setSymbol(symbol);
         queue.setActive(true);
-        queue.setTriggerSeconds(60);
+
         queue.setTriggerRate(new BigDecimal("1.0"));
         queue.setFull(false);
         ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
@@ -724,7 +718,7 @@ class AutoTradeServiceTest {
         queue.setUserId(userId);
         queue.setSymbol(symbol);
         queue.setActive(true);
-        queue.setTriggerSeconds(60);
+
         queue.setTriggerRate(new BigDecimal("1.0"));
         queue.setFull(false);
         ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
