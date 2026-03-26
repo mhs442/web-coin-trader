@@ -1,9 +1,11 @@
 package com.coin.webcointrader.common.client.position;
 
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.common.dto.request.SetMarginModeRequest;
 import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
 import com.coin.webcointrader.common.dto.response.GetPositionListResponse;
 import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
+import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
 import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
 import com.coin.webcointrader.common.config.BybitFeignConfig;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -33,6 +35,16 @@ public interface PositionClient {
             @RequestParam("category") String category,
             @RequestParam("symbol") String symbol
     );
+
+    /**
+     * Bybit POST /v5/account/set-margin-mode
+     * UTA 계정의 마진 모드를 변경한다. (열린 포지션/주문이 없는 상태에서만 가능)
+     *
+     * @param request 마진 모드 설정 요청 (setMarginMode: "ISOLATED_MARGIN", "REGULAR_MARGIN", "PORTFOLIO_MARGIN")
+     * @return 마진 모드 설정 결과 응답
+     */
+    @PostMapping("/v5/account/set-margin-mode")
+    ResponseEntity<SetMarginModeResponse> setMarginMode(@RequestBody SetMarginModeRequest request);
 
     /**
      * Bybit POST /v5/position/set-leverage

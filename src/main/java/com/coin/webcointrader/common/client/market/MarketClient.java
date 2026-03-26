@@ -1,6 +1,7 @@
 package com.coin.webcointrader.common.client.market;
 
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
+import com.coin.webcointrader.common.dto.response.GetInstrumentsInfoResponse;
 import com.coin.webcointrader.common.dto.response.GetKlineResponse;
 import com.coin.webcointrader.common.dto.response.OrderBookResponse;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -40,6 +41,16 @@ public interface MarketClient {
                                               @RequestParam("symbol") String symbol,
                                               @RequestParam("interval") String interval,
                                               @RequestParam("limit") int limit);
+
+    /**
+     * Bybit GET /v5/market/instruments-info
+     * 카테고리별 전체 종목의 거래 규칙(수량 단위, 최소/최대 주문량 등)을 조회한다.
+     *
+     * @param category 파생상품 카테고리 (예: "linear")
+     * @return 종목별 거래 규칙 응답 (lotSizeFilter.qtyStep 등 포함)
+     */
+    @GetMapping("/v5/market/instruments-info")
+    ResponseEntity<GetInstrumentsInfoResponse> getInstrumentsInfo(@RequestParam("category") String category);
 
     /**
      * Bybit GET /v5/market/orderbook
