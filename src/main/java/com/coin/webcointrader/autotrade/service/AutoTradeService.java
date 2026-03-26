@@ -476,7 +476,7 @@ public class AutoTradeService {
         history.setUserId(session.getUserId());
         history.setSymbol(session.getSymbol());
         history.setSide(state.getDirection());
-        history.setAmount(pattern.getAmount());
+        history.setOrderType(TradeOrderType.ENTRY.getTradeOrderType());
         history.setAmount(actualAmount);
 
         try {
@@ -672,12 +672,6 @@ public class AutoTradeService {
         // 시장가 매도 실행 (진입 방향의 반대)
         String closeSide = state.getDirection() == Side.LONG ? "Sell" : "Buy";
 
-        TradeHistory history = new TradeHistory();
-        history.setQueueStepId(state.getActiveStepId());
-        history.setUserId(session.getUserId());
-        history.setSymbol(session.getSymbol());
-        history.setSide(state.getDirection());
-        history.setAmount(pattern.getAmount());
         try {
             // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
             String closeQty = marketService.convertUsdtToQty(
@@ -698,6 +692,7 @@ public class AutoTradeService {
             history.setUserId(session.getUserId());
             history.setSymbol(session.getSymbol());
             history.setSide(state.getDirection());
+            history.setOrderType(TradeOrderType.SELL.getTradeOrderType());
             history.setAmount(actualAmount);
 
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
@@ -765,6 +760,7 @@ public class AutoTradeService {
             history.setUserId(session.getUserId());
             history.setSymbol(session.getSymbol());
             history.setSide(state.getDirection());
+            history.setOrderType(TradeOrderType.LIQUIDATION.getTradeOrderType());
             history.setAmount(actualAmount);
 
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()

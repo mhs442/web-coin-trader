@@ -410,6 +410,7 @@
                                         <th>방향</th>
                                         <th>수량</th>
                                         <th>체결가</th>
+                                        <th>유형</th>
                                         <th>상태</th>
                                         <th>비고</th>
                                     </tr>
@@ -427,6 +428,10 @@
                     const sideClass = isLong ? 'text-green' : 'text-red';
                     const statusClass = t.orderStatus === 'SUCCESS' ? 'status-active' : 'status-failed';
 
+                    // 주문 유형 한글 변환
+                    var orderTypeMap = { 'entry': '진입', 'sell': '매도', 'liquidation': '청산' };
+                    var orderTypeLabel = orderTypeMap[t.orderType] || t.orderType || '-';
+
                     const tr = document.createElement('tr');
                     tr.innerHTML =
                         '<td>' + t.createdAt + '</td>' +
@@ -434,6 +439,7 @@
                         '<td class="' + sideClass + '">' + t.side + '</td>' +
                         '<td class="mono-cell">' + t.amount + '</td>' +
                         '<td class="mono-cell">' + t.executedPrice + '</td>' +
+                        '<td>' + orderTypeLabel + '</td>' +
                         '<td><span class="' + statusClass + '">' + t.orderStatus + '</span></td>' +
                         '<td class="error-cell">' + (t.errorMessage || '-') + '</td>';
                     tbody.appendChild(tr);

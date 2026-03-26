@@ -46,6 +46,9 @@ public class TradeHistory extends BaseEntity {
     @Column(length = 100)
     private String orderId;             // Bybit 주문 ID
 
+    @Column(nullable = false, length = 20)
+    private String orderType;   // 주문 유형 (ENTRY / SELL / LIQUIDATION)
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 10)
     private OrderResult orderResult;    // SUCCESS / FAILED
