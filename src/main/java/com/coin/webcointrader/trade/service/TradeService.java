@@ -1,22 +1,29 @@
 package com.coin.webcointrader.trade.service;
 
+import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.position.PositionClient;
 import com.coin.webcointrader.common.client.trade.TradeClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
+import com.coin.webcointrader.common.dto.request.SetMarginModeRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
 import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
+import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
 import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
+import com.coin.webcointrader.common.entity.TradeHistory;
 import com.coin.webcointrader.common.entity.User;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import com.coin.webcointrader.login.repository.LoginRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
 
 /**
  * Bybit 주문 실행 서비스.
@@ -28,8 +35,22 @@ public class TradeService {
 
     private final TradeClient tradeClient;
     private final PositionClient positionClient;
+    private final TradeHistoryRepository tradeHistoryRepository;
     private final LoginRepository loginRepository;
     private final AesEncryptor aesEncryptor;
+
+    /**
+     * Bybit에 주문을 실행한다. (수동 주문용 - TradeHistory 없음)
+     * retCode 검증만 수행하고, 실패 시 예외를 던진다.
+     *
+     * @param request 주문 요청 (symbol, side, orderType, qty 등 포함, category 생략 가능)
+     * @param userId  API Key를 조회할 사용자 ID
+     * @return 주문 생성 응답 (Bybit 주문 ID 포함)
+     * @throws CustomException 주문 실패 시 (ORDER_FAILED)
+     */
+    public CreateOrderResponse placeOrder(CreateOrderRequest request, Long userId) {
+        return placeOrder(request, userId, null);
+    }
 
     /**
      * Bybit에 주문을 실행한다.
@@ -53,6 +74,7 @@ public class TradeService {
                     .orderType(request.getOrderType())
                     .qty(request.getQty())
                     .price(request.getPrice())
+                    .reduceOnly(request.getReduceOnly())
                     .build();
         }
 
@@ -108,15 +130,25 @@ public class TradeService {
     /**
      * Bybit에 레버리지를 설정한다.
      * 사용자 API Key 컨텍스트를 설정한 후 레버리지 변경 API를 호출한다.
+     * retCode "110043"(이미 동일 레버리지)은 정상 처리한다.
      *
      * @param request 레버리지 설정 요청 (category, symbol, buyLeverage, sellLeverage)
      * @param userId  API Key를 조회할 사용자 ID
      * @return 레버리지 설정 결과 응답
+     * @throws CustomException 레버리지 설정 실패 시 (SET_LEVERAGE_FAILED)
      */
     public SetLeverageResponse setLeverage(SetLeverageRequest request, Long userId) {
         setApiKeyContext(userId);
         try {
-            return positionClient.setLeverage(request).getBody();
+            SetLeverageResponse response = positionClient.setLeverage(request).getBody();
+
+            // Bybit 응답 에러 코드 검증 (110043: 이미 동일 레버리지 설정됨 → 무시)
+            if (response == null || (!"0".equals(response.getRetCode()) && !"110043".equals(response.getRetCode()))) {
+                String errorMsg = response != null ? response.getRetMsg() : "응답 없음";
+                throw new CustomException(ExceptionMessage.SET_LEVERAGE_FAILED, errorMsg);
+            }
+
+            return response;
         } finally {
             UserApiKeyContext.clear();
         }
@@ -129,11 +161,20 @@ public class TradeService {
      * @param request 손절/익절 설정 요청 (category, symbol, takeProfit, stopLoss, positionIdx)
      * @param userId  API Key를 조회할 사용자 ID
      * @return Trading Stop 설정 결과 응답
+     * @throws CustomException 손절/익절 설정 실패 시 (SET_TRADING_STOP_FAILED)
      */
     public SetTradingStopResponse setTradingStop(SetTradingStopRequest request, Long userId) {
         setApiKeyContext(userId);
         try {
-            return positionClient.setTradingStop(request).getBody();
+            SetTradingStopResponse response = positionClient.setTradingStop(request).getBody();
+
+            // Bybit 응답 에러 코드 검증
+            if (response == null || !"0".equals(response.getRetCode())) {
+                String errorMsg = response != null ? response.getRetMsg() : "응답 없음";
+                throw new CustomException(ExceptionMessage.SET_TRADING_STOP_FAILED, errorMsg);
+            }
+
+            return response;
         } finally {
             UserApiKeyContext.clear();
         }

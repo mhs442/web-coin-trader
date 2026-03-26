@@ -4,6 +4,7 @@ import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.client.market.MarketClient;
 import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
+import com.coin.webcointrader.common.dto.response.GetInstrumentsInfoResponse;
 import com.coin.webcointrader.common.dto.response.GetKlineResponse;
 import com.coin.webcointrader.common.dto.response.OrderBookResponse;
 import com.coin.webcointrader.common.enums.Category;

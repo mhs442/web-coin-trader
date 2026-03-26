@@ -1,5 +1,6 @@
 package com.coin.webcointrader.trade.service;
 
+import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.trade.TradeClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
@@ -20,9 +21,11 @@ import org.springframework.http.ResponseEntity;
 
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.BDDMockito.*;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
 class TradeServiceTest {
@@ -32,6 +35,9 @@ class TradeServiceTest {
 
     @Mock
     private TradeClient tradeClient;
+
+    @Mock
+    private TradeHistoryRepository tradeHistoryRepository;
 
     @Mock
     private LoginRepository loginRepository;
@@ -59,6 +65,8 @@ class TradeServiceTest {
 
         User user = makeUser(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
+        response.setRetCode("0");
+        response.setRetMsg("OK");
 
         given(loginRepository.findById(userId)).willReturn(Optional.of(user));
         given(aesEncryptor.decrypt("encKey")).willReturn("rawApiKey");
@@ -87,6 +95,8 @@ class TradeServiceTest {
 
         User user = makeUser(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
+        response.setRetCode("0");
+        response.setRetMsg("OK");
 
         given(loginRepository.findById(userId)).willReturn(Optional.of(user));
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
