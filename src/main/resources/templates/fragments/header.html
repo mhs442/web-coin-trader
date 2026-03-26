@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 공통 헤더: 지갑 잔고 + 갱신 카운트다운 -->
+<div th:fragment="walletHeader" class="wallet-header" id="wallet-header">
+    <div class="wallet-info">
+        <span class="wallet-label">총 자산</span>
+        <span class="wallet-balance" id="wallet-total-equity">--</span>
+        <span class="wallet-unit">USDT</span>
+    </div>
+    <div class="wallet-info">
+        <span class="wallet-label">사용 가능</span>
+        <span class="wallet-balance" id="wallet-available">--</span>
+        <span class="wallet-unit">USDT</span>
+    </div>
+    <div class="wallet-refresh">
+        <span class="wallet-refresh-icon" id="wallet-refresh-icon" title="잔고 갱신">&#x21bb;</span>
+        <span class="wallet-countdown" id="wallet-countdown">5</span>
+    </div>
+
+    <script>
+        (function() {
+            const POLL_INTERVAL = 5; // 초
+            let countdown = POLL_INTERVAL;
+            let countdownTimer = null;
+
+            /**
+             * 지갑 잔고 API를 호출하여 헤더에 표시한다.
+             */
+            function fetchWalletBalance() {
+                $.ajax({
+                    url: '/api/wallet/balance',
+                    method: 'GET',
+                    success: function(data) {
+                        if (data && data.result && data.result.list && data.result.list.length > 0) {
+                            const account = data.result.list[0];
+                            // 총 자산 평가액
+                            const equity = parseFloat(account.totalEquity || 0);
+                            $('#wallet-total-equity').text(equity.toLocaleString('en-US', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
+                            }));
+
+                            // 출금 가능 금액 (USDT 기준, 없으면 0)
+                            const usdtCoin = (account.coin || []).find(c => c.coin === 'USDT');
+                            const available = usdtCoin ? parseFloat(usdtCoin.availableToWithdraw || 0) : 0;
+                            $('#wallet-available').text(available.toLocaleString('en-US', {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
+                            }));
+                        }
+                    },
+                    error: function() {
+                        $('#wallet-total-equity').text('--');
+                        $('#wallet-available').text('--');
+                    }
+                });
+            }
+
+            /**
+             * 카운트다운을 시작한다. 0이 되면 잔고를 갱신하고 리셋한다.
+             */
+            function startCountdown() {
+                countdown = POLL_INTERVAL;
+                $('#wallet-countdown').text(countdown);
+
+                if (countdownTimer) clearInterval(countdownTimer);
+
+                countdownTimer = setInterval(function() {
+                    countdown--;
+                    if (countdown <= 0) {
+                        // 갱신 아이콘 회전 애니메이션
+                        $('#wallet-refresh-icon').addClass('spinning');
+                        fetchWalletBalance();
+                        countdown = POLL_INTERVAL;
+                        setTimeout(function() {
+                            $('#wallet-refresh-icon').removeClass('spinning');
+                        }, 500);
+                    }
+                    $('#wallet-countdown').text(countdown);
+                }, 1000);
+            }
+
+            // 갱신 아이콘 클릭 시 즉시 갱신
+            $(document).on('click', '#wallet-refresh-icon', function() {
+                $('#wallet-refresh-icon').addClass('spinning');
+                fetchWalletBalance();
+                countdown = POLL_INTERVAL;
+                $('#wallet-countdown').text(countdown);
+                setTimeout(function() {
+                    $('#wallet-refresh-icon').removeClass('spinning');
+                }, 500);
+            });
+
+            // 초기 로딩 + 카운트다운 시작
+            $(document).ready(function() {
+                fetchWalletBalance();
+                startCountdown();
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>

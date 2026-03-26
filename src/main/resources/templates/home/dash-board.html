@@ -2,8 +2,10 @@
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>ByBit 코인 트레이더 대시보드</title>
     <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
 </head>
 <body>
+<div th:replace="~{fragments/header :: walletHeader}"></div>
 <div class="market-overview-container">
     <div class="dashboard-header">
         <h1>실시간 코인 목록</h1>
