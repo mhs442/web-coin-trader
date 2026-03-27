@@ -5,6 +5,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import com.coin.webcointrader.common.enums.TradeMode;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -46,6 +48,10 @@ public class PatternQueue extends BaseEntity {
 
     @Column
     private Integer currentBlockOrder;      // 현재 대기 중인 블록 순서 (FK 없음, 앱 레벨 관리)
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    private TradeMode tradeMode = TradeMode.MAIN;         // 거래 모드 (MAIN: 실전, SIM: 모의)
 
     @OneToMany(mappedBy = "queue", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PatternStep> steps = new ArrayList<>();  // 소속 단계 목록

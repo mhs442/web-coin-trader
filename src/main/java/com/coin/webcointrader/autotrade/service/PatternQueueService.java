@@ -4,6 +4,7 @@ import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -29,7 +30,7 @@ public class PatternQueueService {
      * @return 패턴 큐 목록 (createdAt 오름차순)
      */
     public List<PatternQueue> getQueues(Long userId, String symbol) {
-        return patternQueueRepository.findByUserIdAndSymbolOrderByCreatedAtAsc(userId, symbol);
+        return patternQueueRepository.findByUserIdAndSymbolAndTradeModeOrderByCreatedAtAsc(userId, symbol, TradeMode.MAIN);
     }
 
     /**
@@ -58,7 +59,7 @@ public class PatternQueueService {
         validateSteps(request.getSteps());
 
         // 심볼당 최대 20개 제한
-        long count = patternQueueRepository.countByUserIdAndSymbol(userId, request.getSymbol());
+        long count = patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, request.getSymbol(), TradeMode.MAIN);
         if (count >= 20) {
             throw new CustomException(ExceptionMessage.EXCEED_MAX_QUEUES);
         }

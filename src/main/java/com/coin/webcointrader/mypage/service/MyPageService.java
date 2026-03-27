@@ -5,6 +5,7 @@ import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.mypage.dto.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -44,7 +45,7 @@ public class MyPageService {
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
         if (hasValue(request.getSymbol())) {
             List<PatternQueue> queues;
-            queues = patternQueueRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
+            queues = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, TradeMode.MAIN, request.getStartDate(), request.getEndDate(), dbSort);
 
             String keyword = request.getSymbol().toUpperCase();
             List<MyPagePatternResponse> filtered = queues.stream()
@@ -58,7 +59,7 @@ public class MyPageService {
         // 심볼 키워드 없으면 DB 페이징 사용
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
         Page<PatternQueue> queuePage;
-        queuePage = patternQueueRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
+        queuePage = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, TradeMode.MAIN, request.getStartDate(), request.getEndDate(), pageable);
         return PageResponse.from(queuePage, this::toPatternResponse);
     }
 

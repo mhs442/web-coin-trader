@@ -13,6 +13,7 @@ import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.Category;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.market.service.MarketService;
@@ -103,7 +104,7 @@ public class AutoTradeService {
     public void syncSession(Long userId, String symbol) {
         // isActive=true인 패턴 큐만 조회
         List<PatternQueue> activeQueues = patternQueueRepository
-                .findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(userId, symbol, true);
+                .findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(userId, symbol, true, TradeMode.MAIN);
 
         String key = sessionKey(userId, symbol);
 
