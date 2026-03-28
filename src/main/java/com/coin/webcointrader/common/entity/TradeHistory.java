@@ -14,7 +14,6 @@ import java.math.BigDecimal;
  * 원본 삭제와 무관하게 거래 기록을 보존하기 위해 FK 없이 독립 저장한다.
  */
 @Entity
-@Inheritance(strategy = InheritanceType.TABLE_PER_CLASS)
 @Table(name = "trade_history")
 @Getter
 @Setter

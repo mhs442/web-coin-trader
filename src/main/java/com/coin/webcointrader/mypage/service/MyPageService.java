@@ -80,14 +80,15 @@ public class MyPageService {
         Sort dbSort = buildSort("createdAt", request.getSort());
         boolean isSim = resolveMode(request.getMode()) == TradeMode.SIM;
 
+        // 모드에 따라 리포지토리 분기
+        if (isSim) {
+            return getSimTradeHistories(userId, request, dbSort);
+        }
+
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
         if (hasValue(request.getSymbol())) {
-            // 모드에 따라 리포지토리 분기
-            List<? extends TradeHistory> histories = isSim
-                    ? simTradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort)
-                    : tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
+            List<TradeHistory> histories = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
 
-            // 심볼 키워드 %LIKE% 사용 없이 자바단에서 필터링 -> index사용 불가
             String keyword = request.getSymbol().toUpperCase();
             List<TradeHistoryResponse> filtered = histories.stream()
                     .filter(h -> h.getSymbol().toUpperCase().contains(keyword))
@@ -97,14 +98,31 @@ public class MyPageService {
             return PageResponse.fromList(filtered, request.getPage(), request.getSize());
         }
 
-        // 심볼 키워드 없으면 DB 페이징 사용 (모드에 따라 리포지토리 분기)
+        // 심볼 키워드 없으면 DB 페이징 사용
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-        if (isSim) {
-            Page<SimTradeHistory> historyPage = simTradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
-            return PageResponse.from(historyPage, this::toTradeResponse);
-        }
         Page<TradeHistory> historyPage = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
         return PageResponse.from(historyPage, this::toTradeResponse);
+    }
+
+    /**
+     * 모의투자 거래 히스토리를 조회한다.
+     */
+    private PageResponse<TradeHistoryResponse> getSimTradeHistories(Long userId, TradeHistoryRequest request, Sort dbSort) {
+        if (hasValue(request.getSymbol())) {
+            List<SimTradeHistory> histories = simTradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
+
+            String keyword = request.getSymbol().toUpperCase();
+            List<TradeHistoryResponse> filtered = histories.stream()
+                    .filter(h -> h.getSymbol().toUpperCase().contains(keyword))
+                    .map(this::toSimTradeResponse)
+                    .toList();
+
+            return PageResponse.fromList(filtered, request.getPage(), request.getSize());
+        }
+
+        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
+        Page<SimTradeHistory> historyPage = simTradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
+        return PageResponse.from(historyPage, this::toSimTradeResponse);
     }
 
     /**
@@ -118,15 +136,19 @@ public class MyPageService {
     public InvestmentHistoryPageResponse getInvestmentHistories(Long userId, InvestmentHistoryRequest request) {
         Sort dbSort = buildSort("createdAt", request.getSort());
         boolean isSim = resolveMode(request.getMode()) == TradeMode.SIM;
+
+        // 모드에 따라 리포지토리 분기
+        if (isSim) {
+            return getSimInvestmentHistories(userId, request, dbSort);
+        }
+
         PageResponse<InvestmentHistoryResponse> pageResponse;
         InvestmentSummaryResponse summary;
 
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
         if (hasValue(request.getSymbol())) {
-            // 모드에 따라 리포지토리 분기
-            List<? extends InvestmentHistory> histories = isSim
-                    ? simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort)
-                    : investmentHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
+            List<InvestmentHistory> histories = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                    userId, request.getStartDate(), request.getEndDate(), dbSort);
 
             String keyword = request.getSymbol().toUpperCase();
             List<InvestmentHistoryResponse> filtered = histories.stream()
@@ -136,30 +158,58 @@ public class MyPageService {
 
             pageResponse = PageResponse.fromList(filtered, request.getPage(), request.getSize());
 
-            // 심볼 필터 합산 (DB 쿼리, 모드에 따라 분기)
-            summary = buildSummary(isSim
-                    ? simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
-                            userId, request.getStartDate(), request.getEndDate(), request.getSymbol())
-                    : investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
+            summary = buildSummary(investmentHistoryRepository
+                    .sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
                             userId, request.getStartDate(), request.getEndDate(), request.getSymbol()));
         } else {
-            // 심볼 키워드 없으면 DB 페이징 사용 (모드에 따라 리포지토리 분기)
             Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-            if (isSim) {
-                Page<SimInvestmentHistory> historyPage = simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                        userId, request.getStartDate(), request.getEndDate(), pageable);
-                pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
-            } else {
-                Page<InvestmentHistory> historyPage = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                        userId, request.getStartDate(), request.getEndDate(), pageable);
-                pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
-            }
+            Page<InvestmentHistory> historyPage = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                    userId, request.getStartDate(), request.getEndDate(), pageable);
 
-            // 전체 합산 (DB 쿼리, 모드에 따라 분기)
-            summary = buildSummary(isSim
-                    ? simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
-                            userId, request.getStartDate(), request.getEndDate())
-                    : investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
+            pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
+
+            summary = buildSummary(investmentHistoryRepository
+                    .sumProfitLossByUserIdAndCreatedAtBetween(
+                            userId, request.getStartDate(), request.getEndDate()));
+        }
+
+        return InvestmentHistoryPageResponse.builder()
+                .page(pageResponse)
+                .summary(summary)
+                .build();
+    }
+
+    /**
+     * 모의투자 투자 히스토리를 조회한다.
+     */
+    private InvestmentHistoryPageResponse getSimInvestmentHistories(Long userId, InvestmentHistoryRequest request, Sort dbSort) {
+        PageResponse<InvestmentHistoryResponse> pageResponse;
+        InvestmentSummaryResponse summary;
+
+        if (hasValue(request.getSymbol())) {
+            List<SimInvestmentHistory> histories = simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                    userId, request.getStartDate(), request.getEndDate(), dbSort);
+
+            String keyword = request.getSymbol().toUpperCase();
+            List<InvestmentHistoryResponse> filtered = histories.stream()
+                    .filter(h -> h.getSymbol().toUpperCase().contains(keyword))
+                    .map(this::toSimInvestmentResponse)
+                    .toList();
+
+            pageResponse = PageResponse.fromList(filtered, request.getPage(), request.getSize());
+
+            summary = buildSummary(simInvestmentHistoryRepository
+                    .sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
+                            userId, request.getStartDate(), request.getEndDate(), request.getSymbol()));
+        } else {
+            Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
+            Page<SimInvestmentHistory> historyPage = simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                    userId, request.getStartDate(), request.getEndDate(), pageable);
+
+            pageResponse = PageResponse.from(historyPage, this::toSimInvestmentResponse);
+
+            summary = buildSummary(simInvestmentHistoryRepository
+                    .sumProfitLossByUserIdAndCreatedAtBetween(
                             userId, request.getStartDate(), request.getEndDate()));
         }
 
@@ -315,6 +365,45 @@ public class MyPageService {
                 .orderType(h.getOrderType())
                 .orderStatus(h.getOrderResult().name())
                 .errorMessage(h.getErrorMessage())
+                .createdAt(h.getCreatedAt().format(DT_FMT))
+                .build();
+    }
+
+    /**
+     * SimTradeHistory → TradeHistoryResponse 변환
+     *
+     * @param h SimTradeHistory 엔티티
+     * @return 거래 히스토리 응답 DTO
+     */
+    private TradeHistoryResponse toSimTradeResponse(SimTradeHistory h) {
+        return TradeHistoryResponse.builder()
+                .id(h.getId())
+                .symbol(h.getSymbol())
+                .side(h.getSide().name())
+                .amount(h.getAmount().stripTrailingZeros().toPlainString())
+                .executedPrice(h.getExecutedPrice().stripTrailingZeros().toPlainString())
+                .orderType(h.getOrderType())
+                .orderStatus(h.getOrderResult().name())
+                .errorMessage(h.getErrorMessage())
+                .createdAt(h.getCreatedAt().format(DT_FMT))
+                .build();
+    }
+
+    /**
+     * SimInvestmentHistory → InvestmentHistoryResponse 변환
+     *
+     * @param h SimInvestmentHistory 엔티티
+     * @return 투자 히스토리 응답 DTO
+     */
+    private InvestmentHistoryResponse toSimInvestmentResponse(SimInvestmentHistory h) {
+        return InvestmentHistoryResponse.builder()
+                .id(h.getId())
+                .symbol(h.getSymbol())
+                .side(h.getSide().name())
+                .entryPrice(h.getEntryPrice().stripTrailingZeros().toPlainString())
+                .exitPrice(h.getExitPrice().stripTrailingZeros().toPlainString())
+                .amount(h.getAmount().stripTrailingZeros().toPlainString())
+                .profitLoss(h.getProfitLoss().stripTrailingZeros().toPlainString())
                 .createdAt(h.getCreatedAt().format(DT_FMT))
                 .build();
     }

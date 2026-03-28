@@ -13,7 +13,6 @@ import java.math.BigDecimal;
  * 원본 삭제와 무관하게 투자 기록을 보존하기 위해 FK 없이 독립 저장한다.
  */
 @Entity
-@Inheritance(strategy = InheritanceType.TABLE_PER_CLASS)
 @Table(name = "investment_history")
 @Getter
 @Setter
