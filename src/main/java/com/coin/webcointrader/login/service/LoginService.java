@@ -4,9 +4,11 @@ import com.coin.webcointrader.common.dto.UserDTO;
 import com.coin.webcointrader.common.entity.User;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.entity.SimWallet;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
+import com.coin.webcointrader.sim.repository.SimWalletRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -24,6 +26,7 @@ public class LoginService implements UserDetailsService {
     private final BCryptPasswordEncoder bCryptPasswordEncoder;
     private final BybitApiKeyValidator bybitApiKeyValidator;
     private final LoginRepository loginRepository;
+    private final SimWalletRepository simWalletRepository;
 
     /**
      * Spring Security 인증 진입점.
@@ -83,5 +86,10 @@ public class LoginService implements UserDetailsService {
         user.setApiSecret(aesEncryptor.encrypt(request.getApiSecret()));
 
         loginRepository.save(user);
+
+        // 5. 모의투자 가상 지갑 생성 (기본 잔고 10,000 USDT)
+        SimWallet simWallet = new SimWallet();
+        simWallet.setUser(user);
+        simWalletRepository.save(simWallet);
     }
 }
