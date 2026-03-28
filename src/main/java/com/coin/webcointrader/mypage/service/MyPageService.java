@@ -7,6 +7,8 @@ import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.mypage.dto.*;
+import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
+import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -28,6 +30,8 @@ public class MyPageService {
     private final PatternQueueRepository patternQueueRepository;
     private final TradeHistoryRepository tradeHistoryRepository;
     private final InvestmentHistoryRepository investmentHistoryRepository;
+    private final SimTradeHistoryRepository simTradeHistoryRepository;
+    private final SimInvestmentHistoryRepository simInvestmentHistoryRepository;
 
     private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -41,11 +45,12 @@ public class MyPageService {
      */
     public PageResponse<MyPagePatternResponse> getPatterns(Long userId, MyPagePatternRequest request) {
         Sort dbSort = buildSort("createdAt", request.getSort());
+        TradeMode tradeMode = resolveMode(request.getMode());
 
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
         if (hasValue(request.getSymbol())) {
             List<PatternQueue> queues;
-            queues = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, TradeMode.MAIN, request.getStartDate(), request.getEndDate(), dbSort);
+            queues = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, tradeMode, request.getStartDate(), request.getEndDate(), dbSort);
 
             String keyword = request.getSymbol().toUpperCase();
             List<MyPagePatternResponse> filtered = queues.stream()
@@ -59,7 +64,7 @@ public class MyPageService {
         // 심볼 키워드 없으면 DB 페이징 사용
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
         Page<PatternQueue> queuePage;
-        queuePage = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, TradeMode.MAIN, request.getStartDate(), request.getEndDate(), pageable);
+        queuePage = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, tradeMode, request.getStartDate(), request.getEndDate(), pageable);
         return PageResponse.from(queuePage, this::toPatternResponse);
     }
 
@@ -73,10 +78,14 @@ public class MyPageService {
      */
     public PageResponse<TradeHistoryResponse> getTradeHistories(Long userId, TradeHistoryRequest request) {
         Sort dbSort = buildSort("createdAt", request.getSort());
+        boolean isSim = resolveMode(request.getMode()) == TradeMode.SIM;
 
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
         if (hasValue(request.getSymbol())) {
-            List<TradeHistory> histories = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
+            // 모드에 따라 리포지토리 분기
+            List<? extends TradeHistory> histories = isSim
+                    ? simTradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort)
+                    : tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
 
             // 심볼 키워드 %LIKE% 사용 없이 자바단에서 필터링 -> index사용 불가
             String keyword = request.getSymbol().toUpperCase();
@@ -88,10 +97,13 @@ public class MyPageService {
             return PageResponse.fromList(filtered, request.getPage(), request.getSize());
         }
 
-        // 심볼 키워드 없으면 DB 페이징 사용
+        // 심볼 키워드 없으면 DB 페이징 사용 (모드에 따라 리포지토리 분기)
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
+        if (isSim) {
+            Page<SimTradeHistory> historyPage = simTradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
+            return PageResponse.from(historyPage, this::toTradeResponse);
+        }
         Page<TradeHistory> historyPage = tradeHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), pageable);
-
         return PageResponse.from(historyPage, this::toTradeResponse);
     }
 
@@ -105,13 +117,16 @@ public class MyPageService {
      */
     public InvestmentHistoryPageResponse getInvestmentHistories(Long userId, InvestmentHistoryRequest request) {
         Sort dbSort = buildSort("createdAt", request.getSort());
+        boolean isSim = resolveMode(request.getMode()) == TradeMode.SIM;
         PageResponse<InvestmentHistoryResponse> pageResponse;
         InvestmentSummaryResponse summary;
 
         // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
         if (hasValue(request.getSymbol())) {
-            List<InvestmentHistory> histories = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                    userId, request.getStartDate(), request.getEndDate(), dbSort);
+            // 모드에 따라 리포지토리 분기
+            List<? extends InvestmentHistory> histories = isSim
+                    ? simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort)
+                    : investmentHistoryRepository.findByUserIdAndCreatedAtBetween(userId, request.getStartDate(), request.getEndDate(), dbSort);
 
             String keyword = request.getSymbol().toUpperCase();
             List<InvestmentHistoryResponse> filtered = histories.stream()
@@ -121,21 +136,30 @@ public class MyPageService {
 
             pageResponse = PageResponse.fromList(filtered, request.getPage(), request.getSize());
 
-            // 심볼 필터 합산 (DB 쿼리)
-            summary = buildSummary(investmentHistoryRepository
-                    .sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
+            // 심볼 필터 합산 (DB 쿼리, 모드에 따라 분기)
+            summary = buildSummary(isSim
+                    ? simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
+                            userId, request.getStartDate(), request.getEndDate(), request.getSymbol())
+                    : investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
                             userId, request.getStartDate(), request.getEndDate(), request.getSymbol()));
         } else {
-            // 심볼 키워드 없으면 DB 페이징 사용
+            // 심볼 키워드 없으면 DB 페이징 사용 (모드에 따라 리포지토리 분기)
             Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-            Page<InvestmentHistory> historyPage = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                    userId, request.getStartDate(), request.getEndDate(), pageable);
+            if (isSim) {
+                Page<SimInvestmentHistory> historyPage = simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                        userId, request.getStartDate(), request.getEndDate(), pageable);
+                pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
+            } else {
+                Page<InvestmentHistory> historyPage = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
+                        userId, request.getStartDate(), request.getEndDate(), pageable);
+                pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
+            }
 
-            pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
-
-            // 전체 합산 (DB 쿼리)
-            summary = buildSummary(investmentHistoryRepository
-                    .sumProfitLossByUserIdAndCreatedAtBetween(
+            // 전체 합산 (DB 쿼리, 모드에 따라 분기)
+            summary = buildSummary(isSim
+                    ? simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
+                            userId, request.getStartDate(), request.getEndDate())
+                    : investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
                             userId, request.getStartDate(), request.getEndDate()));
         }
 
@@ -189,6 +213,16 @@ public class MyPageService {
      */
     private boolean hasValue(String value) {
         return value != null && !value.isBlank();
+    }
+
+    /**
+     * 문자열 모드를 TradeMode 열거형으로 변환한다.
+     *
+     * @param mode 모드 문자열 ("sim" 또는 그 외)
+     * @return TradeMode 열거형 (기본값 MAIN)
+     */
+    private TradeMode resolveMode(String mode) {
+        return "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
     }
 
     // ─────────────────────────────────────────────

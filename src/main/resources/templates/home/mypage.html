@@ -167,6 +167,7 @@
         params.append('sort', sort);
         params.append('page', page);
         params.append('size', PAGE_SIZE);
+        params.append('mode', getTradeMode());
         return params;
     }
 
@@ -364,7 +365,7 @@
         if (!confirm('해당 큐를 삭제하시겠습니까?')) return;
 
         $.ajax({
-            url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol,
+            url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol + '&mode=' + getTradeMode(),
             type: 'DELETE',
             success: function() {
                 // 요약 행 + 상세 행 제거
@@ -417,6 +418,7 @@
         params.append('sort', sort);
         params.append('page', page);
         params.append('size', PAGE_SIZE);
+        params.append('mode', getTradeMode());
         return params;
     }
 
@@ -544,6 +546,7 @@
         params.append('sort', sort);
         params.append('page', page);
         params.append('size', PAGE_SIZE);
+        params.append('mode', getTradeMode());
         return params;
     }
 
@@ -714,6 +717,13 @@
                 }
             }
         }
+    });
+
+    // 거래 모드 변경 시 모든 탭 데이터 재로드
+    $(document).on('tradeModeChanged', function() {
+        searchPatterns();
+        searchTrades();
+        searchInvestments();
     });
 
     // 페이지 로드 시 초기화

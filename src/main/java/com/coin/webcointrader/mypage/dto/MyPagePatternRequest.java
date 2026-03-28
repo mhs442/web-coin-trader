@@ -15,4 +15,5 @@ public class MyPagePatternRequest {
     private String sort = "desc";
     private int page = 0;
     private int size = 20;
+    private String mode = "main";   // 거래 모드 ("main" 또는 "sim")
 }
