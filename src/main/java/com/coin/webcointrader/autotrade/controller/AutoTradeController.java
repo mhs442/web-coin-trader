@@ -5,6 +5,7 @@ import com.coin.webcointrader.autotrade.service.AutoTradeService;
 import com.coin.webcointrader.autotrade.service.PatternQueueService;
 import com.coin.webcointrader.common.dto.UserDTO;
 import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.entity.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -66,7 +67,8 @@ public class AutoTradeController {
                                              @RequestParam String symbol,
                                              @AuthenticationPrincipal UserDTO user) {
         patternQueueService.deleteQueue(user.getId(), id);
-        autoTradeService.syncSession(user.getId(), symbol);
+        // TODO: 프론트에서 tradeMode를 전달받도록 변경 예정 (현재 MAIN 기본값)
+        autoTradeService.syncSession(user.getId(), symbol, TradeMode.MAIN);
         return Map.of("status", "ok");
     }
 
@@ -81,7 +83,8 @@ public class AutoTradeController {
     public PatternQueueResponse togglePattern(@PathVariable Long id,
                                               @AuthenticationPrincipal UserDTO user) {
         PatternQueue toggled = patternQueueService.toggleActive(user.getId(), id);
-        autoTradeService.syncSession(user.getId(), toggled.getSymbol());
+        // TODO: 프론트에서 tradeMode를 전달받도록 변경 예정 (현재 큐의 tradeMode 사용)
+        autoTradeService.syncSession(user.getId(), toggled.getSymbol(), toggled.getTradeMode());
         return toResponse(toggled);
     }
 

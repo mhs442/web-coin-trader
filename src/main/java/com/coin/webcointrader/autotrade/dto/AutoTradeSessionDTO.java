@@ -1,6 +1,7 @@
 package com.coin.webcointrader.autotrade.dto;
 
 import com.coin.webcointrader.common.entity.PatternQueue;
+import com.coin.webcointrader.common.enums.TradeMode;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -18,6 +19,7 @@ import java.util.Map;
 public class AutoTradeSessionDTO {
     private Long userId;
     private String symbol;
+    private TradeMode tradeMode = TradeMode.MAIN;                  // 거래 모드 (MAIN: 실전, SIM: 모의)
     private List<PatternQueue> queues;                              // DB에서 로드한 패턴 큐 목록
     private Map<Long, QueueStateDTO> queueStates = new HashMap<>(); // 큐 ID → 런타임 상태
     private List<String> tradeLog = new ArrayList<>();              // 매매 로그 (최대 50건)

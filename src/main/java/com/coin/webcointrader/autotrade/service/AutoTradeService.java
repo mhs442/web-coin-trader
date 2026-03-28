@@ -17,7 +17,11 @@ import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.market.service.MarketService;
-import com.coin.webcointrader.trade.service.TradeService;
+import com.coin.webcointrader.common.entity.SimTradeHistory;
+import com.coin.webcointrader.common.entity.SimInvestmentHistory;
+import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
+import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
+import com.coin.webcointrader.trade.service.TradeFacade;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,7 +54,9 @@ public class AutoTradeService {
     private final PatternQueueRepository patternQueueRepository;
     private final TradeHistoryRepository tradeHistoryRepository;
     private final InvestmentHistoryRepository investmentHistoryRepository;
-    private final TradeService tradeService;
+    private final SimTradeHistoryRepository simTradeHistoryRepository;
+    private final SimInvestmentHistoryRepository simInvestmentHistoryRepository;
+    private final TradeFacade tradeFacade;
     private final MarketService marketService;
     private final BybitWebSocketClient bybitWebSocketClient;
 
@@ -98,13 +104,14 @@ public class AutoTradeService {
      * 활성 큐가 1개 이상이면 세션을 생성/갱신하고, 0개이면 세션을 제거한다.
      * WebSocket 구독도 함께 동기화한다.
      *
-     * @param userId 사용자 ID
-     * @param symbol 코인 심볼
+     * @param userId    사용자 ID
+     * @param symbol    코인 심볼
+     * @param tradeMode 거래 모드 (MAIN/SIM)
      */
-    public void syncSession(Long userId, String symbol) {
-        // isActive=true인 패턴 큐만 조회
+    public void syncSession(Long userId, String symbol, TradeMode tradeMode) {
+        // isActive=true인 패턴 큐만 조회 (거래 모드별 분리)
         List<PatternQueue> activeQueues = patternQueueRepository
-                .findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(userId, symbol, true, TradeMode.MAIN);
+                .findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(userId, symbol, true, tradeMode);
 
         String key = sessionKey(userId, symbol);
 
@@ -125,6 +132,7 @@ public class AutoTradeService {
                 AutoTradeSessionDTO session = new AutoTradeSessionDTO();
                 session.setUserId(userId);
                 session.setSymbol(symbol);
+                session.setTradeMode(tradeMode);
                 session.setQueues(activeQueues);
                 // 각 큐에 대해 초기 상태 생성
                 syncQueueStates(session, activeQueues);
@@ -440,7 +448,7 @@ public class AutoTradeService {
 
         // 마진 모드를 Isolated로 전환 (Cross 모드 진입 방지)
         try {
-            tradeService.switchToIsolated(session.getUserId());
+            tradeFacade.switchToIsolated(session.getUserId(), session.getTradeMode());
         } catch (Exception e) {
             // Isolated 전환 실패 시 Cross 모드로 주문 방지 → 큐 비활성화
             session.addLog(now() + " [진입 실패] 마진 모드 Isolated 전환 실패 : " + e.getMessage());
@@ -457,7 +465,7 @@ public class AutoTradeService {
                     leverageStr,
                     leverageStr
             );
-            tradeService.setLeverage(leverageRequest, session.getUserId());
+            tradeFacade.setLeverage(leverageRequest, session.getUserId(), session.getTradeMode());
         } catch (Exception e) {
             // 이미 동일 레버리지가 설정된 경우 Bybit이 에러를 반환할 수 있으므로 경고만 로그
             log.warn("레버리지 설정 실패 (계속 진행): {}", e.getMessage());
@@ -497,12 +505,12 @@ public class AutoTradeService {
 
         try {
             // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
-            tradeService.placeOrder(orderRequest, session.getUserId(), history);
+            tradeFacade.placeOrder(orderRequest, session.getUserId(), history, session.getTradeMode());
 
-            // 주문 성공: 이력 저장
+            // 주문 성공: 이력 저장 (모드에 따라 테이블 분기)
             history.setExecutedPrice(new BigDecimal(currentPrice));
             history.setOrderResult(OrderResult.SUCCESS);
-            tradeHistoryRepository.save(history);
+            saveTradeHistory(history, session.getTradeMode());
 
             state.setEntryPrice(currentPrice);
 
@@ -668,17 +676,17 @@ public class AutoTradeService {
                     .build();
 
             // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
-            tradeService.placeOrder(closeRequest, session.getUserId(), history);
+            tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
 
-            // 주문 성공: 이력 저장
+            // 주문 성공: 이력 저장 (모드에 따라 테이블 분기)
             history.setExecutedPrice(new BigDecimal(currentPrice));
             history.setOrderResult(OrderResult.SUCCESS);
-            tradeHistoryRepository.save(history);
+            saveTradeHistory(history, session.getTradeMode());
 
             // 투자 히스토리 저장 (포지션 사이클 완료 기록)
             saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
                     session.getSymbol(), state.getDirection(),
-                    state.getEntryPrice(), currentPrice, actualAmount);
+                    state.getEntryPrice(), currentPrice, actualAmount, session.getTradeMode());
 
             session.addLog(now() + " [매도 성공] " + closeSide + " "
                     + actualAmount.stripTrailingZeros().toPlainString() + "$ "
@@ -747,17 +755,17 @@ public class AutoTradeService {
                     .reduceOnly(true) // 포지션 청산 전용
                     .build();
 
-            tradeService.placeOrder(closeRequest, session.getUserId(), history);
+            tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
 
-            // 청산 주문 성공: 이력 저장
+            // 청산 주문 성공: 이력 저장 (모드에 따라 테이블 분기)
             history.setExecutedPrice(new BigDecimal(currentPrice));
             history.setOrderResult(OrderResult.SUCCESS);
-            tradeHistoryRepository.save(history);
+            saveTradeHistory(history, session.getTradeMode());
 
             // 투자 히스토리 저장 (포지션 사이클 완료 기록)
             saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
                     session.getSymbol(), state.getDirection(),
-                    state.getEntryPrice(), currentPrice, actualAmount);
+                    state.getEntryPrice(), currentPrice, actualAmount, session.getTradeMode());
 
             session.addLog(now() + " [청산 완료] " + closeSide + " "
                     + actualAmount.stripTrailingZeros().toPlainString() + "$ "
@@ -806,6 +814,31 @@ public class AutoTradeService {
     // ─────────────────────────────────────────────
 
     /**
+     * 거래 히스토리를 모드에 따라 적절한 테이블에 저장한다.
+     *
+     * @param history   거래 히스토리
+     * @param tradeMode 거래 모드 (MAIN: trade_history, SIM: sim_trade_history)
+     */
+    private void saveTradeHistory(TradeHistory history, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) {
+            // SimTradeHistory로 변환하여 sim_trade_history 테이블에 저장
+            SimTradeHistory simHistory = new SimTradeHistory();
+            simHistory.setQueueStepId(history.getQueueStepId());
+            simHistory.setUserId(history.getUserId());
+            simHistory.setSymbol(history.getSymbol());
+            simHistory.setSide(history.getSide());
+            simHistory.setAmount(history.getAmount());
+            simHistory.setExecutedPrice(history.getExecutedPrice());
+            simHistory.setOrderType(history.getOrderType());
+            simHistory.setOrderResult(history.getOrderResult());
+            simHistory.setErrorMessage(history.getErrorMessage());
+            simTradeHistoryRepository.save(simHistory);
+        } else {
+            tradeHistoryRepository.save(history);
+        }
+    }
+
+    /**
      * 투자 히스토리를 저장한다. (포지션 진입 → 매도/청산 사이클 완료 기록)
      * 손익금 계산: LONG → (exitPrice - entryPrice) / entryPrice × amount
      *             SHORT → (entryPrice - exitPrice) / entryPrice × amount
@@ -817,10 +850,11 @@ public class AutoTradeService {
      * @param entryPrice    진입가 문자열
      * @param exitPrice     청산가 문자열
      * @param amount        투입 금액
+     * @param tradeMode     거래 모드 (MAIN: investment_history, SIM: sim_investment_history)
      */
     private void saveInvestmentHistory(Long userId, Long patternStepId, String symbol,
                                        Side side, String entryPrice, String exitPrice,
-                                       BigDecimal amount) {
+                                       BigDecimal amount, TradeMode tradeMode) {
         BigDecimal entry = new BigDecimal(entryPrice);
         BigDecimal exit = new BigDecimal(exitPrice);
 
@@ -840,18 +874,35 @@ public class AutoTradeService {
                     .setScale(4, RoundingMode.HALF_UP);
         }
 
-        InvestmentHistory investmentHistory = new InvestmentHistory();
-        investmentHistory.setUserId(userId);
-        investmentHistory.setPatternStepId(patternStepId);
-        investmentHistory.setSymbol(symbol);
-        investmentHistory.setSide(side);
-        investmentHistory.setEntryPrice(entry);
-        investmentHistory.setExitPrice(exit);
-        investmentHistory.setAmount(amount);
-        investmentHistory.setProfitLoss(profitLoss);
+        if (tradeMode == TradeMode.SIM) {
+            // SimInvestmentHistory로 sim_investment_history 테이블에 저장
+            SimInvestmentHistory simHistory = new SimInvestmentHistory();
+            simHistory.setUserId(userId);
+            simHistory.setPatternStepId(patternStepId);
+            simHistory.setSymbol(symbol);
+            simHistory.setSide(side);
+            simHistory.setEntryPrice(entry);
+            simHistory.setExitPrice(exit);
+            simHistory.setAmount(amount);
+            simHistory.setProfitLoss(profitLoss);
+            simInvestmentHistoryRepository.save(simHistory);
 
-        investmentHistoryRepository.save(investmentHistory);
-        log.info("투자 히스토리 저장: symbol={}, side={}, profitLoss={}", symbol, side, profitLoss);
+            // 모의투자 가상 지갑에 손익 반영
+            tradeFacade.applyProfitLoss(userId, amount, profitLoss, tradeMode);
+        } else {
+            InvestmentHistory investmentHistory = new InvestmentHistory();
+            investmentHistory.setUserId(userId);
+            investmentHistory.setPatternStepId(patternStepId);
+            investmentHistory.setSymbol(symbol);
+            investmentHistory.setSide(side);
+            investmentHistory.setEntryPrice(entry);
+            investmentHistory.setExitPrice(exit);
+            investmentHistory.setAmount(amount);
+            investmentHistory.setProfitLoss(profitLoss);
+            investmentHistoryRepository.save(investmentHistory);
+        }
+
+        log.info("투자 히스토리 저장: symbol={}, side={}, profitLoss={}, mode={}", symbol, side, profitLoss, tradeMode);
     }
 
     /**
