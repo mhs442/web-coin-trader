@@ -23,14 +23,15 @@ public class PatternQueueService {
     private final PatternQueueRepository patternQueueRepository;
 
     /**
-     * 특정 사용자/심볼의 패턴 큐 목록을 생성일 오름차순으로 조회한다.
+     * 특정 사용자/심볼/거래모드의 패턴 큐 목록을 생성일 오름차순으로 조회한다.
      *
-     * @param userId 사용자 ID
-     * @param symbol 코인 심볼
+     * @param userId    사용자 ID
+     * @param symbol    코인 심볼
+     * @param tradeMode 거래 모드 (MAIN/SIM)
      * @return 패턴 큐 목록 (createdAt 오름차순)
      */
-    public List<PatternQueue> getQueues(Long userId, String symbol) {
-        return patternQueueRepository.findByUserIdAndSymbolAndTradeModeOrderByCreatedAtAsc(userId, symbol, TradeMode.MAIN);
+    public List<PatternQueue> getQueues(Long userId, String symbol, TradeMode tradeMode) {
+        return patternQueueRepository.findByUserIdAndSymbolAndTradeModeOrderByCreatedAtAsc(userId, symbol, tradeMode);
     }
 
     /**
@@ -59,7 +60,9 @@ public class PatternQueueService {
         validateSteps(request.getSteps());
 
         // 심볼당 최대 20개 제한
-        long count = patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, request.getSymbol(), TradeMode.MAIN);
+        // 거래 모드별 큐 개수 검증
+        TradeMode mode = "SIM".equalsIgnoreCase(request.getTradeMode()) ? TradeMode.SIM : TradeMode.MAIN;
+        long count = patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, request.getSymbol(), mode);
         if (count >= 20) {
             throw new CustomException(ExceptionMessage.EXCEED_MAX_QUEUES);
         }
@@ -70,6 +73,12 @@ public class PatternQueueService {
         queue.setSymbol(request.getSymbol());
         queue.setTriggerRate(request.getTriggerRate());
         queue.setActive(false);
+        // 거래 모드 설정 (프론트에서 전달, 없으면 MAIN)
+        if ("SIM".equalsIgnoreCase(request.getTradeMode())) {
+            queue.setTradeMode(TradeMode.SIM);
+        } else {
+            queue.setTradeMode(TradeMode.MAIN);
+        }
 
         // 단계 → 패턴 → 블록 계층 구조 생성
         for (AddPatternRequest.StepRequest stepReq : request.getSteps()) {

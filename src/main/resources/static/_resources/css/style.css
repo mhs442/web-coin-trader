@@ -78,6 +78,79 @@ body {
 }
 
 /* =========================================
+   Trade Mode Toggle (실전/모의 전환)
+   ========================================= */
+.trade-mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: auto; /* 왼쪽 정렬 (잔고는 오른쪽 유지) */
+}
+
+.trade-mode-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #4caf50;
+    min-width: 28px;
+}
+
+/* 토글 스위치 */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 20px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #4caf50;
+    border-radius: 20px;
+    transition: background-color 0.3s;
+}
+
+.toggle-slider:before {
+    content: "";
+    position: absolute;
+    height: 14px;
+    width: 14px;
+    left: 3px;
+    bottom: 3px;
+    background-color: #fff;
+    border-radius: 50%;
+    transition: transform 0.3s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: #ff9800;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+}
+
+/* 모의 모드 시 헤더 배경색 변경 */
+.wallet-header.sim-mode {
+    background-color: #2e1a0e;
+    border-bottom-color: #4a2a0a;
+}
+
+.wallet-header.sim-mode .trade-mode-label {
+    color: #ff9800;
+}
+
+/* =========================================
    Dashboard Styles (대시보드)
    ========================================= */
 .market-overview-container {

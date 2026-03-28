@@ -1,8 +1,16 @@
 <!DOCTYPE html>
 <html lang="ko" xmlns:th="http://www.thymeleaf.org">
 <body>
-<!-- 공통 헤더: 지갑 잔고 + 갱신 카운트다운 -->
+<!-- 공통 헤더: 거래 모드 토글 + 지갑 잔고 + 갱신 카운트다운 -->
 <div th:fragment="walletHeader" class="wallet-header" id="wallet-header">
+    <!-- 실전/모의 모드 토글 -->
+    <div class="trade-mode-toggle">
+        <span class="trade-mode-label" id="trade-mode-label">실전</span>
+        <label class="toggle-switch">
+            <input type="checkbox" id="trade-mode-switch">
+            <span class="toggle-slider"></span>
+        </label>
+    </div>
     <div class="wallet-info">
         <span class="wallet-label">총 자산</span>
         <span class="wallet-balance" id="wallet-total-equity">--</span>
@@ -19,6 +27,17 @@
     </div>
 
     <script>
+        // 전역 거래 모드 ('main' 또는 'sim') — 다른 페이지에서도 참조 가능
+        window.tradeMode = 'main';
+
+        /**
+         * 현재 거래 모드를 반환한다.
+         * @returns {string} 'main' 또는 'sim'
+         */
+        window.getTradeMode = function() {
+            return window.tradeMode;
+        };
+
         (function() {
             const POLL_INTERVAL = 5; // 초
             let countdown = POLL_INTERVAL;
@@ -26,11 +45,13 @@
 
             /**
              * 지갑 잔고 API를 호출하여 헤더에 표시한다.
+             * 현재 거래 모드(main/sim)에 따라 실전 또는 가상 지갑 잔고를 조회한다.
              */
             function fetchWalletBalance() {
                 $.ajax({
                     url: '/api/wallet/balance',
                     method: 'GET',
+                    data: { mode: window.tradeMode },
                     success: function(data) {
                         if (data && data.result && data.result.list && data.result.list.length > 0) {
                             const account = data.result.list[0];
@@ -96,6 +117,28 @@
             $(document).ready(function() {
                 fetchWalletBalance();
                 startCountdown();
+
+                // 거래 모드 토글 이벤트
+                $('#trade-mode-switch').on('change', function() {
+                    var isSim = $(this).is(':checked');
+                    window.tradeMode = isSim ? 'sim' : 'main';
+
+                    // 모드 라벨 변경
+                    $('#trade-mode-label').text(isSim ? '모의' : '실전');
+
+                    // 헤더 배경색 변경 (모의 모드 시각적 구분)
+                    if (isSim) {
+                        $('#wallet-header').addClass('sim-mode');
+                    } else {
+                        $('#wallet-header').removeClass('sim-mode');
+                    }
+
+                    // 즉시 잔고 갱신
+                    fetchWalletBalance();
+
+                    // 모드 변경 이벤트 발행 (다른 페이지에서 수신 가능)
+                    $(document).trigger('tradeModeChanged', [window.tradeMode]);
+                });
             });
         })();
     </script>

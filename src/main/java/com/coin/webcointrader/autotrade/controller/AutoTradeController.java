@@ -29,13 +29,16 @@ public class AutoTradeController {
      * 큐 목록 조회
      *
      * @param symbol 코인 심볼
+     * @param mode   거래 모드 ("main" 또는 "sim", 기본값 "main")
      * @param user   로그인 사용자
      * @return 패턴 큐 목록
      */
     @GetMapping("/patterns")
     public List<PatternQueueResponse> getPatterns(@RequestParam String symbol,
+                                                  @RequestParam(defaultValue = "main") String mode,
                                                   @AuthenticationPrincipal UserDTO user) {
-        return patternQueueService.getQueues(user.getId(), symbol).stream()
+        TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
+        return patternQueueService.getQueues(user.getId(), symbol, tradeMode).stream()
                 .map(this::toResponse)
                 .toList();
     }
@@ -59,16 +62,18 @@ public class AutoTradeController {
      *
      * @param id     큐 ID
      * @param symbol 코인 심볼
+     * @param mode   거래 모드 ("main" 또는 "sim", 기본값 "main")
      * @param user   로그인 사용자
      * @return 삭제 결과
      */
     @DeleteMapping("/patterns/{id}")
     public Map<String, String> deletePattern(@PathVariable Long id,
                                              @RequestParam String symbol,
+                                             @RequestParam(defaultValue = "main") String mode,
                                              @AuthenticationPrincipal UserDTO user) {
+        TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
         patternQueueService.deleteQueue(user.getId(), id);
-        // TODO: 프론트에서 tradeMode를 전달받도록 변경 예정 (현재 MAIN 기본값)
-        autoTradeService.syncSession(user.getId(), symbol, TradeMode.MAIN);
+        autoTradeService.syncSession(user.getId(), symbol, tradeMode);
         return Map.of("status", "ok");
     }
 
@@ -83,7 +88,6 @@ public class AutoTradeController {
     public PatternQueueResponse togglePattern(@PathVariable Long id,
                                               @AuthenticationPrincipal UserDTO user) {
         PatternQueue toggled = patternQueueService.toggleActive(user.getId(), id);
-        // TODO: 프론트에서 tradeMode를 전달받도록 변경 예정 (현재 큐의 tradeMode 사용)
         autoTradeService.syncSession(user.getId(), toggled.getSymbol(), toggled.getTradeMode());
         return toResponse(toggled);
     }

@@ -177,6 +177,11 @@
             loadChart('1');
             loadOrderBook();
             loadPatterns();
+
+            // 거래 모드 변경 시 큐 목록 재조회
+            $(document).on('tradeModeChanged', function() {
+                loadPatterns();
+            });
         });
 
         function loadChart(interval) {
@@ -592,7 +597,7 @@
             $.ajax({
                 url: '/api/autotrade/patterns',
                 type: 'GET',
-                data: { symbol: symbol },
+                data: { symbol: symbol, mode: getTradeMode() },
                 success: function(data) {
                     renderServerQueues(data);
                     // 큐 카드 렌더링 완료 후 활성 단계 하이라이트 적용
@@ -989,9 +994,10 @@
                 return;
             }
 
-            // 큐 데이터 구성
+            // 큐 데이터 구성 (현재 거래 모드 포함)
             const queueData = {
                 symbol: symbol,
+                tradeMode: getTradeMode().toUpperCase(),
                 triggerRate: parseFloat(triggerRate),
                 steps: queueSteps.map((step, stepIdx) => ({
                     stepOrder: stepIdx + 1,
@@ -1059,7 +1065,7 @@
             $.ajax({
                 url: '/api/autotrade/patterns/' + id,
                 type: 'DELETE',
-                data: { symbol: symbol },
+                data: { symbol: symbol, mode: getTradeMode() },
                 success: function() {
                     // loadPatterns 성공 콜백에서 checkAutoTradeStatus 호출
                     loadPatterns();
