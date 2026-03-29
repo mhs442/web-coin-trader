@@ -685,11 +685,11 @@
         }
     }
 
-    // 윈도우 스크롤 이벤트: 하단 도달 시 현재 활성 탭의 다음 페이지 로드
-    window.addEventListener('scroll', function () {
-        const scrollTop = window.scrollY || document.documentElement.scrollTop;
-        const scrollHeight = document.documentElement.scrollHeight;
-        const clientHeight = window.innerHeight;
+    // 마이페이지 컨테이너 스크롤 이벤트: 하단 도달 시 현재 활성 탭의 다음 페이지 로드
+    document.querySelector('.mypage-container').addEventListener('scroll', function () {
+        const scrollTop = this.scrollTop;
+        const scrollHeight = this.scrollHeight;
+        const clientHeight = this.clientHeight;
 
         // 하단 100px 이내 도달 시 다음 페이지 로드
         if (scrollTop + clientHeight >= scrollHeight - 100) {

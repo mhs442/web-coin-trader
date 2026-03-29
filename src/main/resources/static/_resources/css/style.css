@@ -4,6 +4,10 @@ body {
     padding: 0;
     background-color: #f8f9fa;
     color: #212529;
+    height: 100vh;
+    overflow: hidden;              /* 전체 페이지 스크롤 방지 — 콘텐츠 영역 내부에서만 스크롤 */
+    display: flex;
+    flex-direction: column;
 }
 
 /* =========================================
@@ -19,6 +23,7 @@ body {
     color: #e0e0e0;
     font-size: 13px;
     border-bottom: 1px solid #2a2a4a;
+    flex-shrink: 0;                /* 헤더 높이 고정 — 콘텐츠에 밀려 줄어들지 않음 */
 }
 
 .wallet-info {
@@ -157,6 +162,11 @@ body {
     padding: 24px 32px;
     max-width: 1400px;
     margin: 0 auto;
+    flex: 1;                       /* 헤더 아래 남은 공간 모두 사용 */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;              /* 내부 스크롤 영역에 위임 */
+    min-height: 0;                 /* flex 자식 overflow 허용 */
 }
 
 .dashboard-header {
@@ -164,6 +174,7 @@ body {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 24px;
+    flex-shrink: 0;                /* 헤더 영역 높이 고정 */
 }
 
 .market-overview-container h1 {
@@ -194,13 +205,17 @@ body {
     border-radius: 8px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
     overflow: hidden;
+    flex: 1;                       /* 대시보드 컨테이너 내 남은 공간 차지 */
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 /* 대시보드 스크롤 영역 (무한 스크롤) */
 .dashboard-scroll-wrapper {
-    max-height: calc(100vh - 120px);
+    flex: 1;                       /* 남은 공간 모두 차지 */
     overflow-y: auto;
-    overflow: auto;
+    min-height: 0;                 /* flex 자식 overflow 허용 */
 }
 
 .market-table {
@@ -265,9 +280,10 @@ body {
    ========================================= */
 .trade-layout-container {
     display: flex;
-    height: 100vh; /* 화면 전체 높이 사용 */
+    flex: 1;                       /* 헤더 아래 남은 공간 사용 */
     width: 100%;
-    overflow: hidden; /* 전체 페이지 스크롤 방지 */
+    overflow: hidden;              /* 전체 페이지 스크롤 방지 */
+    min-height: 0;                 /* flex 자식 overflow 허용 */
 }
 
 /* 메인 콘텐츠 영역 (차트 포함) */
@@ -1244,8 +1260,13 @@ body {
    ========================================= */
 .mypage-container {
     padding: 24px 32px;
-    max-width: 1200px;
-    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+    flex: 1;                       /* 헤더 아래 남은 공간 모두 사용 */
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;              /* 마이페이지 내부 스크롤 */
+    min-height: 0;                 /* flex 자식 overflow 허용 */
 }
 
 .mypage-header {
