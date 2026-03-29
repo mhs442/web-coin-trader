@@ -4,9 +4,9 @@
   "settings": {
     "width": 2000,
     "height": 2000,
-    "scrollTop": -132.7325,
-    "scrollLeft": -137.2139,
-    "zoomLevel": 0.85,
+    "scrollTop": -1227.558,
+    "scrollLeft": -294,
+    "zoomLevel": 0.94,
     "show": 511,
     "database": 1,
     "databaseName": "",
@@ -108,7 +108,8 @@
           "B6plb0vMNPy0YP-Ufy4TG",
           "molZC8PUXwJdaKYfEveqf",
           "Y-XK-n4s_bVBQyk-88J3Q",
-          "g6-3Q9q6EqQIcoIbq-1F5"
+          "g6-3Q9q6EqQIcoIbq-1F5",
+          "tP8FvsEbhjfwENu0KS20_"
         ],
         "seqColumnIds": [
           "_qjnXIe6LQmwp_Y7AQG5r",
@@ -123,7 +124,8 @@
           "B6plb0vMNPy0YP-Ufy4TG",
           "molZC8PUXwJdaKYfEveqf",
           "Y-XK-n4s_bVBQyk-88J3Q",
-          "g6-3Q9q6EqQIcoIbq-1F5"
+          "g6-3Q9q6EqQIcoIbq-1F5",
+          "tP8FvsEbhjfwENu0KS20_"
         ],
         "ui": {
           "x": 36.0488,
@@ -134,7 +136,7 @@
           "color": ""
         },
         "meta": {
-          "updateAt": 1774366764312,
+          "updateAt": 1774771934601,
           "createAt": 1772963637926
         }
       },
@@ -247,9 +249,10 @@
           "WMkK6MQhypEuQMEcq7gu6",
           "UfHKoV2s_kdjfKgDF1Y1C",
           "lNKrVaM15T_xVTc7WzVVZ",
-          "FkspqfKp7KG0wvCTt91AG",
+          "csZXmoNk0ebdDV4ZdN5xU",
           "tDCi0nfYHnOjQgjuJyQU3",
           "zczZFJvFamEWPMjQ0znqJ",
+          "FkspqfKp7KG0wvCTt91AG",
           "kGP0OxFpluSPmFB3oI0R_"
         ],
         "seqColumnIds": [
@@ -261,22 +264,23 @@
           "WMkK6MQhypEuQMEcq7gu6",
           "UfHKoV2s_kdjfKgDF1Y1C",
           "lNKrVaM15T_xVTc7WzVVZ",
-          "FkspqfKp7KG0wvCTt91AG",
+          "csZXmoNk0ebdDV4ZdN5xU",
           "tDCi0nfYHnOjQgjuJyQU3",
           "zczZFJvFamEWPMjQ0znqJ",
+          "FkspqfKp7KG0wvCTt91AG",
           "kGP0OxFpluSPmFB3oI0R_",
           "v21lJhkunDU8FXhNsU9Hi"
         ],
         "ui": {
-          "x": 795.6663,
-          "y": 1226.7918,
+          "x": 759.4961,
+          "y": 1198.0684,
           "zIndex": 147,
           "widthName": 77,
           "widthComment": 68,
           "color": "#2196F3"
         },
         "meta": {
-          "updateAt": 1774537320493,
+          "updateAt": 1774772521855,
           "createAt": 1772965150147
         }
       },
@@ -325,12 +329,12 @@
           "Yw0OvJUq22GOtGoEWVfVR",
           "F7KDYqiYaffVSy_Le7RYM",
           "AfwW7NHwHAhdyYNdK5udx",
-          "ZNVjAqIMl7JO0efeN4Q9y",
-          "0vzI2_L80WvqG3jQsCSgr",
           "JNBTXuZpqcepdpVmsjjFF",
           "B911zkHMfk_YKY9QHCBQA",
           "N15BdwLmvJw4fPdZP2hP6",
-          "YLBphxXUVomspE5AfFaOC"
+          "YLBphxXUVomspE5AfFaOC",
+          "ZNVjAqIMl7JO0efeN4Q9y",
+          "0vzI2_L80WvqG3jQsCSgr"
         ],
         "seqColumnIds": [
           "bBC41s2Fuo9rHnM74lvpv",
@@ -338,13 +342,13 @@
           "Yw0OvJUq22GOtGoEWVfVR",
           "F7KDYqiYaffVSy_Le7RYM",
           "AfwW7NHwHAhdyYNdK5udx",
-          "ZNVjAqIMl7JO0efeN4Q9y",
-          "0vzI2_L80WvqG3jQsCSgr",
           "JNBTXuZpqcepdpVmsjjFF",
           "TrOuIRqVtwuXpx9YPG9PY",
           "B911zkHMfk_YKY9QHCBQA",
           "N15BdwLmvJw4fPdZP2hP6",
-          "YLBphxXUVomspE5AfFaOC"
+          "YLBphxXUVomspE5AfFaOC",
+          "ZNVjAqIMl7JO0efeN4Q9y",
+          "0vzI2_L80WvqG3jQsCSgr"
         ],
         "ui": {
           "x": 1444.184,
@@ -355,7 +359,7 @@
           "color": "#2196F3"
         },
         "meta": {
-          "updateAt": 1774536736494,
+          "updateAt": 1774772286859,
           "createAt": 1774265044074
         }
       },
@@ -428,6 +432,8 @@
           "1AnAPBVIgTOK4aPzGdLnf",
           "DY4HP3fQi0WRzl_t_r9_5",
           "iGYhh4Yg-Ov9N_pzb7rDL",
+          "bNDHkQkKN-fLoAmq1YsGG",
+          "elbhCzqLj2CyZVLJE5FIp",
           "gLJkvU4I1Qhd0Ochdqyvh",
           "s7T6PEcHIx5iDSSoPfuZ7",
           "Z6FKG3WzdFyRj36rWnBcr",
@@ -441,21 +447,23 @@
           "1AnAPBVIgTOK4aPzGdLnf",
           "DY4HP3fQi0WRzl_t_r9_5",
           "iGYhh4Yg-Ov9N_pzb7rDL",
+          "bNDHkQkKN-fLoAmq1YsGG",
+          "elbhCzqLj2CyZVLJE5FIp",
           "gLJkvU4I1Qhd0Ochdqyvh",
           "s7T6PEcHIx5iDSSoPfuZ7",
           "Z6FKG3WzdFyRj36rWnBcr",
           "9ZTUBlgtK1IYE9upV-_20"
         ],
         "ui": {
-          "x": 714.4973,
-          "y": 808.9327,
+          "x": 713.4335,
+          "y": 769.5711,
           "zIndex": 349,
           "widthName": 104,
           "widthComment": 113,
           "color": "#FFEB3B"
         },
         "meta": {
-          "updateAt": 1774538145491,
+          "updateAt": 1774772858853,
           "createAt": 1774537349681
         }
       },
@@ -2187,20 +2195,20 @@
       "gLJkvU4I1Qhd0Ochdqyvh": {
         "id": "gLJkvU4I1Qhd0Ochdqyvh",
         "tableId": "LPKhXbd0sSZ3EDUGmIZnF",
-        "name": "order_type",
+        "name": "order_result",
         "comment": "주문 결과",
         "dataType": "varchar(10)",
         "default": "",
         "options": 8,
         "ui": {
           "keys": 0,
-          "widthName": 64,
+          "widthName": 71,
           "widthComment": 60,
           "widthDataType": 67,
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1774537618703,
+          "updateAt": 1774772446668,
           "createAt": 1774537601515
         }
       },
@@ -2271,16 +2279,16 @@
         "comment": "모의 투자 히스토리 id",
         "dataType": "bigint",
         "default": "",
-        "options": 9,
+        "options": 11,
         "ui": {
-          "keys": 0,
+          "keys": 1,
           "widthName": 60,
           "widthComment": 106,
           "widthDataType": 60,
           "widthDefault": 60
         },
         "meta": {
-          "updateAt": 1774537851813,
+          "updateAt": 1774772475638,
           "createAt": 1774537768070
         }
       },
@@ -2483,6 +2491,86 @@
           "updateAt": 1774538130227,
           "createAt": 1774538109605
         }
+      },
+      "tP8FvsEbhjfwENu0KS20_": {
+        "id": "tP8FvsEbhjfwENu0KS20_",
+        "tableId": "j2wp-uA3o4JclVYORRM8L",
+        "name": "trade_mode",
+        "comment": "거래 모드 (MAIN/SIM)",
+        "dataType": "varchar(10)",
+        "default": "'MAIN'",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 70,
+          "widthComment": 115,
+          "widthDataType": 67,
+          "widthDefault": 60
+        },
+        "meta": {
+          "updateAt": 1774771966402,
+          "createAt": 1774771934600
+        }
+      },
+      "csZXmoNk0ebdDV4ZdN5xU": {
+        "id": "csZXmoNk0ebdDV4ZdN5xU",
+        "tableId": "MrDtBus79nrT4FbyLYIev",
+        "name": "order_type",
+        "comment": "주문 유형 (ENTRY, SELL, LIQUIDATION)",
+        "dataType": "varchar(20)",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 64,
+          "widthComment": 215,
+          "widthDataType": 68,
+          "widthDefault": 60
+        },
+        "meta": {
+          "updateAt": 1774772225912,
+          "createAt": 1774772158139
+        }
+      },
+      "bNDHkQkKN-fLoAmq1YsGG": {
+        "id": "bNDHkQkKN-fLoAmq1YsGG",
+        "tableId": "LPKhXbd0sSZ3EDUGmIZnF",
+        "name": "order_id",
+        "comment": "주문 id (SIM- 접두어)",
+        "dataType": "varchar(100)",
+        "default": "",
+        "options": 0,
+        "ui": {
+          "keys": 0,
+          "widthName": 60,
+          "widthComment": 111,
+          "widthDataType": 74,
+          "widthDefault": 60
+        },
+        "meta": {
+          "updateAt": 1774772390542,
+          "createAt": 1774772359182
+        }
+      },
+      "elbhCzqLj2CyZVLJE5FIp": {
+        "id": "elbhCzqLj2CyZVLJE5FIp",
+        "tableId": "LPKhXbd0sSZ3EDUGmIZnF",
+        "name": "order_type",
+        "comment": "주문 유형 (ENTRY, SELL, LIQUIDATION)",
+        "dataType": "varchar(20)",
+        "default": "",
+        "options": 8,
+        "ui": {
+          "keys": 0,
+          "widthName": 64,
+          "widthComment": 215,
+          "widthDataType": 68,
+          "widthDefault": 60
+        },
+        "meta": {
+          "updateAt": 1774772424339,
+          "createAt": 1774772390858
+        }
       }
     },
     "relationshipEntities": {
@@ -2525,7 +2613,7 @@
             "_qjnXIe6LQmwp_Y7AQG5r"
           ],
           "x": 334.0488,
-          "y": 832.0702,
+          "y": 856.0702,
           "direction": 8
         },
         "end": {
