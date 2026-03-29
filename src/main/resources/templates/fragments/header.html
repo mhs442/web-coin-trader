@@ -27,8 +27,8 @@
     </div>
 
     <script>
-        // 전역 거래 모드 ('main' 또는 'sim') — 다른 페이지에서도 참조 가능
-        window.tradeMode = 'main';
+        // 전역 거래 모드 ('main' 또는 'sim') — localStorage로 페이지 이동 시에도 유지
+        window.tradeMode = localStorage.getItem('tradeMode') || 'main';
 
         /**
          * 현재 거래 모드를 반환한다.
@@ -118,10 +118,20 @@
                 fetchWalletBalance();
                 startCountdown();
 
+                // localStorage 값에 따라 토글 UI 상태 복원
+                if (window.tradeMode === 'sim') {
+                    $('#trade-mode-switch').prop('checked', true);
+                    $('#trade-mode-label').text('모의');
+                    $('#wallet-header').addClass('sim-mode');
+                }
+
                 // 거래 모드 토글 이벤트
                 $('#trade-mode-switch').on('change', function() {
                     var isSim = $(this).is(':checked');
                     window.tradeMode = isSim ? 'sim' : 'main';
+
+                    // localStorage에 저장 (페이지 이동 시에도 유지)
+                    localStorage.setItem('tradeMode', window.tradeMode);
 
                     // 모드 라벨 변경
                     $('#trade-mode-label').text(isSim ? '모의' : '실전');
