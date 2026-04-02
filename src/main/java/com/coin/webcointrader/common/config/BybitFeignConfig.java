@@ -1,6 +1,7 @@
 package com.coin.webcointrader.common.config;
 
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import feign.RequestInterceptor;
@@ -47,7 +48,7 @@ public class BybitFeignConfig {
                                      String apiKey, String apiSecret) {
         String queryString = template.queryLine().startsWith("?") ? template.queryLine().substring(1) : template.queryLine();
         String body = template.body() != null ? new String(template.body(), StandardCharsets.UTF_8) : "";
-        log.debug("[Bybit API 호출 데이터] = {} {} body={}", template.method(), template.url(), body);
+        log.debug(LogMessage.BYBIT_API_CALL_DATA.getMessage(), template.method(), template.url(), body);
 
         // Bybit V5 서명 규칙: timestamp + apiKey + recvWindow + (queryString or body)
         String str2Sign = timestamp + apiKey + recvWindow + queryString + body;

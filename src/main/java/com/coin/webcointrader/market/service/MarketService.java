@@ -8,6 +8,7 @@ import com.coin.webcointrader.common.dto.response.GetInstrumentsInfoResponse;
 import com.coin.webcointrader.common.dto.response.GetKlineResponse;
 import com.coin.webcointrader.common.dto.response.OrderBookResponse;
 import com.coin.webcointrader.common.enums.Category;
+import com.coin.webcointrader.common.enums.LogMessage;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +42,7 @@ public class MarketService {
     @PostConstruct
     public void init() {
         bybitWebSocketClient.setTickerCallback(this::onTickerUpdate);
-        log.info("WebSocket 티커 콜백 등록 완료");
+        log.info(LogMessage.WS_TICKER_CALLBACK_REGISTERED.getMessage());
         refreshQtyStepCache();
     }
 
@@ -186,10 +187,10 @@ public class MarketService {
                         qtyStepCache.put(info.getSymbol(), info.getLotSizeFilter().getQtyStep());
                     }
                 }
-                log.info("qtyStep 캐시 초기화 완료: {}개 종목", qtyStepCache.size());
+                log.info(LogMessage.QTY_STEP_CACHE_INIT_SUCCESS.getMessage(), qtyStepCache.size());
             }
         } catch (Exception e) {
-            log.error("qtyStep 캐시 초기화 실패: {}", e.getMessage());
+            log.error(LogMessage.QTY_STEP_CACHE_INIT_FAILED.getMessage(), e.getMessage());
         }
     }
 
@@ -224,7 +225,7 @@ public class MarketService {
     public String convertUsdtToQty(String symbol, BigDecimal usdtAmount, BigDecimal currentPrice) {
         String qtyStepStr = getQtyStep(symbol);
         if (qtyStepStr == null) {
-            log.error("qtyStep 조회 실패: symbol={}", symbol);
+            log.error(LogMessage.QTY_STEP_LOOKUP_FAILED.getMessage(), symbol);
             return null;
         }
 
@@ -240,7 +241,7 @@ public class MarketService {
 
         // 최소 수량 체크 (0 이하면 주문 불가)
         if (qty.compareTo(BigDecimal.ZERO) <= 0) {
-            log.warn("변환 결과 수량이 0: symbol={}, usdtAmount={}, currentPrice={}, qtyStep={}",
+            log.warn(LogMessage.QTY_CONVERT_ZERO.getMessage(),
                     symbol, usdtAmount, currentPrice, qtyStep);
             return null;
         }
@@ -299,7 +300,7 @@ public class MarketService {
             try {
                 listener.accept(symbol, price);
             } catch (Exception e) {
-                log.error("가격 리스너 오류: symbol={}, error={}", symbol, e.getMessage());
+                log.error(LogMessage.PRICE_LISTENER_ERROR.getMessage(), symbol, e.getMessage());
             }
         }
     }

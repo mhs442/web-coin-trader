@@ -13,6 +13,7 @@ import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.Category;
+import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeOrderType;
@@ -71,7 +72,7 @@ public class AutoTradeService {
     @PostConstruct
     public void init() {
         marketService.addPriceListener(this::onPriceUpdate);
-        log.info("자동매매 WebSocket 가격 리스너 등록 완료");
+        log.info(LogMessage.AUTO_TRADE_LISTENER_REGISTERED.getMessage());
     }
 
     /**
@@ -92,7 +93,7 @@ public class AutoTradeService {
                 try {
                     processSessionWithPrice(session, newPrice);
                 } catch (Exception e) {
-                    log.error("자동매매 WS 처리 오류: symbol={}, error={}", symbol, e.getMessage());
+                    log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), symbol, e.getMessage());
                     session.addLog(now() + " [오류] " + e.getMessage());
                 }
             }
@@ -113,11 +114,11 @@ public class AutoTradeService {
         List<PatternQueue> activeQueues = patternQueueRepository
                 .findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(userId, symbol, true, tradeMode);
 
-        String key = sessionKey(userId, symbol);
+        String key = sessionKey(userId, symbol, tradeMode);
 
         if (activeQueues.isEmpty()) {
             if (activeSessions.remove(key) != null) {
-                log.info("자동매매 중지: userId={}, symbol={} (활성 큐 없음)", userId, symbol);
+                log.info(LogMessage.AUTO_TRADE_STOPPED.getMessage(), userId, symbol);
             }
         } else {
             AutoTradeSessionDTO existing = activeSessions.get(key);
@@ -126,7 +127,7 @@ public class AutoTradeService {
                 existing.setQueues(activeQueues);
                 syncQueueStates(existing, activeQueues);
                 existing.addLog(now() + " [갱신] 활성 큐 " + activeQueues.size() + "개로 갱신");
-                log.info("자동매매 세션 갱신: userId={}, symbol={}, 큐 {}개", userId, symbol, activeQueues.size());
+                log.info(LogMessage.AUTO_TRADE_SESSION_REFRESHED.getMessage(), userId, symbol, activeQueues.size());
             } else {
                 // 신규 세션 생성
                 AutoTradeSessionDTO session = new AutoTradeSessionDTO();
@@ -137,7 +138,7 @@ public class AutoTradeService {
                 // 각 큐에 대해 초기 상태 생성
                 syncQueueStates(session, activeQueues);
                 activeSessions.put(key, session);
-                log.info("자동매매 시작: userId={}, symbol={}, 큐 {}개", userId, symbol, activeQueues.size());
+                log.info(LogMessage.AUTO_TRADE_STARTED.getMessage(), userId, symbol, activeQueues.size());
             }
         }
 
@@ -152,19 +153,20 @@ public class AutoTradeService {
      * @param symbol 코인 심볼
      * @return 활성 세션이 존재하면 true
      */
-    public boolean isActive(Long userId, String symbol) {
-        return activeSessions.containsKey(sessionKey(userId, symbol));
+    public boolean isActive(Long userId, String symbol, TradeMode tradeMode) {
+        return activeSessions.containsKey(sessionKey(userId, symbol, tradeMode));
     }
 
     /**
      * 자동매매 세션 정보를 반환한다.
      *
-     * @param userId 사용자 ID
-     * @param symbol 코인 심볼
+     * @param userId    사용자 ID
+     * @param symbol    코인 심볼
+     * @param tradeMode 거래 모드
      * @return 활성 세션 DTO, 존재하지 않으면 null
      */
-    public AutoTradeSessionDTO getSession(Long userId, String symbol) {
-        return activeSessions.get(sessionKey(userId, symbol));
+    public AutoTradeSessionDTO getSession(Long userId, String symbol, TradeMode tradeMode) {
+        return activeSessions.get(sessionKey(userId, symbol, tradeMode));
     }
 
 
@@ -172,18 +174,19 @@ public class AutoTradeService {
      * 자동매매 상태 응답을 생성한다.
      * WebSocket 실시간 가격을 기반으로 트리거 경과시간/변동률을 계산한다.
      *
-     * @param userId 사용자 ID
-     * @param symbol 코인 심볼
+     * @param userId    사용자 ID
+     * @param symbol    코인 심볼
+     * @param tradeMode 거래 모드
      * @return 자동매매 상태 응답
      */
-    public AutoTradeStatusResponse getStatusResponse(Long userId, String symbol) {
-        if (!isActive(userId, symbol)) {
+    public AutoTradeStatusResponse getStatusResponse(Long userId, String symbol, TradeMode tradeMode) {
+        if (!isActive(userId, symbol, tradeMode)) {
             return AutoTradeStatusResponse.builder()
                     .active(false)
                     .build();
         }
 
-        AutoTradeSessionDTO session = getSession(userId, symbol);
+        AutoTradeSessionDTO session = getSession(userId, symbol, tradeMode);
         if (session.getQueues().isEmpty()) {
             return AutoTradeStatusResponse.builder().active(false).build();
         }
@@ -272,7 +275,7 @@ public class AutoTradeService {
             try {
                 processSession(session, tickers);
             } catch (Exception e) {
-                log.error("자동매매 tick 오류: symbol={}, error={}", session.getSymbol(), e.getMessage());
+                log.error(LogMessage.AUTO_TRADE_TICK_ERROR.getMessage(), session.getSymbol(), e.getMessage());
                 session.addLog(now() + " [오류] " + e.getMessage());
             }
         }
@@ -452,7 +455,7 @@ public class AutoTradeService {
         } catch (Exception e) {
             // Isolated 전환 실패 시 Cross 모드로 주문 방지 → 큐 비활성화
             session.addLog(now() + " [진입 실패] 마진 모드 Isolated 전환 실패 : " + e.getMessage());
-            log.error("마진 모드 전환 실패 : queue={}, error={}", queue.getId(), e.getMessage());
+            log.error(LogMessage.MARGIN_MODE_SWITCH_FAILED.getMessage(), queue.getId(), e.getMessage());
             deactivateQueue(queue, state, session, "마진 모드 전환 실패: " + e.getMessage());
             return;
         }
@@ -468,7 +471,7 @@ public class AutoTradeService {
             tradeFacade.setLeverage(leverageRequest, session.getUserId(), session.getTradeMode());
         } catch (Exception e) {
             // 이미 동일 레버리지가 설정된 경우 Bybit이 에러를 반환할 수 있으므로 경고만 로그
-            log.warn("레버리지 설정 실패 (계속 진행): {}", e.getMessage());
+            log.warn(LogMessage.LEVERAGE_SET_FAILED.getMessage(), e.getMessage());
         }
 
         // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
@@ -526,7 +529,7 @@ public class AutoTradeService {
         } catch (Exception e) {
             // 주문 실패 (TradeService에서 이미 history 저장 완료) → 큐 비활성화
             session.addLog(now() + " [진입 실패] " + e.getMessage());
-            log.error("포지션 진입 실패: queue={}, error={}", queue.getId(), e.getMessage());
+            log.error(LogMessage.POSITION_ENTRY_FAILED.getMessage(), queue.getId(), e.getMessage());
             deactivateQueue(queue, state, session, "주문 실패: " + e.getMessage());
         }
     }
@@ -902,7 +905,7 @@ public class AutoTradeService {
             investmentHistoryRepository.save(investmentHistory);
         }
 
-        log.info("투자 히스토리 저장: symbol={}, side={}, profitLoss={}, mode={}", symbol, side, profitLoss, tradeMode);
+        log.info(LogMessage.INVESTMENT_HISTORY_SAVED.getMessage(), symbol, side, profitLoss, tradeMode);
     }
 
     /**
@@ -943,11 +946,11 @@ public class AutoTradeService {
         session.getQueueStates().remove(queue.getId());
 
         session.addLog(now() + " [큐 비활성화] 큐 #" + queue.getId() + " - " + reason);
-        log.info("큐 비활성화: queue={}, reason={}", queue.getId(), reason);
+        log.info(LogMessage.QUEUE_DEACTIVATED.getMessage(), queue.getId(), reason);
 
         // 모든 큐가 제거되면 세션 정리
         if (session.getQueues().isEmpty()) {
-            activeSessions.remove(sessionKey(session.getUserId(), session.getSymbol()));
+            activeSessions.remove(sessionKey(session.getUserId(), session.getSymbol(), session.getTradeMode()));
             syncWebSocketSubscriptions();
         }
     }
@@ -1016,8 +1019,8 @@ public class AutoTradeService {
         bybitWebSocketClient.syncSubscriptions(activeSymbols);
     }
 
-    private String sessionKey(Long userId, String symbol) {
-        return userId + ":" + symbol;
+    private String sessionKey(Long userId, String symbol, TradeMode tradeMode) {
+        return userId + ":" + symbol + ":" + tradeMode.name();
     }
 
     private String now() {

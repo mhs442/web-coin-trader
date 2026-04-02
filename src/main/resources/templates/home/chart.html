@@ -1083,7 +1083,7 @@
             $.ajax({
                 url: '/api/autotrade/status',
                 type: 'GET',
-                data: { symbol: symbol },
+                data: { symbol: symbol, mode: getTradeMode() },
                 success: function(data) {
                     var wasActive = autoTradeActive;
                     autoTradeActive = data.active;
@@ -1112,7 +1112,7 @@
                 $.ajax({
                     url: '/api/autotrade/status',
                     type: 'GET',
-                    data: { symbol: symbol },
+                    data: { symbol: symbol, mode: getTradeMode() },
                     success: function(data) {
                         if (!data.active) {
                             autoTradeActive = false;

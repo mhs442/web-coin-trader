@@ -7,6 +7,7 @@ import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
 import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
 import com.coin.webcointrader.common.entity.SimTradeHistory;
 import com.coin.webcointrader.common.entity.TradeHistory;
+import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import com.coin.webcointrader.sim.repository.SimWalletRepository;
@@ -91,7 +92,7 @@ public class SimTradeService {
         result.setOrderLinkId("");
         response.setResult(result);
 
-        log.info("모의투자 주문 체결: userId={}, symbol={}, side={}, qty={}",
+        log.info(LogMessage.SIM_ORDER_EXECUTED.getMessage(),
                 userId, request.getSymbol(), request.getSide(), request.getQty());
 
         return response;
@@ -141,7 +142,7 @@ public class SimTradeService {
         wallet.setBalance(wallet.getBalance().add(returned));
         simWalletRepository.save(wallet);
 
-        log.info("모의투자 손익 반영: userId={}, amount={}, profitLoss={}, newBalance={}",
+        log.info(LogMessage.SIM_PROFIT_LOSS_APPLIED.getMessage(),
                 userId, amount, profitLoss, wallet.getBalance());
     }
 

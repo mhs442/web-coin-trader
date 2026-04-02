@@ -37,7 +37,7 @@ public class AutoTradeController {
     public List<PatternQueueResponse> getPatterns(@RequestParam String symbol,
                                                   @RequestParam(defaultValue = "main") String mode,
                                                   @AuthenticationPrincipal UserDTO user) {
-        TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
+        TradeMode tradeMode = TradeMode.SIM.getMode().equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
         return patternQueueService.getQueues(user.getId(), symbol, tradeMode).stream()
                 .map(this::toResponse)
                 .toList();
@@ -96,13 +96,16 @@ public class AutoTradeController {
      * 자동매매 상태 조회
      *
      * @param symbol 코인 심볼
+     * @param mode   거래 모드 ("main" 또는 "sim", 기본값 "main")
      * @param user   로그인 사용자
      * @return 자동매매 상태 응답
      */
     @GetMapping("/status")
     public AutoTradeStatusResponse getStatus(@RequestParam String symbol,
+                                             @RequestParam(defaultValue = "main") String mode,
                                              @AuthenticationPrincipal UserDTO user) {
-        return autoTradeService.getStatusResponse(user.getId(), symbol);
+        TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
+        return autoTradeService.getStatusResponse(user.getId(), symbol, tradeMode);
     }
 
     // ─────────────────────────────────────────────

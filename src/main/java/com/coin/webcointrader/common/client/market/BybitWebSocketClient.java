@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.client.market;
 
 import com.coin.webcointrader.common.client.market.dto.WebSocketRequest;
 import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
+import com.coin.webcointrader.common.enums.LogMessage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -104,7 +105,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
             try {
                 session.close();
             } catch (IOException e) {
-                log.warn("WebSocket 세션 종료 중 오류: {}", e.getMessage());
+                log.warn(LogMessage.WS_SESSION_CLOSE_ERROR.getMessage(), e.getMessage());
             }
         }
     }
@@ -122,7 +123,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
 
         String topic = "tickers." + symbol;
         sendMessage(WebSocketRequest.subscribe(List.of(topic)));
-        log.info("WebSocket 구독 요청: {}", topic);
+        log.info(LogMessage.WS_SUBSCRIBE.getMessage(), topic);
     }
 
     /**
@@ -138,7 +139,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
 
         String topic = "tickers." + symbol;
         sendMessage(WebSocketRequest.unsubscribe(List.of(topic)));
-        log.info("WebSocket 구독 해제 요청: {}", topic);
+        log.info(LogMessage.WS_UNSUBSCRIBE.getMessage(), topic);
     }
 
     /**
@@ -185,7 +186,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
         this.session = session;
         // 연결 성공 시 재연결 대기 시간 초기화
         currentReconnectDelay = reconnectDelay;
-        log.info("Bybit WebSocket 연결 성공: {}", websocketUrl);
+        log.info(LogMessage.WS_CONNECTED.getMessage(), websocketUrl);
 
         // heartbeat 시작
         startHeartbeat();
@@ -206,7 +207,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
             // pong 응답이나 구독 확인 메시지는 무시
             JsonNode node = objectMapper.readTree(payload);
 
-            log.info("WebSocket 수신 데이터 : {}", node.toString());
+            log.info(LogMessage.WS_RECEIVED_DATA.getMessage(), node.toString());
 
             if (node.has("op")) {
                 // op 필드가 있으면 제어 메시지 (pong, subscribe 응답 등)
@@ -221,7 +222,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 }
             }
         } catch (JsonProcessingException e) {
-            log.warn("WebSocket 메시지 파싱 오류: {}", e.getMessage());
+            log.warn(LogMessage.WS_MESSAGE_PARSE_ERROR.getMessage(), e.getMessage());
         }
     }
 
@@ -231,7 +232,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
      */
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        log.warn("Bybit WebSocket 연결 종료: status={}", status);
+        log.warn(LogMessage.WS_CONNECTION_CLOSED.getMessage(), status);
 
         // heartbeat 중지
         stopHeartbeat();
@@ -247,7 +248,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
      */
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        log.error("Bybit WebSocket 전송 오류: {}", exception.getMessage());
+        log.error(LogMessage.WS_TRANSPORT_ERROR.getMessage(), exception.getMessage());
     }
 
     // ─────────────────────────────────────────────
@@ -259,10 +260,10 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
      */
     private void connect() {
         try {
-            log.info("Bybit WebSocket 연결 시도: {}", websocketUrl);
+            log.info(LogMessage.WS_CONNECTING.getMessage(), websocketUrl);
             webSocketClient.execute(this, null, URI.create(websocketUrl));
         } catch (Exception e) {
-            log.error("Bybit WebSocket 연결 실패: {}", e.getMessage());
+            log.error(LogMessage.WS_CONNECT_FAILED.getMessage(), e.getMessage());
             // 연결 실패 시 재연결 스케줄
             if (shouldConnect) {
                 scheduleReconnect();
@@ -279,7 +280,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
         // 다음 재연결 대기 시간을 2배로 증가 (최대값 제한)
         currentReconnectDelay = Math.min(currentReconnectDelay * 2, reconnectMaxDelay);
 
-        log.info("Bybit WebSocket 재연결 예약: {}ms 후", delay);
+        log.info(LogMessage.WS_RECONNECT_SCHEDULED.getMessage(), delay);
         reconnectScheduler.schedule(this::connect, delay, TimeUnit.MILLISECONDS);
     }
 
@@ -316,7 +317,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 .toList();
 
         sendMessage(WebSocketRequest.subscribe(topics));
-        log.info("WebSocket 재구독 완료: {}개 심볼", subscribedSymbols.size());
+        log.info(LogMessage.WS_RESUBSCRIBE_COMPLETE.getMessage(), subscribedSymbols.size());
     }
 
     /**
@@ -333,7 +334,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
             String json = objectMapper.writeValueAsString(request);
             session.sendMessage(new TextMessage(json));
         } catch (IOException e) {
-            log.error("WebSocket 메시지 전송 실패: {}", e.getMessage());
+            log.error(LogMessage.WS_MESSAGE_SEND_FAILED.getMessage(), e.getMessage());
         }
     }
 }
