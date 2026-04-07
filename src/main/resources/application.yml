@@ -14,11 +14,6 @@ spring:
       hibernate:
         format_sql: true
 
-logging:
-  level:
-    org.hibernate.orm.jdbc.bind: TRACE
-    com.coin.webcointrader.common.config.BybitFeignConfig: DEBUG
-
 bybit:
   api:
     url: https://api-testnet.bybit.com
