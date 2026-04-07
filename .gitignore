@@ -48,3 +48,6 @@ application-local.yml
 .claude/
 *.db
 CLAUDE.local.md
+
+## log
+/logs
