@@ -21,9 +21,27 @@
         <span class="wallet-balance" id="wallet-available">--</span>
         <span class="wallet-unit">USDT</span>
     </div>
+    <!-- 모의 모드 충전 버튼 (sim 모드일 때만 표시) -->
+    <button class="sim-charge-btn" id="sim-charge-btn" style="display:none;" title="모의 지갑 충전">충전</button>
+
     <div class="wallet-refresh">
         <span class="wallet-refresh-icon" id="wallet-refresh-icon" title="잔고 갱신">&#x21bb;</span>
         <span class="wallet-countdown" id="wallet-countdown">5</span>
+    </div>
+
+    <!-- 충전 모달 -->
+    <div class="charge-modal-overlay" id="charge-modal-overlay" style="display:none;">
+        <div class="charge-modal">
+            <h3>모의 지갑 충전</h3>
+            <div class="charge-modal-body">
+                <label for="charge-amount">충전 금액 (USDT)</label>
+                <input type="text" id="charge-amount" placeholder="금액 입력" inputmode="numeric">
+            </div>
+            <div class="charge-modal-footer">
+                <button class="charge-modal-cancel" id="charge-modal-cancel">취소</button>
+                <button class="charge-modal-confirm" id="charge-modal-confirm">충전</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -113,10 +131,22 @@
                 }, 500);
             });
 
+            /**
+             * 거래 모드에 따라 충전 버튼 표시/숨김을 제어한다.
+             */
+            function toggleChargeButton() {
+                if (window.tradeMode === 'sim') {
+                    $('#sim-charge-btn').show();
+                } else {
+                    $('#sim-charge-btn').hide();
+                }
+            }
+
             // 초기 로딩 + 카운트다운 시작
             $(document).ready(function() {
                 fetchWalletBalance();
                 startCountdown();
+                toggleChargeButton();
 
                 // localStorage 값에 따라 토글 UI 상태 복원
                 if (window.tradeMode === 'sim') {
@@ -143,11 +173,70 @@
                         $('#wallet-header').removeClass('sim-mode');
                     }
 
+                    // 충전 버튼 표시/숨김
+                    toggleChargeButton();
+
                     // 즉시 잔고 갱신
                     fetchWalletBalance();
 
                     // 모드 변경 이벤트 발행 (다른 페이지에서 수신 가능)
                     $(document).trigger('tradeModeChanged', [window.tradeMode]);
+                });
+
+                // 충전 버튼 클릭 → 모달 열기
+                $('#sim-charge-btn').on('click', function() {
+                    $('#charge-amount').val('');
+                    $('#charge-modal-overlay').show();
+                });
+
+                // 취소 버튼 → 모달 닫기
+                $('#charge-modal-cancel').on('click', function() {
+                    $('#charge-modal-overlay').hide();
+                });
+
+                // 모달 배경 클릭 → 모달 닫기
+                $('#charge-modal-overlay').on('click', function(e) {
+                    if (e.target === this) {
+                        $(this).hide();
+                    }
+                });
+
+                // 충전 금액 입력 시 세 자리마다 콤마 포맷
+                $('#charge-amount').on('input', function() {
+                    var val = $(this).val().replace(/[^0-9]/g, ''); // 숫자만 추출
+                    if (val) {
+                        $(this).val(Number(val).toLocaleString('en-US'));
+                    } else {
+                        $(this).val('');
+                    }
+                });
+
+                // 충전 확인 버튼 → API 호출
+                $('#charge-modal-confirm').on('click', function() {
+                    // 콤마 제거 후 숫자 변환
+                    var rawAmount = $('#charge-amount').val().replace(/,/g, '');
+                    var amount = parseFloat(rawAmount);
+
+                    // 금액 유효성 검사
+                    if (!rawAmount || isNaN(amount) || amount <= 0) {
+                        alert('올바른 금액을 입력해주세요.');
+                        return;
+                    }
+
+                    $.ajax({
+                        url: '/api/sim/wallet/add-balance',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({ amount: amount }),
+                        success: function() {
+                            $('#charge-modal-overlay').hide();
+                            fetchWalletBalance(); // 잔고 즉시 갱신
+                            alert(amount + ' USDT 충전 완료!');
+                        },
+                        error: function() {
+                            alert('충전에 실패했습니다.');
+                        }
+                    });
                 });
             });
         })();

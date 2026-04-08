@@ -63,31 +63,18 @@ public class SimWalletService {
     }
 
     /**
-     * 가상 지갑 잔고를 초기화한다. (기본값 10,000 USDT)
+     * 가상 지갑 잔고에 금액을 추가한다.
      *
      * @param userId 사용자 ID
+     * @param amount 추가할 금액 (USDT)
      */
     @Transactional
-    public void resetBalance(Long userId) {
+    public void addBalance(Long userId, BigDecimal amount) {
         SimWallet wallet = simWalletRepository.findByUserId(userId)
                 .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
 
-        wallet.setBalance(new BigDecimal("10000.00"));
-        simWalletRepository.save(wallet);
-    }
-
-    /**
-     * 가상 지갑 잔고를 지정한 금액으로 설정한다.
-     *
-     * @param userId  사용자 ID
-     * @param balance 설정할 잔고 (USDT)
-     */
-    @Transactional
-    public void setBalance(Long userId, BigDecimal balance) {
-        SimWallet wallet = simWalletRepository.findByUserId(userId)
-                .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
-
-        wallet.setBalance(balance);
+        // 기존 잔고에 금액 추가
+        wallet.setBalance(wallet.getBalance().add(amount));
         simWalletRepository.save(wallet);
     }
 }
