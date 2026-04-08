@@ -87,6 +87,7 @@ class TradeHistoryRepositoryTest {
         h.setExecutedPrice(new BigDecimal("50000"));
         h.setOrderResult(OrderResult.SUCCESS);
         h.setQueueStepId(1L);
+        h.setOrderType("ENTRY");
         return h;
     }
 }

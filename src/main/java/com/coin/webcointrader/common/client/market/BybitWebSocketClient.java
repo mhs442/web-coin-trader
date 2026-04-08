@@ -207,7 +207,7 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
             // pong 응답이나 구독 확인 메시지는 무시
             JsonNode node = objectMapper.readTree(payload);
 
-            log.info(LogMessage.WS_RECEIVED_DATA.getMessage(), node.toString());
+            log.debug(LogMessage.WS_RECEIVED_DATA.getMessage(), node.toString());
 
             if (node.has("op")) {
                 // op 필드가 있으면 제어 메시지 (pong, subscribe 응답 등)

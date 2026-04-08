@@ -52,7 +52,7 @@ src/main/resources/
 
 ### 1. MariaDB 데이터베이스 준비
 - MariaDB 서버 실행
-- `coin-trader` 데이터베이스 생성
+- `coin_trader` 데이터베이스 생성
 - DDL 스크립트는 별도 관리
 
 ### 2. 환경 설정
