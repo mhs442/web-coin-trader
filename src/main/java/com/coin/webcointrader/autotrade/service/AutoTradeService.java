@@ -26,6 +26,7 @@ import com.coin.webcointrader.trade.service.TradeFacade;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -60,6 +61,7 @@ public class AutoTradeService {
     private final TradeFacade tradeFacade;
     private final MarketService marketService;
     private final BybitWebSocketClient bybitWebSocketClient;
+    private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
 
     // 활성 세션 관리 (키: "userId:symbol")
     private final ConcurrentHashMap<String, AutoTradeSessionDTO> activeSessions = new ConcurrentHashMap<>();
@@ -96,6 +98,8 @@ public class AutoTradeService {
                     log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), symbol, e.getMessage());
                     session.addLog(now() + " [오류] " + e.getMessage());
                 }
+                // STOMP: 가격 변동마다 해당 세션의 자동매매 상태를 브라우저에 push
+                pushAutoTradeStatus(session);
             }
         }
     }
@@ -815,6 +819,28 @@ public class AutoTradeService {
     // ─────────────────────────────────────────────
     // 유틸리티
     // ─────────────────────────────────────────────
+
+    /**
+     * 자동매매 세션 상태를 STOMP로 브라우저에 push한다.
+     * 브라우저에서 /topic/autotrade.status.{symbol}을 구독하면 실시간으로 상태를 수신한다.
+     *
+     * <p>push되는 데이터는 기존 REST 폴링(/api/autotrade/status)과 동일한
+     * {@link AutoTradeStatusResponse} 형태이므로, 프론트에서 동일한 처리 로직을 사용할 수 있다.</p>
+     *
+     * @param session 상태를 push할 자동매매 세션
+     */
+    private void pushAutoTradeStatus(AutoTradeSessionDTO session) {
+        try {
+            AutoTradeStatusResponse status = getStatusResponse(
+                    session.getUserId(), session.getSymbol(), session.getTradeMode());
+            // /topic/autotrade.status.{symbol} 토픽으로 전송
+            // 해당 심볼의 차트 페이지를 보고 있는 브라우저만 이 토픽을 구독한다
+            messagingTemplate.convertAndSend(
+                    "/topic/autotrade.status." + session.getSymbol(), status);
+        } catch (Exception e) {
+            log.warn("STOMP 상태 push 실패: {}", e.getMessage());
+        }
+    }
 
     /**
      * 거래 히스토리를 모드에 따라 적절한 테이블에 저장한다.

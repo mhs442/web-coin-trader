@@ -12,6 +12,7 @@ import com.coin.webcointrader.common.enums.LogMessage;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -35,6 +36,7 @@ public class MarketService {
 
     private final MarketClient marketClient;
     private final BybitWebSocketClient bybitWebSocketClient;
+    private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
 
     /**
      * 애플리케이션 시작 시 WebSocket 티커 콜백을 등록한다.
@@ -124,9 +126,16 @@ public class MarketService {
             });
         }
 
-        // 가격 변동 리스너 알림
+        // 가격 변동 리스너 알림 (AutoTradeService 등)
         if (data.getLastPrice() != null) {
             notifyPriceListeners(symbol, data.getLastPrice());
+        }
+
+        // STOMP를 통해 브라우저 구독자에게 실시간 가격 push
+        // /topic/price.{symbol}을 구독 중인 브라우저에 WebSocket 티커 데이터를 전달한다
+        FindTickerResponse.TickerInfo wsInfo = wsTickerMap.get(symbol);
+        if (wsInfo != null) {
+            messagingTemplate.convertAndSend("/topic/price." + symbol, wsInfo);
         }
     }
 

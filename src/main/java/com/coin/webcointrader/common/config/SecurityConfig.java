@@ -16,7 +16,7 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http, LoginService loginService) throws Exception {
         http.csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth ->
-                        auth.requestMatchers("/login", "/signup", "/_resources/**", "/favicon.ico", "/.well-known/**").permitAll()
+                        auth.requestMatchers("/login", "/signup", "/_resources/**", "/favicon.ico", "/.well-known/**", "/ws/**").permitAll()
                                 .anyRequest().authenticated())  // 그 외는 모두 인증 필요
                 .formLogin(formLogin ->
                         formLogin.loginPage("/login")

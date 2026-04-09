@@ -6,6 +6,9 @@
     <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
     <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <!-- STOMP WebSocket: 서버에서 실시간 데이터를 push 받기 위한 라이브러리 -->
+    <script th:src="@{/_resources/js/sockjs.min.js}"></script>
+    <script th:src="@{/_resources/js/stomp.min.js}"></script>
 </head>
 <body>
     <div th:replace="~{fragments/header :: walletHeader}"></div>
@@ -171,12 +174,17 @@
         let klineFetchIntervalId = null;
         let orderBookFetchIntervalId = null;
         let autoTradeActive = false;
-        let autoTradeStatusInterval = null;
+
+        // ─── STOMP WebSocket 관련 변수 ───
+        let stompClient = null;              // STOMP 클라이언트 인스턴스
+        let priceSubscription = null;        // /topic/price.{symbol} 구독 핸들
+        let autoTradeSubscription = null;    // /topic/autotrade.status.{symbol} 구독 핸들
 
         document.addEventListener('DOMContentLoaded', () => {
             loadChart('1');
             loadOrderBook();
             loadPatterns();
+            connectStomp(); // STOMP WebSocket 연결 시작
 
             // 거래 모드 변경 시 큐 목록 재조회
             $(document).on('tradeModeChanged', function() {
@@ -1076,8 +1084,136 @@
             });
         }
 
+        // ─── STOMP WebSocket 연결 및 구독 ───
+
         /**
-         * 자동매매 상태를 조회하여 서버 큐 카드에 활성 단계 하이라이트를 적용한다.
+         * STOMP WebSocket 연결을 수립한다.
+         * SockJS를 통해 /ws 엔드포인트에 연결하고, 연결 성공 시 가격 토픽을 구독한다.
+         *
+         * 연결 흐름:
+         * 1. SockJS가 /ws 엔드포인트로 WebSocket 연결 시도 (실패 시 HTTP fallback)
+         * 2. STOMP 프로토콜로 핸드셰이크
+         * 3. 연결 성공 → /topic/price.{symbol} 구독 (실시간 가격)
+         * 4. 자동매매 활성 시 → /topic/autotrade.status.{symbol} 구독 (상태 push)
+         */
+        function connectStomp() {
+            // SockJS를 통해 /ws 엔드포인트에 연결 (WebSocket 미지원 브라우저 대비 fallback 포함)
+            var socket = new SockJS('/ws');
+            // SockJS 소켓 위에 STOMP 프로토콜 클라이언트를 생성한다
+            stompClient = Stomp.over(socket);
+
+            // STOMP 디버그 로그 비활성화 (콘솔 오염 방지, 개발 시 주석 해제하면 STOMP 프레임 확인 가능)
+            stompClient.debug = null;
+
+            // STOMP 연결 시작
+            // 첫 번째 인자: 연결 헤더 (빈 객체 = 추가 헤더 없음)
+            // 두 번째 인자: 연결 성공 콜백
+            // 세 번째 인자: 에러 콜백
+            stompClient.connect({}, function(frame) {
+                console.log('[STOMP] 연결 성공');
+
+                // 실시간 가격 구독: 서버의 MarketService가 Bybit WebSocket에서 받은 가격을 여기로 push한다
+                subscribePriceTopic();
+
+                // 자동매매 상태 초기 확인 (REST로 1회 조회 → 활성이면 STOMP 구독 시작)
+                checkAutoTradeStatus();
+
+            }, function(error) {
+                // 연결 실패 또는 끊어짐 → 3초 후 재연결 시도
+                console.error('[STOMP] 연결 오류:', error);
+                setTimeout(connectStomp, 3000);
+            });
+        }
+
+        /**
+         * /topic/price.{symbol} 토픽을 구독한다.
+         * 서버에서 Bybit WebSocket으로 수신한 실시간 가격이 이 토픽으로 push된다.
+         *
+         * 수신 데이터: FindTickerResponse.TickerInfo (lastPrice, price24hPcnt, highPrice24h 등)
+         * → 호가창 체결가 영역에 실시간 반영
+         */
+        function subscribePriceTopic() {
+            // 기존 구독이 있으면 해제 (중복 구독 방지)
+            if (priceSubscription) {
+                priceSubscription.unsubscribe();
+            }
+
+            // /topic/price.{symbol} 구독
+            // 메시지가 올 때마다 콜백이 호출된다 (Bybit 가격 변동 주기와 동일)
+            priceSubscription = stompClient.subscribe('/topic/price.' + symbol, function(message) {
+                // JSON 문자열 → JavaScript 객체로 파싱
+                var ticker = JSON.parse(message.body);
+
+                // 호가창 체결가 업데이트 (실시간 가격 반영)
+                if (ticker.lastPrice) {
+                    var lastPriceEl = document.getElementById('ob-last-price');
+                    var currentPriceNum = parseFloat(ticker.lastPrice);
+                    var previousPriceNum = parseFloat(lastPriceEl.dataset.rawPrice || 0);
+
+                    // 가격 상승/하락에 따라 색상 클래스 적용 (bid=초록, ask=빨강)
+                    lastPriceEl.className = 'order-book-last-price ' + (currentPriceNum >= previousPriceNum ? 'ob-bid' : 'ob-ask');
+                    lastPriceEl.innerText = currentPriceNum.toLocaleString();
+                    lastPriceEl.dataset.rawPrice = currentPriceNum;
+                }
+            });
+        }
+
+        /**
+         * /topic/autotrade.status.{symbol} 토픽을 구독한다.
+         * 서버의 AutoTradeService가 가격 변동 시마다 자동매매 상태를 이 토픽으로 push한다.
+         *
+         * 기존 1초 polling(startStatusPolling)을 대체하며,
+         * Bybit WebSocket 가격 수신 주기와 동일한 빈도로 상태가 갱신된다.
+         *
+         * 수신 데이터: AutoTradeStatusResponse
+         *   {active, currentQueueId, currentStepLevel, phase, direction,
+         *    currentBlockOrder, activePatternOrder, elapsedSeconds, changeRate, amount}
+         */
+        function subscribeAutoTradeTopic() {
+            // 기존 구독이 있으면 해제 (중복 구독 방지)
+            if (autoTradeSubscription) {
+                autoTradeSubscription.unsubscribe();
+            }
+
+            // /topic/autotrade.status.{symbol} 구독
+            autoTradeSubscription = stompClient.subscribe('/topic/autotrade.status.' + symbol, function(message) {
+                var data = JSON.parse(message.body);
+
+                // 자동매매가 중지된 경우 (주문 실패 등으로 큐 비활성화)
+                if (!data.active && autoTradeActive) {
+                    autoTradeActive = false;
+                    highlightActiveStep(data);
+                    unsubscribeAutoTradeTopic();
+                    // 큐 목록 새로고침 (비활성화 상태 반영)
+                    loadPatterns();
+                    alert('자동매매가 중지되었습니다. 주문 실패로 큐가 비활성화되었습니다.');
+                    return;
+                }
+
+                // 활성 상태면 하이라이트 갱신
+                if (data.active) {
+                    highlightActiveStep(data);
+                }
+            });
+        }
+
+        /**
+         * 자동매매 상태 토픽 구독을 해제한다.
+         * 자동매매가 비활성화되면 더 이상 상태 push를 받을 필요가 없다.
+         */
+        function unsubscribeAutoTradeTopic() {
+            if (autoTradeSubscription) {
+                autoTradeSubscription.unsubscribe();
+                autoTradeSubscription = null;
+            }
+        }
+
+        /**
+         * 자동매매 상태를 REST로 1회 조회하여 초기 상태를 확인한다.
+         * 활성 상태이면 STOMP 구독을 시작하고, 비활성이면 구독을 해제한다.
+         *
+         * 이 함수는 페이지 로드 시, 큐 토글 시 등 상태 확인이 필요한 시점에 호출된다.
+         * (이후 상태 갱신은 STOMP push로 자동 수신)
          */
         function checkAutoTradeStatus() {
             $.ajax({
@@ -1091,10 +1227,13 @@
                     // 활성 단계 하이라이트 적용
                     highlightActiveStep(data);
 
+                    // 활성화됨 → STOMP 구독 시작 (이후 실시간 push로 갱신)
                     if (autoTradeActive && !wasActive) {
-                        startStatusPolling();
-                    } else if (!autoTradeActive && wasActive) {
-                        stopStatusPolling();
+                        subscribeAutoTradeTopic();
+                    }
+                    // 비활성화됨 → STOMP 구독 해제
+                    else if (!autoTradeActive && wasActive) {
+                        unsubscribeAutoTradeTopic();
                     }
                 },
                 error: function(xhr, status, err) {
@@ -1104,41 +1243,12 @@
         }
 
         /**
-         * 1초 주기로 자동매매 상태를 폴링하여 활성 단계 하이라이트를 갱신한다.
-         */
-        function startStatusPolling() {
-            if (autoTradeStatusInterval) clearInterval(autoTradeStatusInterval);
-            autoTradeStatusInterval = setInterval(function() {
-                $.ajax({
-                    url: '/api/autotrade/status',
-                    type: 'GET',
-                    data: { symbol: symbol, mode: getTradeMode() },
-                    success: function(data) {
-                        if (!data.active) {
-                            autoTradeActive = false;
-                            highlightActiveStep(data);
-                            stopStatusPolling();
-                            // 큐 목록 새로고침 (비활성화 상태 반영)
-                            loadPatterns();
-                            alert('자동매매가 중지되었습니다. 주문 실패로 큐가 비활성화되었습니다.');
-                            return;
-                        }
-                        highlightActiveStep(data);
-                    },
-                    error: function(xhr, status, err) {
-                        console.error('상태 폴링 실패:', err);
-                    }
-                });
-            }, 1000);
-        }
-
-        /**
-         * 서버 큐 카드에서 현재 활성 큐의 진행 중인 단계에 하이라이트를 적용한다.
-         * @param data AutoTradeStatusResponse {active, currentQueueId, currentStepLevel}
-         */
-        /**
          * 자동매매 실행 중일 때, 정확한 진행 단계로 뱃지를 이동한다.
          * 실행 중이 아니면 renderServerQueues에서 적용한 기본 뱃지를 유지한다.
+         *
+         * @param data AutoTradeStatusResponse
+         *   {active, currentQueueId, currentStepLevel, phase, direction,
+         *    currentBlockOrder, activePatternOrder, elapsedSeconds, changeRate, amount}
          */
         function highlightActiveStep(data) {
             if (!data.active) {
@@ -1196,13 +1306,6 @@
 
             if (triggerHtml) {
                 $queueCard.find('.server-queue-header').after(triggerHtml);
-            }
-        }
-
-        function stopStatusPolling() {
-            if (autoTradeStatusInterval) {
-                clearInterval(autoTradeStatusInterval);
-                autoTradeStatusInterval = null;
             }
         }
     </script>
