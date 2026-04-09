@@ -1,0 +1,26 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "category": "linear",
+    "list": [
+      {
+        "symbol": "BTCUSDT",
+        "lotSizeFilter": {
+          "qtyStep": "0.001",
+          "minOrderQty": "0.001",
+          "maxOrderQty": "10000"
+        }
+      },
+      {
+        "symbol": "ETHUSDT",
+        "lotSizeFilter": {
+          "qtyStep": "0.01",
+          "minOrderQty": "0.01",
+          "maxOrderQty": "100000"
+        }
+      }
+    ],
+    "nextPageCursor": "page2cursor123"
+  }
+}

@@ -1,6 +1,7 @@
 package com.coin.webcointrader.autotrade.service;
 
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
+import com.coin.webcointrader.autotrade.dto.AutoTradeStatusResponse;
 import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
 import com.coin.webcointrader.autotrade.dto.TradePhase;
 import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
@@ -9,8 +10,10 @@ import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.market.service.MarketService;
 import com.coin.webcointrader.trade.service.TradeService;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -57,6 +60,9 @@ class AutoTradeServiceTest {
     @Mock
     private BybitWebSocketClient bybitWebSocketClient;
 
+    @Mock
+    private SimpMessagingTemplate messagingTemplate;
+
     // ─────────────────────────────────────────────
     // init (가격 리스너 등록)
     // ─────────────────────────────────────────────
@@ -78,13 +84,13 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
 
-        autoTradeService.syncSession(userId, symbol);
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
-        assertThat(autoTradeService.isActive(userId, symbol)).isTrue();
-        AutoTradeSessionDTO session = autoTradeService.getSession(userId, symbol);
+        assertThat(autoTradeService.isActive(userId, symbol, TradeMode.MAIN)).isTrue();
+        AutoTradeSessionDTO session = autoTradeService.getSession(userId, symbol, TradeMode.MAIN);
         assertThat(session).isNotNull();
         // 큐 상태가 초기화되어야 함
         assertThat(session.getQueueStates()).containsKey(q.getId());
@@ -97,19 +103,19 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q1 = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of(q1));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q1));
 
-        autoTradeService.syncSession(userId, symbol);
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
         PatternQueue q2 = makePatternQueue(2L, userId, symbol, Side.SHORT);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of(q1, q2));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q1, q2));
 
-        autoTradeService.syncSession(userId, symbol);
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
-        assertThat(autoTradeService.getSession(userId, symbol).getQueues()).hasSize(2);
-        assertThat(autoTradeService.getSession(userId, symbol).getQueueStates()).hasSize(2);
+        assertThat(autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueues()).hasSize(2);
+        assertThat(autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates()).hasSize(2);
     }
 
     @Test
@@ -119,15 +125,15 @@ class AutoTradeServiceTest {
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
 
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of());
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of());
 
-        autoTradeService.syncSession(userId, symbol);
-        assertThat(autoTradeService.isActive(userId, symbol)).isFalse();
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
+        assertThat(autoTradeService.isActive(userId, symbol, TradeMode.MAIN)).isFalse();
     }
 
     @Test
@@ -136,10 +142,10 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
 
-        autoTradeService.syncSession(userId, symbol);
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
         ArgumentCaptor<Set<String>> captor = ArgumentCaptor.forClass(Set.class);
         then(bybitWebSocketClient).should(atLeastOnce()).syncSubscriptions(captor.capture());
@@ -153,13 +159,13 @@ class AutoTradeServiceTest {
     @Test
     @DisplayName("isActive: 세션이 없으면 false를 반환한다")
     void isActive_returnsFalseWhenNoSession() {
-        assertThat(autoTradeService.isActive(1L, "BTCUSDT")).isFalse();
+        assertThat(autoTradeService.isActive(1L, "BTCUSDT", TradeMode.MAIN)).isFalse();
     }
 
     @Test
     @DisplayName("getSession: 세션이 없으면 null을 반환한다")
     void getSession_returnsNullWhenNotFound() {
-        assertThat(autoTradeService.getSession(1L, "BTCUSDT")).isNull();
+        assertThat(autoTradeService.getSession(1L, "BTCUSDT", TradeMode.MAIN)).isNull();
     }
 
     // ─────────────────────────────────────────────
@@ -179,9 +185,9 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                userId, symbol, true)).willReturn(List.of(q));
-        autoTradeService.syncSession(userId, symbol);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
         given(marketService.getTickers()).willReturn(null);
 
         assertThatCode(() -> autoTradeService.tick()).doesNotThrowAnyException();
@@ -547,7 +553,7 @@ class AutoTradeServiceTest {
         @Test
         @DisplayName("비활성 시 active=false를 반환한다")
         void returnsInactiveWhenNoSession() {
-            var response = autoTradeService.getStatusResponse(1L, "BTCUSDT");
+            var response = autoTradeService.getStatusResponse(1L, "BTCUSDT", TradeMode.MAIN);
 
             assertThat(response.isActive()).isFalse();
             assertThat(response.getChangeRate()).isNull();
@@ -560,12 +566,12 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                    userId, symbol, true)).willReturn(List.of(queue));
-            autoTradeService.syncSession(userId, symbol);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             // 큐 상태에 기준가/시각 설정 (30초 전)
-            var state = autoTradeService.getSession(userId, symbol).getQueueStates().get(1L);
+            var state = autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates().get(1L);
             state.setBasePrice("50000.00");
             state.setBaseTime(LocalDateTime.now().minusSeconds(30));
 
@@ -574,7 +580,7 @@ class AutoTradeServiceTest {
             wsTicker.setLastPrice("50500.00");
             given(marketService.getWsTicker(symbol)).willReturn(wsTicker);
 
-            var response = autoTradeService.getStatusResponse(userId, symbol);
+            var response = autoTradeService.getStatusResponse(userId, symbol, TradeMode.MAIN);
 
             assertThat(response.isActive()).isTrue();
             assertThat(response.getPhase()).isEqualTo("TRIGGER_WAIT");
@@ -592,12 +598,12 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                    userId, symbol, true)).willReturn(List.of(queue));
-            autoTradeService.syncSession(userId, symbol);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             // BLOCK_MATCHING 상태로 설정 (활성 패턴 ID 포함)
-            var state = autoTradeService.getSession(userId, symbol).getQueueStates().get(1L);
+            var state = autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates().get(1L);
             state.setPhase(TradePhase.BLOCK_MATCHING);
             state.setDirection(Side.LONG);
             state.setEntryPrice("50000.00");
@@ -608,7 +614,7 @@ class AutoTradeServiceTest {
             wsTicker.setLastPrice("52500.00");
             given(marketService.getWsTicker(symbol)).willReturn(wsTicker);
 
-            var response = autoTradeService.getStatusResponse(userId, symbol);
+            var response = autoTradeService.getStatusResponse(userId, symbol, TradeMode.MAIN);
 
             assertThat(response.isActive()).isTrue();
             assertThat(response.getPhase()).isEqualTo("BLOCK_MATCHING");
@@ -627,14 +633,14 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveOrderByCreatedAtAsc(
-                    userId, symbol, true)).willReturn(List.of(queue));
-            autoTradeService.syncSession(userId, symbol);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             // WebSocket 가격 없음
             given(marketService.getWsTicker(symbol)).willReturn(null);
 
-            var response = autoTradeService.getStatusResponse(userId, symbol);
+            var response = autoTradeService.getStatusResponse(userId, symbol, TradeMode.MAIN);
 
             assertThat(response.isActive()).isTrue();
             assertThat(response.getChangeRate()).isNull();
@@ -642,6 +648,42 @@ class AutoTradeServiceTest {
             // WebSocket 가격 없으면 투입 금액도 null
             assertThat(response.getAmount()).isNull();
         }
+    }
+
+    // ─────────────────────────────────────────────
+    // STOMP 상태 push (pushAutoTradeStatus)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("pushAutoTradeStatus: 세션의 현재 상태를 STOMP로 /topic/autotrade.status.{symbol}에 push한다")
+    void onPriceUpdate_pushesAutoTradeStatusViaStormp() {
+        // given
+        Long userId = 1L;
+        String symbol = "BTCUSDT";
+        TradeMode tradeMode = TradeMode.MAIN;
+        PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+        queue.setTriggerRate(new BigDecimal("5"));
+        AutoTradeSessionDTO session = makeSession(userId, symbol, queue);
+        session.setTradeMode(tradeMode);
+
+        // 활성 세션 직접 추가
+        var activeSessions = (java.util.concurrent.ConcurrentHashMap<String, AutoTradeSessionDTO>)
+                ReflectionTestUtils.getField(autoTradeService, "activeSessions");
+        activeSessions.put(userId + ":" + symbol + ":" + tradeMode, session);
+
+        // WebSocket 가격 설정
+        given(marketService.getWsTicker(symbol))
+                .willReturn(makeTickerInfo(symbol, "50000.00"));
+
+        // when - onPriceUpdate 호출 → pushAutoTradeStatus 내부 호출
+        autoTradeService.onPriceUpdate(symbol, "50000.00");
+
+        // then - STOMP로 상태가 push되어야 함
+        then(messagingTemplate).should(atLeastOnce())
+                .convertAndSend(
+                        argThat(destination -> destination.equals("/topic/autotrade.status." + symbol)),
+                        any(AutoTradeStatusResponse.class)
+                );
     }
 
     // ─────────────────────────────────────────────
@@ -855,5 +897,20 @@ class AutoTradeServiceTest {
         FindTickerResponse response = new FindTickerResponse();
         response.setResult(result);
         return response;
+    }
+
+    /**
+     * TickerInfo 헬퍼 메서드 (STOMP 테스트용)
+     */
+    private FindTickerResponse.TickerInfo makeTickerInfo(String symbol, String price) {
+        FindTickerResponse.TickerInfo ticker = new FindTickerResponse.TickerInfo();
+        ticker.setSymbol(symbol);
+        ticker.setLastPrice(price);
+        ticker.setVolume24h("10000.0");
+        ticker.setPrice24hPcnt("0.01");
+        ticker.setHighPrice24h("51000.0");
+        ticker.setLowPrice24h("49000.0");
+        ticker.setTurnover24h("1000000.0");
+        return ticker;
     }
 }

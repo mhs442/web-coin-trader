@@ -7,6 +7,7 @@ import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.entity.Pattern;
 import com.coin.webcointrader.common.enums.OrderResult;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.mypage.dto.*;
 import org.junit.jupiter.api.DisplayName;
@@ -56,8 +57,8 @@ class MyPageServiceTest {
         Long userId = 1L;
         PatternQueue q = makePatternQueue(1L, userId, "BTCUSDT");
         Page<PatternQueue> page = new PageImpl<>(List.of(q));
-        given(patternQueueRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class)))
+        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                eq(userId), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
                 .willReturn(page);
 
         MyPagePatternRequest request = new MyPagePatternRequest();
@@ -77,8 +78,8 @@ class MyPageServiceTest {
         Long userId = 1L;
         PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
         PatternQueue eth = makePatternQueue(2L, userId, "ETHUSDT");
-        given(patternQueueRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Sort.class)))
+        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                eq(userId), eq(TradeMode.MAIN), any(), any(), any(Sort.class)))
                 .willReturn(List.of(btc, eth));
 
         MyPagePatternRequest request = new MyPagePatternRequest();
@@ -99,8 +100,8 @@ class MyPageServiceTest {
         Long userId = 1L;
         PatternQueue q = makePatternQueueWithSteps(1L, userId, "BTCUSDT");
         Page<PatternQueue> page = new PageImpl<>(List.of(q));
-        given(patternQueueRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class)))
+        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                eq(userId), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
                 .willReturn(page);
 
         MyPagePatternRequest request = new MyPagePatternRequest();

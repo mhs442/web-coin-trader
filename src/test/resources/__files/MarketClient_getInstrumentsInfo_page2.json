@@ -1,0 +1,26 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "category": "linear",
+    "list": [
+      {
+        "symbol": "SOLUSDT",
+        "lotSizeFilter": {
+          "qtyStep": "0.1",
+          "minOrderQty": "0.1",
+          "maxOrderQty": "10000000"
+        }
+      },
+      {
+        "symbol": "DOGEUSDT",
+        "lotSizeFilter": {
+          "qtyStep": "1",
+          "minOrderQty": "1",
+          "maxOrderQty": "10000000"
+        }
+      }
+    ],
+    "nextPageCursor": ""
+  }
+}

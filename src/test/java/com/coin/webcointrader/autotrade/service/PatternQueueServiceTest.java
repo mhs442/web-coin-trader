@@ -3,6 +3,7 @@ package com.coin.webcointrader.autotrade.service;
 import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,7 @@ class PatternQueueServiceTest {
         Long userId = 1L;
         AddPatternRequest request = makeFullRequest("BTCUSDT");
 
-        given(patternQueueRepository.countByUserIdAndSymbol(userId, "BTCUSDT")).willReturn(0L);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, "BTCUSDT", TradeMode.MAIN)).willReturn(0L);
         given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
 
         // when
@@ -91,7 +92,7 @@ class PatternQueueServiceTest {
         Long userId = 1L;
         AddPatternRequest request = makeMultiStepRequest("BTCUSDT");
 
-        given(patternQueueRepository.countByUserIdAndSymbol(userId, "BTCUSDT")).willReturn(0L);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, "BTCUSDT", TradeMode.MAIN)).willReturn(0L);
         given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
 
         // when
@@ -273,7 +274,7 @@ class PatternQueueServiceTest {
         Long userId = 1L;
         AddPatternRequest request = makeFullRequest("BTCUSDT");
 
-        given(patternQueueRepository.countByUserIdAndSymbol(userId, "BTCUSDT")).willReturn(20L);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, "BTCUSDT", TradeMode.MAIN)).willReturn(20L);
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))

@@ -3,6 +3,7 @@ package com.coin.webcointrader.market.service;
 import com.coin.webcointrader.common.client.market.MarketClient;
 import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
+import com.coin.webcointrader.common.dto.response.GetInstrumentsInfoResponse;
 import com.coin.webcointrader.common.dto.response.GetKlineResponse;
 import com.coin.webcointrader.common.dto.response.OrderBookResponse;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,10 +14,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
@@ -31,6 +34,9 @@ class MarketServiceTest {
 
     @Mock
     private MarketClient marketClient;
+
+    @Mock
+    private SimpMessagingTemplate messagingTemplate;
 
     @BeforeEach
     void clearCache() {
@@ -241,6 +247,44 @@ class MarketServiceTest {
         assertThat(secondListenerPrice.get()).isEqualTo("50000.00");
     }
 
+    @Test
+    @DisplayName("onTickerUpdate: 가격 변동 시 STOMP로 /topic/price.{symbol}에 push한다")
+    void onTickerUpdate_pushesToStompPrice() {
+        // given
+        WebSocketTickerDTO dto = makeWsTickerDTO("snapshot", "BTCUSDT", "50000.00", "10000.0");
+
+        // when
+        marketService.onTickerUpdate(dto);
+
+        // then - STOMP로 가격 데이터가 push되어야 함
+        then(messagingTemplate).should(times(1))
+                .convertAndSend(
+                        startsWith("/topic/price.BTCUSDT"),
+                        any(FindTickerResponse.TickerInfo.class)
+                );
+    }
+
+    @Test
+    @DisplayName("onTickerUpdate: delta 메시지도 STOMP로 push한다")
+    void onTickerUpdate_pushesStompForDelta() {
+        // given - snapshot으로 초기 데이터 설정
+        WebSocketTickerDTO snapshot = makeWsTickerDTO("snapshot", "ETHUSDT", "3000.00", "5000.0");
+        marketService.onTickerUpdate(snapshot);
+
+        // delta 메시지
+        WebSocketTickerDTO delta = makeWsTickerDTO("delta", "ETHUSDT", "3100.00", null);
+
+        // when
+        marketService.onTickerUpdate(delta);
+
+        // then - 2번 push되어야 함 (snapshot + delta)
+        then(messagingTemplate).should(times(2))
+                .convertAndSend(
+                        argThat(destination -> destination.contains("ETHUSDT")),
+                        any(FindTickerResponse.TickerInfo.class)
+                );
+    }
+
     // ─────────────────────────────────────────────
     // getKline
     // ─────────────────────────────────────────────
@@ -279,6 +323,99 @@ class MarketServiceTest {
         // then
         assertThat(result).isNotNull();
         then(marketClient).should().getOrderBook("linear", "BTCUSDT", 50);
+    }
+
+    // ─────────────────────────────────────────────
+    // refreshQtyStepCache
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("refreshQtyStepCache: 여러 페이지를 순회하여 모든 종목의 qtyStep을 캐시한다")
+    void refreshQtyStepCache_paginatesAndCachesAllInstruments() {
+        // given - 첫 번째 페이지 응답 (nextPageCursor 있음)
+        GetInstrumentsInfoResponse page1 = makeInstrumentsInfoResponse(
+                List.of(
+                        makeInstrumentInfo("BTCUSDT", "0.001"),
+                        makeInstrumentInfo("ETHUSDT", "0.01")
+                ),
+                "page2cursor123"
+        );
+
+        // 두 번째 페이지 응답 (nextPageCursor 빈 문자열 = 마지막)
+        GetInstrumentsInfoResponse page2 = makeInstrumentsInfoResponse(
+                List.of(
+                        makeInstrumentInfo("SOLUSDT", "0.1"),
+                        makeInstrumentInfo("DOGEUSDT", "1")
+                ),
+                ""
+        );
+
+        // cursor 없이 호출 시 첫 페이지 반환
+        given(marketClient.getInstrumentsInfo("linear", 1000, null))
+                .willReturn(ResponseEntity.ok(page1));
+
+        // 첫 페이지의 nextPageCursor로 호출 시 두 번째 페이지 반환
+        given(marketClient.getInstrumentsInfo("linear", 1000, "page2cursor123"))
+                .willReturn(ResponseEntity.ok(page2));
+
+        // when
+        marketService.refreshQtyStepCache();
+
+        // then - 모든 페이지의 종목이 캐시되어야 함
+        ConcurrentHashMap<String, String> cache = (ConcurrentHashMap<String, String>)
+                ReflectionTestUtils.getField(marketService, "qtyStepCache");
+
+        assertThat(cache)
+                .containsEntry("BTCUSDT", "0.001")
+                .containsEntry("ETHUSDT", "0.01")
+                .containsEntry("SOLUSDT", "0.1")
+                .containsEntry("DOGEUSDT", "1");
+
+        assertThat(cache).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("refreshQtyStepCache: 페이징 호출이 순서대로 진행된다")
+    void refreshQtyStepCache_paginationOrderIsCorrect() {
+        // given
+        GetInstrumentsInfoResponse page1 = makeInstrumentsInfoResponse(
+                List.of(makeInstrumentInfo("BTCUSDT", "0.001")),
+                "cursor2"
+        );
+        GetInstrumentsInfoResponse page2 = makeInstrumentsInfoResponse(
+                List.of(makeInstrumentInfo("ETHUSDT", "0.01")),
+                ""
+        );
+
+        given(marketClient.getInstrumentsInfo("linear", 1000, null))
+                .willReturn(ResponseEntity.ok(page1));
+        given(marketClient.getInstrumentsInfo("linear", 1000, "cursor2"))
+                .willReturn(ResponseEntity.ok(page2));
+
+        // when
+        marketService.refreshQtyStepCache();
+
+        // then - 정확히 2번 호출되어야 함
+        then(marketClient)
+                .should(times(1)).getInstrumentsInfo("linear", 1000, null);
+        then(marketClient)
+                .should(times(1)).getInstrumentsInfo("linear", 1000, "cursor2");
+    }
+
+    @Test
+    @DisplayName("refreshQtyStepCache: API 응답이 null이면 캐시가 비어있어야 한다")
+    void refreshQtyStepCache_handlesNullResponse() {
+        // given
+        given(marketClient.getInstrumentsInfo("linear", 1000, null))
+                .willReturn(ResponseEntity.ok(null));
+
+        // when
+        marketService.refreshQtyStepCache();
+
+        // then - 캐시는 비어있어야 함
+        ConcurrentHashMap<String, String> cache = (ConcurrentHashMap<String, String>)
+                ReflectionTestUtils.getField(marketService, "qtyStepCache");
+        assertThat(cache).isEmpty();
     }
 
     // ─────────────────────────────────────────────
@@ -322,5 +459,36 @@ class MarketServiceTest {
         dto.setData(data);
 
         return dto;
+    }
+
+    /**
+     * GetInstrumentsInfoResponse 테스트 헬퍼 메서드.
+     */
+    private GetInstrumentsInfoResponse makeInstrumentsInfoResponse(
+            List<GetInstrumentsInfoResponse.InstrumentInfo> list,
+            String nextPageCursor) {
+        GetInstrumentsInfoResponse response = new GetInstrumentsInfoResponse();
+        GetInstrumentsInfoResponse.Result result = new GetInstrumentsInfoResponse.Result();
+        result.setCategory("linear");
+        result.setList(list);
+        result.setNextPageCursor(nextPageCursor);
+        response.setResult(result);
+        return response;
+    }
+
+    /**
+     * InstrumentInfo 테스트 헬퍼 메서드.
+     */
+    private GetInstrumentsInfoResponse.InstrumentInfo makeInstrumentInfo(String symbol, String qtyStep) {
+        GetInstrumentsInfoResponse.InstrumentInfo info = new GetInstrumentsInfoResponse.InstrumentInfo();
+        info.setSymbol(symbol);
+
+        GetInstrumentsInfoResponse.LotSizeFilter filter = new GetInstrumentsInfoResponse.LotSizeFilter();
+        filter.setQtyStep(qtyStep);
+        filter.setMinOrderQty("0.001");
+        filter.setMaxOrderQty("10000");
+        info.setLotSizeFilter(filter);
+
+        return info;
     }
 }

@@ -6,6 +6,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
+@Table(name = "\"user\"")  // "user"는 SQL 표준 예약어이므로 큰따옴표로 감싸서 식별자로 인식하도록 함
+// Hibernate의 create-drop DDL이 H2에서 "drop table if exists user cascade"를 실행할 때
+// 큰따옴표 없이는 user가 예약어로 인식되어 "Unexpected token: USER" SQL 문법 오류가 발생함
 @Getter @Setter
 @NoArgsConstructor
 public class User {
