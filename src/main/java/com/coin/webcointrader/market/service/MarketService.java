@@ -183,22 +183,40 @@ public class MarketService {
     /**
      * Bybit에서 전체 Linear 종목의 qtyStep을 조회하여 캐시에 저장한다.
      * 애플리케이션 시작 시 호출되며, 캐시가 비어있을 때도 호출된다.
+     *
+     * <p>Bybit instruments-info API는 페이징 응답이므로,
+     * nextPageCursor가 빈 문자열이 될 때까지 반복 호출하여 전체 종목을 캐시한다.</p>
      */
     public void refreshQtyStepCache() {
         try {
-            GetInstrumentsInfoResponse response = marketClient.getInstrumentsInfo(
-                    Category.LINEAR.getCategory()).getBody();
+            String cursor = "";  // 첫 호출은 커서 없이 시작
 
-            if (response != null && response.getResult() != null
-                    && response.getResult().getList() != null) {
+            // 페이지 순회: nextPageCursor가 빈 문자열이면 마지막 페이지
+            do {
+                GetInstrumentsInfoResponse response = marketClient.getInstrumentsInfo(
+                        Category.LINEAR.getCategory(), 1000, cursor.isEmpty() ? null : cursor).getBody();
+
+                if (response == null || response.getResult() == null
+                        || response.getResult().getList() == null) {
+                    break;
+                }
+
+                // 현재 페이지의 종목 정보를 캐시에 저장
                 for (GetInstrumentsInfoResponse.InstrumentInfo info : response.getResult().getList()) {
                     if (info.getSymbol() != null && info.getLotSizeFilter() != null
                             && info.getLotSizeFilter().getQtyStep() != null) {
                         qtyStepCache.put(info.getSymbol(), info.getLotSizeFilter().getQtyStep());
                     }
                 }
-                log.info(LogMessage.QTY_STEP_CACHE_INIT_SUCCESS.getMessage(), qtyStepCache.size());
-            }
+
+                // 다음 페이지 커서 갱신 (null 또는 빈 문자열이면 마지막 페이지)
+                cursor = response.getResult().getNextPageCursor();
+                if (cursor == null) {
+                    cursor = "";
+                }
+            } while (!cursor.isEmpty());
+
+            log.info(LogMessage.QTY_STEP_CACHE_INIT_SUCCESS.getMessage(), qtyStepCache.size());
         } catch (Exception e) {
             log.error(LogMessage.QTY_STEP_CACHE_INIT_FAILED.getMessage(), e.getMessage());
         }

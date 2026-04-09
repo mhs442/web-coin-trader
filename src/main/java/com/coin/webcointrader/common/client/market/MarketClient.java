@@ -45,12 +45,18 @@ public interface MarketClient {
     /**
      * Bybit GET /v5/market/instruments-info
      * 카테고리별 전체 종목의 거래 규칙(수량 단위, 최소/최대 주문량 등)을 조회한다.
+     * 페이징 응답이므로 nextPageCursor를 이용하여 전체 페이지를 순회해야 한다.
      *
      * @param category 파생상품 카테고리 (예: "linear")
+     * @param limit    한 페이지당 조회 건수 (최대 1000)
+     * @param cursor   다음 페이지 커서 (첫 호출 시 빈 문자열)
      * @return 종목별 거래 규칙 응답 (lotSizeFilter.qtyStep 등 포함)
      */
     @GetMapping("/v5/market/instruments-info")
-    ResponseEntity<GetInstrumentsInfoResponse> getInstrumentsInfo(@RequestParam("category") String category);
+    ResponseEntity<GetInstrumentsInfoResponse> getInstrumentsInfo(
+            @RequestParam("category") String category,
+            @RequestParam(value = "limit", defaultValue = "1000") int limit,
+            @RequestParam(value = "cursor", required = false) String cursor);
 
     /**
      * Bybit GET /v5/market/orderbook

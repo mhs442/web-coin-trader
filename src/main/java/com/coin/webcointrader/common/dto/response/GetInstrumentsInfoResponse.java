@@ -24,6 +24,7 @@ public class GetInstrumentsInfoResponse extends BybitMasterDTO {
     public static class Result {
         private String category;                    // 파생상품 카테고리 (예: "linear")
         private List<InstrumentInfo> list;           // 종목 정보 목록
+        private String nextPageCursor;               // 다음 페이지 커서 (빈 문자열이면 마지막 페이지)
     }
 
     @Getter @Setter
