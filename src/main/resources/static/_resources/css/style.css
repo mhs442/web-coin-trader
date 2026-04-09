@@ -270,6 +270,7 @@ body {
    ========================================= */
 .market-overview-container {
     padding: 24px 32px;
+    width: 100%;
     max-width: 1400px;
     margin: 0 auto;
     flex: 1;                       /* 헤더 아래 남은 공간 모두 사용 */
@@ -277,6 +278,7 @@ body {
     flex-direction: column;
     overflow: hidden;              /* 내부 스크롤 영역에 위임 */
     min-height: 0;                 /* flex 자식 overflow 허용 */
+    box-sizing: border-box;
 }
 
 .dashboard-header {
@@ -291,6 +293,24 @@ body {
     font-size: 2rem;
     font-weight: 600;
     margin: 0;
+}
+
+.coin-search-input {
+    padding: 6px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    width: 220px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.coin-search-input:focus {
+    border-color: #4caf50;
+}
+
+.coin-search-input::placeholder {
+    color: #aaa;
 }
 
 .mypage-link {
@@ -332,7 +352,17 @@ body {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.9rem;
+    table-layout: fixed;
 }
+
+/* 대시보드 테이블 컬럼 고정 너비 */
+.market-table th:nth-child(1) { width: 18%; } /* Symbol */
+.market-table th:nth-child(2) { width: 12%; } /* Base Coin */
+.market-table th:nth-child(3) { width: 14%; } /* Last Price */
+.market-table th:nth-child(4) { width: 14%; } /* 24h Change */
+.market-table th:nth-child(5) { width: 14%; } /* 24h High */
+.market-table th:nth-child(6) { width: 14%; } /* 24h Low */
+.market-table th:nth-child(7) { width: 14%; } /* 24h Volume */
 
 .market-table thead {
     background-color: #f8f9fa;

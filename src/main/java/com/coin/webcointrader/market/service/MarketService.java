@@ -70,7 +70,8 @@ public class MarketService {
             response.getResult().getList()
                     .removeIf(ticker -> !ticker.getSymbol().endsWith("USDT"));
             response.getResult().getList()
-                    .sort((t1, t2) -> Double.compare(Double.parseDouble(t2.getVolume24h()), Double.parseDouble(t1.getVolume24h())));
+                    // 24시간 거래대금(turnover) 내림차순 정렬 (Bybit 마켓 페이지 기준)
+                    .sort((t1, t2) -> Double.compare(Double.parseDouble(t2.getTurnover24h()), Double.parseDouble(t1.getTurnover24h())));
             cachedTickers.set(response);
         }
     }

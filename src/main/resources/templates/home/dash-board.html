@@ -9,6 +9,7 @@
 <div class="market-overview-container">
     <div class="dashboard-header">
         <h1>실시간 코인 목록</h1>
+        <input type="text" id="coin-search" class="coin-search-input" placeholder="코인 검색 (예: BTC, ETH)">
         <a href="/mypage" class="mypage-link">마이페이지</a>
     </div>
 
@@ -67,7 +68,7 @@
     }
 
     /**
-     * 전체 코인 목록을 렌더링한다.
+     * 검색어에 따라 필터링된 코인 목록을 렌더링한다.
      * 1초마다 호출되며, 스크롤 위치를 유지하면서 데이터를 갱신한다.
      */
     function renderCoins() {
@@ -75,10 +76,17 @@
         const wrapper = document.getElementById('dashboard-scroll-wrapper');
         const scrollTop = wrapper.scrollTop; // 스크롤 위치 저장
 
+        // 검색어로 필터링 (대소문자 무시, LIKE 방식)
+        const keyword = ($('#coin-search').val() || '').toLowerCase();
+        const filtered = allCoins.filter(coin => {
+            if (!keyword) return true;
+            return coin.symbol.toLowerCase().includes(keyword)
+                || coin.baseCoin.toLowerCase().includes(keyword);
+        });
+
         tbody.innerHTML = '';
 
-        // 전체 코인 렌더링
-        allCoins.forEach(coin => {
+        filtered.forEach(coin => {
             tbody.appendChild(createCoinRow(coin));
         });
 
@@ -101,6 +109,11 @@
                 console.error('Error fetching tickers:', error);
             });
     }
+
+    // 검색어 입력 시 즉시 필터링
+    $(document).on('input', '#coin-search', function() {
+        renderCoins();
+    });
 
     // 페이지 로드 시 초기화 및 1초 간격 갱신
     document.addEventListener('DOMContentLoaded', updateCoinList);
