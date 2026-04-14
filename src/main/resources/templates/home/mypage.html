@@ -74,6 +74,8 @@
             </div>
             <button class="filter-btn" onclick="searchTrades()">검색</button>
             <button class="filter-btn filter-reset-btn" onclick="resetTradeFilter()">초기화</button>
+            <button class="filter-btn delete-selected-btn" onclick="deleteSelectedTrades()">선택 삭제</button>
+            <button class="filter-btn delete-all-btn" onclick="deleteAllTrades()">전체 삭제</button>
         </div>
         <div id="trade-container" class="mypage-scroll-wrapper"></div>
         <div id="trade-scroll-loading" class="scroll-loading" style="display: none;">데이터 로딩 중...</div>
@@ -103,6 +105,8 @@
             </div>
             <button class="filter-btn" onclick="searchInvestments()">검색</button>
             <button class="filter-btn filter-reset-btn" onclick="resetInvestmentFilter()">초기화</button>
+            <button class="filter-btn delete-selected-btn" onclick="deleteSelectedInvestments()">선택 삭제</button>
+            <button class="filter-btn delete-all-btn" onclick="deleteAllInvestments()">전체 삭제</button>
         </div>
         <!-- 합산 통계 카드 -->
         <div id="investment-summary" class="investment-summary-card">
@@ -454,6 +458,7 @@
                             <table class="mypage-table">
                                 <thead>
                                     <tr>
+                                        <th><input type="checkbox" id="trade-check-all" onchange="toggleAllTradeChecks(this)"></th>
                                         <th>일시</th>
                                         <th>코인</th>
                                         <th>방향</th>
@@ -482,7 +487,9 @@
                     var orderTypeLabel = orderTypeMap[t.orderType] || t.orderType || '-';
 
                     const tr = document.createElement('tr');
+                    tr.dataset.id = t.id;
                     tr.innerHTML =
+                        '<td><input type="checkbox" class="trade-check" value="' + t.id + '"></td>' +
                         '<td>' + t.createdAt + '</td>' +
                         '<td><strong>' + t.symbol + '</strong></td>' +
                         '<td class="' + sideClass + '">' + t.side + '</td>' +
@@ -590,6 +597,7 @@
                             '<table class="mypage-table">' +
                                 '<thead>' +
                                     '<tr>' +
+                                        '<th><input type="checkbox" id="inv-check-all" onchange="toggleAllInvestmentChecks(this)"></th>' +
                                         '<th>일시</th>' +
                                         '<th>코인</th>' +
                                         '<th>방향</th>' +
@@ -616,8 +624,9 @@
                     var profitClass = profitVal >= 0 ? 'text-green' : 'text-red';
                     var profitPrefix = profitVal >= 0 ? '+' : '';
 
-                    var $tr = $('<tr>');
+                    var $tr = $('<tr>').attr('data-id', inv.id);
                     $tr.html(
+                        '<td><input type="checkbox" class="inv-check" value="' + inv.id + '"></td>' +
                         '<td>' + inv.createdAt + '</td>' +
                         '<td><strong>' + inv.symbol + '</strong></td>' +
                         '<td class="' + sideClass + '">' + inv.side + '</td>' +
@@ -658,6 +667,120 @@
         $('#inv-filter-end').val('');
         $('#inv-filter-sort').val('desc');
         searchInvestments();
+    }
+
+    // === 거래 히스토리 삭제 ===
+
+    /**
+     * 거래 히스토리 전체선택 체크박스 토글
+     */
+    function toggleAllTradeChecks(checkbox) {
+        document.querySelectorAll('#trade-container .trade-check').forEach(function(cb) {
+            cb.checked = checkbox.checked;
+        });
+    }
+
+    /**
+     * 선택된 거래 히스토리 삭제
+     */
+    function deleteSelectedTrades() {
+        var ids = [];
+        document.querySelectorAll('#trade-container .trade-check:checked').forEach(function(cb) {
+            ids.push(parseInt(cb.value));
+        });
+        if (ids.length === 0) {
+            alert('삭제할 항목을 선택해주세요.');
+            return;
+        }
+        if (!confirm(ids.length + '건을 삭제하시겠습니까?')) return;
+
+        $.ajax({
+            url: '/api/mypage/trades',
+            type: 'DELETE',
+            contentType: 'application/json',
+            data: JSON.stringify({ ids: ids, mode: getTradeMode() }),
+            success: function() {
+                searchTrades();
+            },
+            error: function(xhr) {
+                alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+            }
+        });
+    }
+
+    /**
+     * 전체 거래 히스토리 삭제 (confirm 후 실행)
+     */
+    function deleteAllTrades() {
+        if (!confirm('전체 거래 히스토리를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) return;
+
+        $.ajax({
+            url: '/api/mypage/trades/all',
+            type: 'DELETE',
+            data: { mode: getTradeMode() },
+            success: function() {
+                searchTrades();
+            },
+            error: function(xhr) {
+                alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+            }
+        });
+    }
+
+    // === 투자 히스토리 삭제 ===
+
+    /**
+     * 투자 히스토리 전체선택 체크박스 토글
+     */
+    function toggleAllInvestmentChecks(checkbox) {
+        $('#investment-container .inv-check').prop('checked', checkbox.checked);
+    }
+
+    /**
+     * 선택된 투자 히스토리 삭제
+     */
+    function deleteSelectedInvestments() {
+        var ids = [];
+        $('#investment-container .inv-check:checked').each(function() {
+            ids.push(parseInt($(this).val()));
+        });
+        if (ids.length === 0) {
+            alert('삭제할 항목을 선택해주세요.');
+            return;
+        }
+        if (!confirm(ids.length + '건을 삭제하시겠습니까?')) return;
+
+        $.ajax({
+            url: '/api/mypage/investments',
+            type: 'DELETE',
+            contentType: 'application/json',
+            data: JSON.stringify({ ids: ids, mode: getTradeMode() }),
+            success: function() {
+                searchInvestments();
+            },
+            error: function(xhr) {
+                alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+            }
+        });
+    }
+
+    /**
+     * 전체 투자 히스토리 삭제 (confirm 후 실행)
+     */
+    function deleteAllInvestments() {
+        if (!confirm('전체 투자 히스토리를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) return;
+
+        $.ajax({
+            url: '/api/mypage/investments/all',
+            type: 'DELETE',
+            data: { mode: getTradeMode() },
+            success: function() {
+                searchInvestments();
+            },
+            error: function(xhr) {
+                alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+            }
+        });
     }
 
     // === 합산 통계 카드 업데이트 ===

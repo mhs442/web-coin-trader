@@ -1755,6 +1755,22 @@ body {
     background-color: #545b62;
 }
 
+.delete-selected-btn {
+    background-color: #fd7e14;
+}
+
+.delete-selected-btn:hover {
+    background-color: #e8690a;
+}
+
+.delete-all-btn {
+    background-color: #dc3545;
+}
+
+.delete-all-btn:hover {
+    background-color: #b02a37;
+}
+
 /* 스크롤 로딩 인디케이터 (무한 스크롤) */
 .scroll-loading {
     text-align: center;
