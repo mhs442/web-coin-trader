@@ -12,6 +12,7 @@ import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.market.service.MarketService;
+import com.coin.webcointrader.trade.service.TradeFacade;
 import com.coin.webcointrader.trade.service.TradeService;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +51,9 @@ class AutoTradeServiceTest {
 
     @Mock
     private InvestmentHistoryRepository investmentHistoryRepository;
+
+    @Mock
+    private TradeFacade tradeFacade;
 
     @Mock
     private TradeService tradeService;
@@ -191,7 +195,7 @@ class AutoTradeServiceTest {
         given(marketService.getTickers()).willReturn(null);
 
         assertThatCode(() -> autoTradeService.tick()).doesNotThrowAnyException();
-        then(tradeService).should(never()).placeOrder(any(), any(), any());
+        then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
     }
 
     // ─────────────────────────────────────────────
@@ -473,7 +477,7 @@ class AutoTradeServiceTest {
             assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
             assertThat(state.getCurrentBlockOrder()).isEqualTo(1);
             // 매도 주문 실행 확인 (reduceOnly 포함)
-            then(tradeService).should(times(1)).placeOrder(any(), any(), any(TradeHistory.class));
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(TradeHistory.class), any());
             // 거래 이력 저장 확인
             then(tradeHistoryRepository).should(times(1)).save(any(TradeHistory.class));
             // 투자 히스토리 저장 확인 (포지션 사이클 완료 기록)
@@ -501,7 +505,7 @@ class AutoTradeServiceTest {
             autoTradeService.processBlockMatching(queue, state, session, "44500.00");
 
             // 청산 주문 실행 검증
-            then(tradeService).should(times(1)).placeOrder(any(), eq(1L), any());
+            then(tradeFacade).should(times(1)).placeOrder(any(), eq(1L), any(), any());
             then(tradeHistoryRepository).should(times(1)).save(any());
             // 투자 히스토리 저장 확인 (포지션 사이클 완료 기록)
             then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
@@ -510,6 +514,58 @@ class AutoTradeServiceTest {
             assertThat(state.getCurrentStepLevel()).isEqualTo(2);
             assertThat(state.getDirection()).isEqualTo(Side.SHORT);
             assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+        }
+
+        @Test
+        @DisplayName("Long 매도 성공 후 1단계 Long 패턴으로 재진입한다 (SRS 11, 12)")
+        void sellSuccess_long_resetsToStep1WithLongPattern() {
+            // 1단계에 LONG(id=100) + SHORT(id=200) 양쪽 패턴, leverage=10
+            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);       // Long 포지션
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(100L);      // Long 패턴 (index 0)
+            state.setActiveStepId(10L);
+            state.setCurrentBlockOrder(2);       // 리프 블록
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.001");
+
+            // 50000 → 55500 = +11% (threshold=10%) → LONG 신호 → 리프 LONG 일치 → 매도 성공
+            autoTradeService.processBlockMatching(queue, state, session, "55500.00");
+
+            // 매도 성공 → 1단계 Long 패턴(id=100)으로 재진입
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
+            assertThat(state.getDirection()).isEqualTo(Side.LONG);
+            assertThat(state.getActivePatternId()).isEqualTo(100L);
+        }
+
+        @Test
+        @DisplayName("Short 매도 성공 후 1단계 Short 패턴으로 재진입한다 (SRS 11, 12)")
+        void sellSuccess_short_resetsToStep1WithShortPattern() {
+            // 1단계에 LONG(id=100) + SHORT(id=200) 양쪽 패턴, leverage=10
+            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.SHORT);      // Short 포지션
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(200L);      // Short 패턴 (index 1)
+            state.setActiveStepId(10L);
+            state.setCurrentBlockOrder(2);       // 리프 블록
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.001");
+
+            // 50000 → 44500 = -11% (threshold=10%) → SHORT 신호 → 리프 SHORT 일치 → 매도 성공
+            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
+
+            // 매도 성공 → 1단계 Short 패턴(id=200)으로 재진입
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            assertThat(state.getActivePatternId()).isEqualTo(200L);
         }
 
         @Test
@@ -533,7 +589,7 @@ class AutoTradeServiceTest {
             autoTradeService.processBlockMatching(queue, state, session, "44500.00");
 
             // 청산 주문 실행 검증
-            then(tradeService).should(times(1)).placeOrder(any(), eq(1L), any());
+            then(tradeFacade).should(times(1)).placeOrder(any(), eq(1L), any(), any());
             // 투자 히스토리 저장 확인
             then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
 
@@ -625,6 +681,33 @@ class AutoTradeServiceTest {
             // 투입 금액 = 100 USDT (makeStep에서 설정)
             assertThat(response.getAmount()).isNotNull();
             assertThat(response.getAmount()).isEqualByComparingTo(new BigDecimal("100"));
+        }
+
+        @Test
+        @DisplayName("BLOCK_MATCHING 시 진입가(entryPrice)를 반환한다 (SRS 27)")
+        void returnsEntryPriceOnBlockMatching() {
+            Long userId = 1L;
+            String symbol = "BTCUSDT";
+            PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
+
+            // BLOCK_MATCHING 상태 + 진입가 설정
+            var state = autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates().get(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+
+            FindTickerResponse.TickerInfo wsTicker = new FindTickerResponse.TickerInfo();
+            wsTicker.setLastPrice("52500.00");
+            given(marketService.getWsTicker(symbol)).willReturn(wsTicker);
+
+            var response = autoTradeService.getStatusResponse(userId, symbol, TradeMode.MAIN);
+
+            // 진입가가 응답에 포함되어야 함
+            assertThat(response.getEntryPrice()).isEqualTo("50000.00");
         }
 
         @Test
@@ -871,6 +954,18 @@ class AutoTradeServiceTest {
         step.getPatterns().add(shortPattern);
 
         return step;
+    }
+
+    /**
+     * LONG+SHORT 양쪽 패턴에 레버리지를 지정한 PatternQueue 생성
+     * - Long 패턴 id=100, Short 패턴 id=200
+     */
+    private PatternQueue makeBothPatternQueueWithLeverage(Long id, Long userId, String symbol, int leverage) {
+        PatternQueue queue = makePatternQueueWithBothPatterns(id, userId, symbol);
+        // makeStepWithBothPatterns에서 leverage=1로 고정하므로 여기서 override
+        queue.getSteps().forEach(step ->
+                step.getPatterns().forEach(p -> p.setLeverage(leverage)));
+        return queue;
     }
 
     /**

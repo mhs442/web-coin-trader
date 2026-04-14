@@ -204,6 +204,7 @@ public class AutoTradeService {
         BigDecimal changeRate = null;
         BigDecimal amount = null;
         int activePatternOrder = 0;
+        String entryPrice = null; // 진입 시점 체결가 (BLOCK_MATCHING 상태에서만 세팅)
 
         FindTickerResponse.TickerInfo wsTicker = marketService.getWsTicker(symbol);
         String currentPrice = wsTicker != null ? wsTicker.getLastPrice() : null;
@@ -216,9 +217,10 @@ public class AutoTradeService {
                 }
                 changeRate = calculateTriggerRate(state.getBasePrice(), currentPrice);
             }
-            // BLOCK_MATCHING: 변동률 (진입가 대비) + 투입 금액
+            // BLOCK_MATCHING: 변동률 (진입가 대비) + 투입 금액 + 진입가 (SRS 27)
             else if (state.getPhase() == TradePhase.BLOCK_MATCHING && state.getEntryPrice() != null) {
                 changeRate = calculateTriggerRate(state.getEntryPrice(), currentPrice);
+                entryPrice = state.getEntryPrice(); // 진입 시점 체결가 세팅
                 // 활성 패턴에서 투입 금액 조회
                 Pattern activePattern = findPatternById(firstQueue, state.getActivePatternId());
                 if (activePattern != null) {
@@ -239,6 +241,7 @@ public class AutoTradeService {
                 .elapsedSeconds(elapsedSeconds)
                 .changeRate(changeRate)
                 .amount(amount)
+                .entryPrice(entryPrice)
                 .build();
     }
 
@@ -642,7 +645,9 @@ public class AutoTradeService {
     }
 
     /**
-     * 매도 성공 처리: 시장가 매도 → 같은 단계 반복 (SRS 11)
+     * 매도 성공 처리 (SRS 11, 12): 시장가 매도 → 1단계로 리셋 후 매도 성공한 방향으로 재진입
+     * - 매도 성공 시 항상 1단계부터 다시 수행 (SRS 11)
+     * - 재진입 방향은 매도 성공한 포지션 방향 그대로 유지 (SRS 12)
      */
     private void handleSellSuccess(PatternQueue queue, QueueStateDTO state,
                                    AutoTradeSessionDTO session,
@@ -699,7 +704,21 @@ public class AutoTradeService {
                     + actualAmount.stripTrailingZeros().toPlainString() + "$ "
                     + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
 
-            // 같은 단계 반복: 블록 리셋 → POSITION_OPEN (즉시 재진입)
+            // SRS 11, 12: 매도 성공 → 1단계부터 다시 수행
+            // 단, 재진입 시 매도 성공한 포지션 방향 그대로 1단계 패턴을 선택한다
+            PatternStep firstStep = queue.getSteps().get(0);
+            Pattern nextPattern = selectPattern(firstStep, state.getDirection());
+            if (nextPattern == null) {
+                // 1단계에 현재 방향 패턴이 없으면 큐 비활성화
+                deactivateQueue(queue, state, session,
+                        "1단계에 " + state.getDirection() + " 패턴 없음");
+                return;
+            }
+            state.setCurrentStepLevel(1);
+            state.setActiveStepId(firstStep.getId());
+            state.setActivePatternId(nextPattern.getId());
+
+            // 블록 리셋 + 재진입 준비
             state.setCurrentBlockOrder(1);
             state.setEntryPrice(null);
             state.setPhase(TradePhase.POSITION_OPEN);
