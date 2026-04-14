@@ -59,11 +59,11 @@ public class PatternQueueService {
         // 단계/패턴/블록 검증
         validateSteps(request.getSteps());
 
-        // 심볼당 최대 20개 제한
+        // 심볼당 1개 제한 (코드 레벨 강제)
         // 거래 모드별 큐 개수 검증
         TradeMode mode = "SIM".equalsIgnoreCase(request.getTradeMode()) ? TradeMode.SIM : TradeMode.MAIN;
         long count = patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, request.getSymbol(), mode);
-        if (count >= 20) {
+        if (count >= 1) {
             throw new CustomException(ExceptionMessage.EXCEED_MAX_QUEUES);
         }
 
@@ -201,9 +201,9 @@ public class PatternQueueService {
             throw new CustomException(ExceptionMessage.QUEUE_UNAUTHORIZED);
         }
 
-        // 대상 심볼 큐 최대 20개 제한 검증
+        // 대상 심볼 큐 1개 제한 검증
         long count = patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, targetSymbol, tradeMode);
-        if (count >= 20) {
+        if (count >= 1) {
             throw new CustomException(ExceptionMessage.EXCEED_MAX_QUEUES);
         }
 

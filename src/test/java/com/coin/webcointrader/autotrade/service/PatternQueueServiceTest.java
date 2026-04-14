@@ -269,18 +269,18 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("addQueue: 큐가 20개 이상이면 CustomException 발생")
+    @DisplayName("addQueue: 심볼에 큐가 이미 1개 이상 존재하면 CustomException 발생")
     void addQueue_maxQueueLimit() {
         // given
         Long userId = 1L;
         AddPatternRequest request = makeFullRequest("BTCUSDT");
 
-        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, "BTCUSDT", TradeMode.MAIN)).willReturn(20L);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, "BTCUSDT", TradeMode.MAIN)).willReturn(1L);
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
                 .isInstanceOf(CustomException.class)
-                .hasMessageContaining("20개");
+                .hasMessageContaining("1개만");
     }
 
     // ─────────────────────────────────────────────
@@ -354,15 +354,15 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("copyQueue: 대상 심볼 큐가 20개 이상이면 CustomException 발생")
+    @DisplayName("copyQueue: 대상 심볼에 큐가 이미 1개 이상 존재하면 CustomException 발생")
     void copyQueue_exceedLimit() {
         PatternQueue origin = makePatternQueue(1L, 1L, "ETHUSDT");
         given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
-        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(1L, "BTCUSDT", TradeMode.MAIN)).willReturn(20L);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(1L, "BTCUSDT", TradeMode.MAIN)).willReturn(1L);
 
         assertThatThrownBy(() -> patternQueueService.copyQueue(1L, 1L, "BTCUSDT", TradeMode.MAIN))
                 .isInstanceOf(CustomException.class)
-                .hasMessageContaining("20개");
+                .hasMessageContaining("1개만");
     }
 
     // ─────────────────────────────────────────────

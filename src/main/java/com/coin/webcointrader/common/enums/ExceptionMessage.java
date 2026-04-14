@@ -25,7 +25,7 @@ public enum ExceptionMessage {
     INVALID_LEVERAGE(HttpStatus.BAD_REQUEST, "레버리지는 0보다 커야 합니다."),
     MISSING_LEAF_BLOCK(HttpStatus.BAD_REQUEST, "리프 블록은 필수입니다."),
     INVALID_SIDE(HttpStatus.BAD_REQUEST, "방향은 LONG 또는 SHORT만 입력할 수 있습니다."),
-    EXCEED_MAX_QUEUES(HttpStatus.BAD_REQUEST, "큐는 심볼당 최대 20개까지 등록할 수 있습니다."),
+    EXCEED_MAX_QUEUES(HttpStatus.BAD_REQUEST, "큐는 심볼당 1개만 등록할 수 있습니다."),
     QUEUE_NOT_FOUND(HttpStatus.BAD_REQUEST, "큐를 찾을 수 없습니다."),
     QUEUE_UNAUTHORIZED(HttpStatus.FORBIDDEN, "큐에 대한 권한이 없습니다."),
     ORDER_FAILED(HttpStatus.BAD_REQUEST, "주문 실행 실패"),
