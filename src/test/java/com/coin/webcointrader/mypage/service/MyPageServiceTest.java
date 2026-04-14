@@ -10,6 +10,8 @@ import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.mypage.dto.*;
+import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
+import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,6 +47,12 @@ class MyPageServiceTest {
 
     @Mock
     private InvestmentHistoryRepository investmentHistoryRepository;
+
+    @Mock
+    private SimTradeHistoryRepository simTradeHistoryRepository;
+
+    @Mock
+    private SimInvestmentHistoryRepository simInvestmentHistoryRepository;
 
     // ─────────────────────────────────────────────
     // getPatterns
@@ -263,6 +271,114 @@ class MyPageServiceTest {
         assertThat(result.getSummary().getTotalProfit()).isEqualTo("0");
         assertThat(result.getSummary().getTotalLoss()).isEqualTo("0");
         assertThat(result.getSummary().getNetTotal()).isEqualTo("0");
+    }
+
+    // ─────────────────────────────────────────────
+    // deleteTradeHistories (선택 삭제)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("deleteTradeHistories: MAIN 모드 — 선택한 ID 목록을 삭제한다")
+    void deleteTradeHistories_main_success() {
+        Long userId = 1L;
+        List<Long> ids = List.of(1L, 2L);
+
+        myPageService.deleteTradeHistories(userId, ids, "main");
+
+        then(tradeHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
+        then(simTradeHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+    }
+
+    @Test
+    @DisplayName("deleteTradeHistories: SIM 모드 — 선택한 ID 목록을 모의 리포지토리에서 삭제한다")
+    void deleteTradeHistories_sim_success() {
+        Long userId = 1L;
+        List<Long> ids = List.of(3L);
+
+        myPageService.deleteTradeHistories(userId, ids, "sim");
+
+        then(simTradeHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
+        then(tradeHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+    }
+
+    // ─────────────────────────────────────────────
+    // deleteAllTradeHistories (전체 삭제)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("deleteAllTradeHistories: MAIN 모드 — 사용자의 전체 거래 히스토리를 삭제한다")
+    void deleteAllTradeHistories_main_success() {
+        Long userId = 1L;
+
+        myPageService.deleteAllTradeHistories(userId, "main");
+
+        then(tradeHistoryRepository).should().deleteAllByUserId(userId);
+        then(simTradeHistoryRepository).should(never()).deleteAllByUserId(any());
+    }
+
+    @Test
+    @DisplayName("deleteAllTradeHistories: SIM 모드 — 사용자의 전체 모의 거래 히스토리를 삭제한다")
+    void deleteAllTradeHistories_sim_success() {
+        Long userId = 1L;
+
+        myPageService.deleteAllTradeHistories(userId, "sim");
+
+        then(simTradeHistoryRepository).should().deleteAllByUserId(userId);
+        then(tradeHistoryRepository).should(never()).deleteAllByUserId(any());
+    }
+
+    // ─────────────────────────────────────────────
+    // deleteInvestmentHistories (선택 삭제)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("deleteInvestmentHistories: MAIN 모드 — 선택한 ID 목록을 삭제한다")
+    void deleteInvestmentHistories_main_success() {
+        Long userId = 1L;
+        List<Long> ids = List.of(10L, 20L);
+
+        myPageService.deleteInvestmentHistories(userId, ids, "main");
+
+        then(investmentHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
+        then(simInvestmentHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+    }
+
+    @Test
+    @DisplayName("deleteInvestmentHistories: SIM 모드 — 선택한 ID 목록을 모의 리포지토리에서 삭제한다")
+    void deleteInvestmentHistories_sim_success() {
+        Long userId = 1L;
+        List<Long> ids = List.of(30L);
+
+        myPageService.deleteInvestmentHistories(userId, ids, "sim");
+
+        then(simInvestmentHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
+        then(investmentHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+    }
+
+    // ─────────────────────────────────────────────
+    // deleteAllInvestmentHistories (전체 삭제)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("deleteAllInvestmentHistories: MAIN 모드 — 사용자의 전체 투자 히스토리를 삭제한다")
+    void deleteAllInvestmentHistories_main_success() {
+        Long userId = 1L;
+
+        myPageService.deleteAllInvestmentHistories(userId, "main");
+
+        then(investmentHistoryRepository).should().deleteAllByUserId(userId);
+        then(simInvestmentHistoryRepository).should(never()).deleteAllByUserId(any());
+    }
+
+    @Test
+    @DisplayName("deleteAllInvestmentHistories: SIM 모드 — 사용자의 전체 모의 투자 히스토리를 삭제한다")
+    void deleteAllInvestmentHistories_sim_success() {
+        Long userId = 1L;
+
+        myPageService.deleteAllInvestmentHistories(userId, "sim");
+
+        then(simInvestmentHistoryRepository).should().deleteAllByUserId(userId);
+        then(investmentHistoryRepository).should(never()).deleteAllByUserId(any());
     }
 
     // ─────────────────────────────────────────────

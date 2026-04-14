@@ -219,6 +219,74 @@ public class MyPageService {
                 .build();
     }
 
+    /**
+     * 선택한 거래 히스토리 ID 목록을 삭제한다.
+     * userId 일치 건만 삭제되므로 타인 데이터 접근이 불가능하다.
+     *
+     * @param userId 사용자 ID
+     * @param ids    삭제할 거래 히스토리 ID 목록
+     * @param mode   거래 모드 ("sim" 또는 그 외)
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteTradeHistories(Long userId, List<Long> ids, String mode) {
+        // 모드에 따라 리포지토리 분기
+        if ("sim".equalsIgnoreCase(mode)) {
+            simTradeHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
+        } else {
+            tradeHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
+        }
+    }
+
+    /**
+     * 사용자의 전체 거래 히스토리를 삭제한다.
+     *
+     * @param userId 사용자 ID
+     * @param mode   거래 모드 ("sim" 또는 그 외)
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteAllTradeHistories(Long userId, String mode) {
+        // 모드에 따라 리포지토리 분기
+        if ("sim".equalsIgnoreCase(mode)) {
+            simTradeHistoryRepository.deleteAllByUserId(userId);
+        } else {
+            tradeHistoryRepository.deleteAllByUserId(userId);
+        }
+    }
+
+    /**
+     * 선택한 투자 히스토리 ID 목록을 삭제한다.
+     * userId 일치 건만 삭제되므로 타인 데이터 접근이 불가능하다.
+     *
+     * @param userId 사용자 ID
+     * @param ids    삭제할 투자 히스토리 ID 목록
+     * @param mode   거래 모드 ("sim" 또는 그 외)
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteInvestmentHistories(Long userId, List<Long> ids, String mode) {
+        // 모드에 따라 리포지토리 분기
+        if ("sim".equalsIgnoreCase(mode)) {
+            simInvestmentHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
+        } else {
+            investmentHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
+        }
+    }
+
+    /**
+     * 사용자의 전체 투자 히스토리를 삭제한다.
+     *
+     * @param userId 사용자 ID
+     * @param mode   거래 모드 ("sim" 또는 그 외)
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void deleteAllInvestmentHistories(Long userId, String mode) {
+        // 모드에 따라 리포지토리 분기
+        if ("sim".equalsIgnoreCase(mode)) {
+            simInvestmentHistoryRepository.deleteAllByUserId(userId);
+        } else {
+            investmentHistoryRepository.deleteAllByUserId(userId);
+        }
+    }
+
     // ─────────────────────────────────────────────
     // 유틸 메서드
     // ─────────────────────────────────────────────

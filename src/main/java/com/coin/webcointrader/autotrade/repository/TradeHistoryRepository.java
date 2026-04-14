@@ -45,4 +45,19 @@ public interface TradeHistoryRepository extends JpaRepository<TradeHistory, Long
      */
     Page<TradeHistory> findByUserIdAndCreatedAtBetween(
             Long userId, LocalDateTime start, LocalDateTime end, Pageable pageable);
+
+    /**
+     * 선택한 ID 목록 중 해당 사용자 소유 거래 히스토리를 삭제한다. (선택 삭제)
+     *
+     * @param ids    삭제할 거래 히스토리 ID 목록
+     * @param userId 사용자 ID (권한 검증)
+     */
+    void deleteAllByIdInAndUserId(List<Long> ids, Long userId);
+
+    /**
+     * 해당 사용자의 전체 거래 히스토리를 삭제한다. (전체 삭제)
+     *
+     * @param userId 사용자 ID
+     */
+    void deleteAllByUserId(Long userId);
 }
