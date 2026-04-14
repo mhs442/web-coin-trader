@@ -21,4 +21,5 @@ public class AutoTradeStatusResponse {
     private long elapsedSeconds;    // 트리거 경과 시간(초)
     private BigDecimal changeRate;  // 트리거 변동률(%)
     private BigDecimal amount;      // 투입 금액 (USDT)
+    private String entryPrice;      // 진입 시점 체결가 (BLOCK_MATCHING 시 설정, SRS 27)
 }
