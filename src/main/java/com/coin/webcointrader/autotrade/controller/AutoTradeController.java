@@ -93,6 +93,39 @@ public class AutoTradeController {
     }
 
     /**
+     * 전체 큐 목록 조회 (심볼 무관 - 큐 가져오기 모달용)
+     *
+     * @param mode 거래 모드 ("main" 또는 "sim", 기본값 "main")
+     * @param user 로그인 사용자
+     * @return 전체 패턴 큐 목록
+     */
+    @GetMapping("/patterns/all")
+    public List<PatternQueueResponse> getAllPatterns(@RequestParam(defaultValue = "main") String mode,
+                                                     @AuthenticationPrincipal UserDTO user) {
+        TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
+        return patternQueueService.getAllQueues(user.getId(), tradeMode).stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    /**
+     * 큐 복사 (원본 큐 구조를 대상 심볼로 복제)
+     *
+     * @param queueId 복사할 원본 큐 ID
+     * @param request 복사 요청 (대상 심볼, 거래 모드)
+     * @param user    로그인 사용자
+     * @return 복사된 패턴 큐 응답
+     */
+    @PostMapping("/patterns/{queueId}/copy")
+    public PatternQueueResponse copyPattern(@PathVariable Long queueId,
+                                            @RequestBody CopyQueueRequest request,
+                                            @AuthenticationPrincipal UserDTO user) {
+        TradeMode tradeMode = "sim".equalsIgnoreCase(request.getMode()) ? TradeMode.SIM : TradeMode.MAIN;
+        PatternQueue copied = patternQueueService.copyQueue(user.getId(), queueId, request.getSymbol(), tradeMode);
+        return toResponse(copied);
+    }
+
+    /**
      * 자동매매 상태 조회
      *
      * @param symbol 코인 심볼

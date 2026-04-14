@@ -168,6 +168,91 @@ public class PatternQueueService {
         return patternQueueRepository.save(queue);
     }
 
+    /**
+     * 사용자/거래모드의 전체 패턴 큐 목록을 심볼 무관하게 조회한다. (큐 가져오기 모달용)
+     *
+     * @param userId    사용자 ID
+     * @param tradeMode 거래 모드 (MAIN/SIM)
+     * @return 전체 패턴 큐 목록 (createdAt 오름차순)
+     */
+    public List<PatternQueue> getAllQueues(Long userId, TradeMode tradeMode) {
+        return patternQueueRepository.findByUserIdAndTradeModeOrderByCreatedAtAsc(userId, tradeMode);
+    }
+
+    /**
+     * 기존 큐의 구조(단계/패턴/블록)를 대상 심볼로 딥 카피하여 저장한다.
+     * 원본 큐의 트리거 비율, 단계, 패턴, 블록을 그대로 복제하되 심볼만 변경한다.
+     * 복사된 큐는 비활성 상태로 생성된다.
+     *
+     * @param userId       사용자 ID (권한 검증용)
+     * @param queueId      복사할 원본 큐 ID
+     * @param targetSymbol 복사될 대상 코인 심볼
+     * @param tradeMode    거래 모드 (MAIN/SIM)
+     * @return 저장된 PatternQueue 엔티티
+     */
+    @Transactional
+    public PatternQueue copyQueue(Long userId, Long queueId, String targetSymbol, TradeMode tradeMode) {
+        // 원본 큐 조회
+        PatternQueue origin = patternQueueRepository.findById(queueId)
+                .orElseThrow(() -> new CustomException(ExceptionMessage.QUEUE_NOT_FOUND));
+
+        // 권한 검증
+        if (!origin.getUserId().equals(userId)) {
+            throw new CustomException(ExceptionMessage.QUEUE_UNAUTHORIZED);
+        }
+
+        // 대상 심볼 큐 최대 20개 제한 검증
+        long count = patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, targetSymbol, tradeMode);
+        if (count >= 20) {
+            throw new CustomException(ExceptionMessage.EXCEED_MAX_QUEUES);
+        }
+
+        // 새 큐 생성 (심볼 변경, 비활성 상태)
+        PatternQueue newQueue = new PatternQueue();
+        newQueue.setUserId(userId);
+        newQueue.setSymbol(targetSymbol);
+        newQueue.setTriggerRate(origin.getTriggerRate());
+        newQueue.setActive(false);
+        newQueue.setTradeMode(tradeMode);
+
+        // 단계 → 패턴 → 블록 딥 카피
+        for (PatternStep originStep : origin.getSteps()) {
+            PatternStep newStep = new PatternStep();
+            newStep.setQueue(newQueue);
+            newStep.setStepLevel(originStep.getStepLevel());
+            newStep.setFull(originStep.isFull());
+
+            for (Pattern originPattern : originStep.getPatterns()) {
+                Pattern newPattern = new Pattern();
+                newPattern.setStep(newStep);
+                newPattern.setPatternOrder(originPattern.getPatternOrder());
+                newPattern.setAmount(originPattern.getAmount());
+                newPattern.setLeverage(originPattern.getLeverage());
+                newPattern.setStopLossRate(originPattern.getStopLossRate());
+                newPattern.setTakeProfitRate(originPattern.getTakeProfitRate());
+
+                for (PatternBlock originBlock : originPattern.getBlocks()) {
+                    PatternBlock newBlock = new PatternBlock();
+                    newBlock.setPattern(newPattern);
+                    newBlock.setSide(originBlock.getSide());
+                    newBlock.setBlockOrder(originBlock.getBlockOrder());
+                    newBlock.setLeaf(originBlock.isLeaf());
+                    newPattern.getBlocks().add(newBlock);
+                }
+
+                newStep.getPatterns().add(newPattern);
+            }
+
+            newQueue.getSteps().add(newStep);
+        }
+
+        // 모든 단계가 가득 찬 상태인지 확인
+        boolean allFull = newQueue.getSteps().stream().allMatch(PatternStep::isFull);
+        newQueue.setFull(allFull);
+
+        return patternQueueRepository.save(newQueue);
+    }
+
     // ─────────────────────────────────────────────
     // 검증 메서드
     // ─────────────────────────────────────────────

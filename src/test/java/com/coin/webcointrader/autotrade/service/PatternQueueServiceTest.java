@@ -5,6 +5,7 @@ import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -283,6 +284,88 @@ class PatternQueueServiceTest {
     }
 
     // ─────────────────────────────────────────────
+    // getAllQueues
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getAllQueues: 심볼 무관 전체 큐 목록을 반환한다")
+    void getAllQueues_returnAll() {
+        Long userId = 1L;
+        PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
+        PatternQueue eth = makePatternQueue(2L, userId, "ETHUSDT");
+        given(patternQueueRepository.findByUserIdAndTradeModeOrderByCreatedAtAsc(userId, TradeMode.MAIN))
+                .willReturn(List.of(btc, eth));
+
+        List<PatternQueue> result = patternQueueService.getAllQueues(userId, TradeMode.MAIN);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(PatternQueue::getSymbol)
+                .containsExactlyInAnyOrder("BTCUSDT", "ETHUSDT");
+    }
+
+    // ─────────────────────────────────────────────
+    // copyQueue
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("copyQueue: 큐 구조(단계/패턴/블록)를 대상 심볼로 복사한다")
+    void copyQueue_success() {
+        Long userId = 1L;
+        PatternQueue origin = makePatternQueueWithSteps(1L, userId, "ETHUSDT");
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(userId, "BTCUSDT", TradeMode.MAIN)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        PatternQueue result = patternQueueService.copyQueue(userId, 1L, "BTCUSDT", TradeMode.MAIN);
+
+        // 심볼이 대상으로 변경되어야 함
+        assertThat(result.getSymbol()).isEqualTo("BTCUSDT");
+        // 트리거 비율 유지
+        assertThat(result.getTriggerRate()).isEqualByComparingTo(new BigDecimal("1.0"));
+        // 새 큐는 비활성 상태로 생성
+        assertThat(result.isActive()).isFalse();
+        // 단계/패턴/블록 구조 복제 검증
+        assertThat(result.getSteps()).hasSize(1);
+        assertThat(result.getSteps().get(0).getPatterns()).hasSize(1);
+        assertThat(result.getSteps().get(0).getPatterns().get(0).getAmount())
+                .isEqualByComparingTo(new BigDecimal("10"));
+        assertThat(result.getSteps().get(0).getPatterns().get(0).getBlocks()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("copyQueue: 존재하지 않는 큐면 CustomException 발생")
+    void copyQueue_notFound() {
+        given(patternQueueRepository.findById(999L)).willReturn(java.util.Optional.empty());
+
+        assertThatThrownBy(() -> patternQueueService.copyQueue(1L, 999L, "BTCUSDT", TradeMode.MAIN))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("찾을 수 없습니다");
+    }
+
+    @Test
+    @DisplayName("copyQueue: 다른 사용자의 큐면 CustomException 발생")
+    void copyQueue_unauthorized() {
+        PatternQueue origin = makePatternQueue(1L, 99L, "ETHUSDT"); // userId=99
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
+
+        assertThatThrownBy(() -> patternQueueService.copyQueue(1L, 1L, "BTCUSDT", TradeMode.MAIN))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("권한");
+    }
+
+    @Test
+    @DisplayName("copyQueue: 대상 심볼 큐가 20개 이상이면 CustomException 발생")
+    void copyQueue_exceedLimit() {
+        PatternQueue origin = makePatternQueue(1L, 1L, "ETHUSDT");
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(1L, "BTCUSDT", TradeMode.MAIN)).willReturn(20L);
+
+        assertThatThrownBy(() -> patternQueueService.copyQueue(1L, 1L, "BTCUSDT", TradeMode.MAIN))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("20개");
+    }
+
+    // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
@@ -354,5 +437,54 @@ class PatternQueueServiceTest {
         block.setBlockOrder(blockOrder);
         block.setIsLeaf(isLeaf);
         return block;
+    }
+
+    /**
+     * 기본 PatternQueue 생성 (단계 없음, copyQueue 테스트용)
+     */
+    private PatternQueue makePatternQueue(Long id, Long userId, String symbol) {
+        PatternQueue queue = new PatternQueue();
+        queue.setId(id);
+        queue.setUserId(userId);
+        queue.setSymbol(symbol);
+        queue.setActive(false);
+        queue.setTriggerRate(new BigDecimal("1.0"));
+        queue.setTradeMode(TradeMode.MAIN);
+        ReflectionTestUtils.setField(queue, "createdAt", java.time.LocalDateTime.now());
+        return queue;
+    }
+
+    /**
+     * 1단계 1패턴 2블록 구조를 가진 PatternQueue 생성 (copyQueue 구조 복제 검증용)
+     */
+    private PatternQueue makePatternQueueWithSteps(Long id, Long userId, String symbol) {
+        PatternQueue queue = makePatternQueue(id, userId, symbol);
+
+        PatternBlock condBlock = new PatternBlock();
+        condBlock.setSide(Side.LONG);
+        condBlock.setBlockOrder(1);
+        condBlock.setLeaf(false);
+
+        PatternBlock leafBlock = new PatternBlock();
+        leafBlock.setSide(Side.LONG);
+        leafBlock.setBlockOrder(2);
+        leafBlock.setLeaf(true);
+
+        Pattern pattern = new Pattern();
+        pattern.setPatternOrder(1);
+        pattern.setAmount(new BigDecimal("10"));
+        pattern.setLeverage(5);
+        pattern.setStopLossRate(new BigDecimal("1.0"));
+        pattern.setTakeProfitRate(new BigDecimal("5.0"));
+        pattern.getBlocks().add(condBlock);
+        pattern.getBlocks().add(leafBlock);
+
+        PatternStep step = new PatternStep();
+        step.setStepLevel(1);
+        step.setFull(false);
+        step.getPatterns().add(pattern);
+
+        queue.getSteps().add(step);
+        return queue;
     }
 }
