@@ -765,14 +765,13 @@ body {
    Queue Settings Panel (큐 설정)
    ========================================= */
 .queue-settings-panel {
-    height: auto;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
 
-/* 큐 표시 영역 (등록된 단계/패턴 계층 표시, SRS 21번 스크롤) */
+/* 큐 표시 영역 (등록된 단계/패턴 계층 표시, 상위 패널 스크롤에 위임) */
 .queue-display {
-    max-height: 300px;
-    overflow-y: auto;
 }
 
 /* 큐 트리거 정보 표시 */
@@ -1290,8 +1289,8 @@ body {
     padding: 15px;
     border-bottom: 1px solid #dee2e6;
     overflow-y: auto;
-    max-height: 40%;
-    flex-shrink: 0;
+    flex: 0 0 40%;
+    min-height: 0;
 }
 
 
