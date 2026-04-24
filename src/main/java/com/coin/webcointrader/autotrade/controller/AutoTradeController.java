@@ -109,6 +109,23 @@ public class AutoTradeController {
     }
 
     /**
+     * 큐 수정 (triggerRate + steps 교체, 수정 후 자동매매 세션 동기화)
+     *
+     * @param id      큐 ID
+     * @param request 수정 요청 (triggerRate, steps)
+     * @param user    로그인 사용자
+     * @return 수정된 패턴 큐 응답
+     */
+    @PutMapping("/patterns/{id}")
+    public PatternQueueResponse updatePattern(@PathVariable Long id,
+                                              @RequestBody UpdatePatternRequest request,
+                                              @AuthenticationPrincipal UserDTO user) {
+        PatternQueue updated = patternQueueService.updateQueue(user.getId(), id, request);
+        autoTradeService.syncSession(user.getId(), updated.getSymbol(), updated.getTradeMode());
+        return toResponse(updated);
+    }
+
+    /**
      * 큐 복사 (원본 큐 구조를 대상 심볼로 복제)
      *
      * @param queueId 복사할 원본 큐 ID

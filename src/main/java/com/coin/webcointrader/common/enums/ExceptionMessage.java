@@ -28,6 +28,7 @@ public enum ExceptionMessage {
     EXCEED_MAX_QUEUES(HttpStatus.BAD_REQUEST, "큐는 심볼당 1개만 등록할 수 있습니다."),
     QUEUE_NOT_FOUND(HttpStatus.BAD_REQUEST, "큐를 찾을 수 없습니다."),
     QUEUE_UNAUTHORIZED(HttpStatus.FORBIDDEN, "큐에 대한 권한이 없습니다."),
+    QUEUE_ACTIVE_CANNOT_UPDATE(HttpStatus.BAD_REQUEST, "활성화된 큐는 수정할 수 없습니다. 먼저 비활성화 해주세요."),
     ORDER_FAILED(HttpStatus.BAD_REQUEST, "주문 실행 실패"),
     SET_LEVERAGE_FAILED(HttpStatus.BAD_REQUEST, "레버리지 설정 실패"),
     SET_TRADING_STOP_FAILED(HttpStatus.BAD_REQUEST, "손절/익절 설정 실패"),

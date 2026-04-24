@@ -9,6 +9,7 @@ import com.coin.webcointrader.common.entity.SimTradeHistory;
 import com.coin.webcointrader.common.entity.TradeHistory;
 import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.OrderResult;
+import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import com.coin.webcointrader.sim.repository.SimWalletRepository;
 import com.coin.webcointrader.common.entity.SimWallet;
@@ -61,8 +62,9 @@ public class SimTradeService {
         SimWallet wallet = simWalletRepository.findByUserId(userId)
                 .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
 
-        // 잔고 차감 (진입 주문 시)
-        if (history != null && history.getAmount() != null) {
+        // 잔고 차감 (진입 주문 시에만 차감 — 매도/청산은 applyProfitLoss에서 손익 반영)
+        if (history != null && history.getAmount() != null
+                && TradeOrderType.ENTRY.getTradeOrderType().equals(history.getOrderType())) {
             BigDecimal orderAmount = history.getAmount();
 
             // 잔고 부족 시 실패 처리

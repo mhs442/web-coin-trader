@@ -4,6 +4,7 @@ import com.coin.webcointrader.common.entity.Side;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -30,6 +31,9 @@ public class QueueStateDTO {
 
     // 포지션 상태
     private String entryPrice;         // 포지션 진입가
+    private String entryQty;           // 진입 시 코인 수량 (매도/청산 시 포지션 전량 청산에 재사용)
+    private BigDecimal entryNotional;  // 진입 시 실제 차감된 금액 (applyProfitLoss 반환 기준)
+    private int closeSkipCount;        // 청산 수량 오류 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
 
     // 처리 중 플래그 (중복 주문 방지)
     private final AtomicBoolean processing = new AtomicBoolean(false);

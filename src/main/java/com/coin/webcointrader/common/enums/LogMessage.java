@@ -50,6 +50,7 @@ public enum LogMessage {
     POSITION_ENTRY_FAILED("포지션 진입 실패: queue={}, error={}"),
     INVESTMENT_HISTORY_SAVED("투자 히스토리 저장: symbol={}, side={}, profitLoss={}, mode={}"),
     QUEUE_DEACTIVATED("큐 비활성화: queue={}, reason={}"),
+    CLOSE_QTY_SKIP_DEACTIVATED("포지션 청산 수량 오류 5회 초과 → 큐 비활성화: queue={}, phase={}"),
 
     // ─────────────────────────────────────────────
     // SimTradeService

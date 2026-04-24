@@ -1,6 +1,7 @@
 package com.coin.webcointrader.autotrade.service;
 
 import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
+import com.coin.webcointrader.autotrade.dto.UpdatePatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
@@ -55,7 +56,7 @@ public class PatternQueueService {
     @Transactional
     public PatternQueue addQueue(Long userId, AddPatternRequest request) {
         // 트리거 검증
-        validateTrigger(request);
+        validateTrigger(request.getTriggerRate());
         // 단계/패턴/블록 검증
         validateSteps(request.getSteps());
 
@@ -81,47 +82,7 @@ public class PatternQueueService {
         }
 
         // 단계 → 패턴 → 블록 계층 구조 생성
-        for (AddPatternRequest.StepRequest stepReq : request.getSteps()) {
-            PatternStep step = new PatternStep();
-            step.setQueue(queue);
-            step.setStepLevel(stepReq.getStepOrder());
-            // 패턴이 2개면 가득 찬 상태
-            step.setFull(stepReq.getPatterns().size() >= 2);
-
-            int patternOrder = 1;
-            for (AddPatternRequest.PatternRequest patternReq : stepReq.getPatterns()) {
-                Pattern pattern = new Pattern();
-                pattern.setStep(step);
-                pattern.setAmount(patternReq.getAmount());
-                pattern.setLeverage(patternReq.getLeverage());
-                pattern.setStopLossRate(patternReq.getStopLossRate());
-                pattern.setTakeProfitRate(patternReq.getTakeProfitRate());
-                pattern.setPatternOrder(patternOrder++);
-
-                // 조건 블록 추가
-                for (AddPatternRequest.BlockRequest blockReq : patternReq.getConditionBlocks()) {
-                    PatternBlock block = new PatternBlock();
-                    block.setPattern(pattern);
-                    block.setSide(Side.valueOf(blockReq.getSide().toUpperCase()));
-                    block.setBlockOrder(blockReq.getBlockOrder());
-                    block.setLeaf(false);
-                    pattern.getBlocks().add(block);
-                }
-
-                // 리프 블록 추가
-                AddPatternRequest.BlockRequest leafReq = patternReq.getLeafBlock();
-                PatternBlock leafBlock = new PatternBlock();
-                leafBlock.setPattern(pattern);
-                leafBlock.setSide(Side.valueOf(leafReq.getSide().toUpperCase()));
-                leafBlock.setBlockOrder(leafReq.getBlockOrder());
-                leafBlock.setLeaf(true);
-                pattern.getBlocks().add(leafBlock);
-
-                step.getPatterns().add(pattern);
-            }
-
-            queue.getSteps().add(step);
-        }
+        buildSteps(queue, request.getSteps());
 
         // 모든 단계가 가득 찬 상태인지 확인
         boolean allFull = queue.getSteps().stream().allMatch(PatternStep::isFull);
@@ -215,7 +176,7 @@ public class PatternQueueService {
         newQueue.setActive(false);
         newQueue.setTradeMode(tradeMode);
 
-        // 단계 → 패턴 → 블록 딥 카피
+        // 원본 단계 → 패턴 → 블록 딥 카피
         for (PatternStep originStep : origin.getSteps()) {
             PatternStep newStep = new PatternStep();
             newStep.setQueue(newQueue);
@@ -253,6 +214,58 @@ public class PatternQueueService {
         return patternQueueRepository.save(newQueue);
     }
 
+    /**
+     * 기존 큐의 triggerRate와 단계/패턴/블록 구조를 교체한다.
+     * symbol, tradeMode는 변경할 수 없다.
+     *
+     * <p>orphanRemoval = true가 설정되어 있으므로
+     * steps 컬렉션을 clear 후 재빌드하면
+     * 기존 PatternStep, Pattern, PatternBlock이 DB에서 자동 삭제된다.</p>
+     *
+     * <p>활성화된 큐는 수정할 수 없다. 먼저 비활성화 후 수정해야 한다.</p>
+     *
+     * @param userId  사용자 ID (권한 검증용)
+     * @param queueId 수정할 큐 ID
+     * @param request 수정 요청 (triggerRate, steps)
+     * @return 수정된 PatternQueue 엔티티
+     */
+    @Transactional
+    public PatternQueue updateQueue(Long userId, Long queueId, UpdatePatternRequest request) {
+        // 큐 존재 여부 검증
+        PatternQueue queue = patternQueueRepository.findById(queueId)
+                .orElseThrow(() -> new CustomException(ExceptionMessage.QUEUE_NOT_FOUND));
+
+        // 소유권 검증
+        if (!queue.getUserId().equals(userId)) {
+            throw new CustomException(ExceptionMessage.QUEUE_UNAUTHORIZED);
+        }
+
+        // 활성화된 큐는 수정 불가 (매매 중 구조 변경 방지)
+        if (queue.isActive()) {
+            throw new CustomException(ExceptionMessage.QUEUE_ACTIVE_CANNOT_UPDATE);
+        }
+
+        // 트리거 검증
+        validateTrigger(request.getTriggerRate());
+        // 단계/패턴/블록 검증
+        validateSteps(request.getSteps());
+
+        // triggerRate 교체
+        queue.setTriggerRate(request.getTriggerRate());
+
+        // 기존 단계 전체 삭제 (orphanRemoval이 하위 엔티티 cascade 처리)
+        queue.getSteps().clear();
+
+        // 새 단계 빌드 후 큐에 추가
+        buildSteps(queue, request.getSteps());
+
+        // full 플래그 재계산
+        boolean allFull = queue.getSteps().stream().allMatch(PatternStep::isFull);
+        queue.setFull(allFull);
+
+        return patternQueueRepository.save(queue);
+    }
+
     // ─────────────────────────────────────────────
     // 검증 메서드
     // ─────────────────────────────────────────────
@@ -260,9 +273,60 @@ public class PatternQueueService {
     /**
      * 트리거 설정값 검증 (비율 > 0)
      */
-    private void validateTrigger(AddPatternRequest request) {
-        if (request.getTriggerRate() == null || request.getTriggerRate().compareTo(BigDecimal.ZERO) <= 0) {
+    private void validateTrigger(BigDecimal triggerRate) {
+        if (triggerRate == null || triggerRate.compareTo(BigDecimal.ZERO) <= 0) {
             throw new CustomException(ExceptionMessage.INVALID_TRIGGER_RATE);
+        }
+    }
+
+    /**
+     * 단계/패턴/블록 계층 구조를 빌드하여 큐에 추가한다.
+     * addQueue와 updateQueue에서 공통으로 사용된다.
+     *
+     * @param queue 대상 큐
+     * @param steps 빌드할 단계 요청 목록
+     */
+    private void buildSteps(PatternQueue queue, List<AddPatternRequest.StepRequest> steps) {
+        for (AddPatternRequest.StepRequest stepReq : steps) {
+            PatternStep step = new PatternStep();
+            step.setQueue(queue);
+            step.setStepLevel(stepReq.getStepOrder());
+            // 패턴이 2개면 가득 찬 상태
+            step.setFull(stepReq.getPatterns().size() >= 2);
+
+            int patternOrder = 1;
+            for (AddPatternRequest.PatternRequest patternReq : stepReq.getPatterns()) {
+                Pattern pattern = new Pattern();
+                pattern.setStep(step);
+                pattern.setAmount(patternReq.getAmount());
+                pattern.setLeverage(patternReq.getLeverage());
+                pattern.setStopLossRate(patternReq.getStopLossRate());
+                pattern.setTakeProfitRate(patternReq.getTakeProfitRate());
+                pattern.setPatternOrder(patternOrder++);
+
+                // 조건 블록 추가
+                for (AddPatternRequest.BlockRequest blockReq : patternReq.getConditionBlocks()) {
+                    PatternBlock block = new PatternBlock();
+                    block.setPattern(pattern);
+                    block.setSide(Side.valueOf(blockReq.getSide().toUpperCase()));
+                    block.setBlockOrder(blockReq.getBlockOrder());
+                    block.setLeaf(false);
+                    pattern.getBlocks().add(block);
+                }
+
+                // 리프 블록 추가
+                AddPatternRequest.BlockRequest leafReq = patternReq.getLeafBlock();
+                PatternBlock leafBlock = new PatternBlock();
+                leafBlock.setPattern(pattern);
+                leafBlock.setSide(Side.valueOf(leafReq.getSide().toUpperCase()));
+                leafBlock.setBlockOrder(leafReq.getBlockOrder());
+                leafBlock.setLeaf(true);
+                pattern.getBlocks().add(leafBlock);
+
+                step.getPatterns().add(pattern);
+            }
+
+            queue.getSteps().add(step);
         }
     }
 

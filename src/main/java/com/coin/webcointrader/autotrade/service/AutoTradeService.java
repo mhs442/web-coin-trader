@@ -482,12 +482,20 @@ public class AutoTradeService {
         }
 
         // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
+        // notional = 마진(amount) × 레버리지 → 실제 포지션 크기 기준으로 수량 계산
+        BigDecimal notional = pattern.getAmount().multiply(BigDecimal.valueOf(pattern.getLeverage()));
         String qty = marketService.convertUsdtToQty(
-                session.getSymbol(), pattern.getAmount(), new BigDecimal(currentPrice));
+                session.getSymbol(), notional, new BigDecimal(currentPrice));
         if (qty == null) {
-            session.addLog(now() + " [진입 실패] 수량 변환 실패: " + session.getSymbol()
-                    + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
+            // qtyStep 캐시 미스 → 진짜 오류, 큐 비활성화
+            session.addLog(now() + " [진입 실패] qtyStep 조회 실패: " + session.getSymbol());
             deactivateQueue(queue, state, session, "수량 변환 실패");
+            return;
+        }
+        if ("0".equals(qty)) {
+            // 금액 대비 현재가가 너무 높아 최소 주문 단위 미달 → 이번 틱 스킵 (가격 하락 시 자동 해결)
+            session.addLog(now() + " [진입 스킵] 최소 주문 단위 미달: " + session.getSymbol()
+                    + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
             return;
         }
 
@@ -523,6 +531,9 @@ public class AutoTradeService {
             saveTradeHistory(history, session.getTradeMode());
 
             state.setEntryPrice(currentPrice);
+            state.setEntryQty(qty);               // 매도/청산 시 포지션 전량 청산을 위해 진입 수량 저장
+            state.setEntryNotional(actualAmount); // 진입 시 차감 금액 기억 (매도/청산 시 원금 반환 기준)
+            state.setCloseSkipCount(0);           // 새 포지션 진입 시 스킵 카운터 초기화
 
             session.addLog(now() + " [진입] " + side + " "
                     + pattern.getAmount().stripTrailingZeros().toPlainString() + "$ "
@@ -656,13 +667,19 @@ public class AutoTradeService {
         String closeSide = state.getDirection() == Side.LONG ? "Sell" : "Buy";
 
         try {
-            // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
-            String closeQty = marketService.convertUsdtToQty(
-                    session.getSymbol(), pattern.getAmount(), new BigDecimal(currentPrice));
-            if (closeQty == null) {
-                session.addLog(now() + " [매도 실패] 수량 변환 실패: " + session.getSymbol()
-                        + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
-                deactivateQueue(queue, state, session, "수량 변환 실패");
+            // 진입 시 저장한 qty 사용 (현재가 재계산 시 포지션 일부만 청산되는 문제 방지)
+            String closeQty = state.getEntryQty();
+            if (closeQty == null || "0".equals(closeQty)) {
+                // 진입 수량 정보 없음 → 스킵 횟수 제한 적용
+                int skipCount = state.getCloseSkipCount() + 1;
+                state.setCloseSkipCount(skipCount);
+                session.addLog(now() + " [매도 스킵] 청산 수량 확인 불가 (" + skipCount + "/5): " + session.getSymbol());
+                if (skipCount >= 5) {
+                    log.warn(LogMessage.CLOSE_QTY_SKIP_DEACTIVATED.getMessage(), queue.getId(), "SELL");
+                    session.addLog(now() + " [매도 중단] 청산 수량을 5회 연속 확인할 수 없어 큐를 비활성화합니다."
+                            + " 열린 포지션을 수동으로 확인해 주세요.");
+                    deactivateQueue(queue, state, session, "청산 수량 오류 5회 초과");
+                }
                 return;
             }
 
@@ -695,10 +712,16 @@ public class AutoTradeService {
             history.setOrderResult(OrderResult.SUCCESS);
             saveTradeHistory(history, session.getTradeMode());
 
-            // 투자 히스토리 저장 (포지션 사이클 완료 기록)
-            saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
-                    session.getSymbol(), state.getDirection(),
-                    state.getEntryPrice(), currentPrice, actualAmount, session.getTradeMode());
+            // 투자 히스토리 저장 (진입 시 차감한 원금 기준으로 손익 반영)
+            if (state.getEntryNotional() == null) {
+                // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
+                log.warn("투자 히스토리 저장 건너뜀: entryNotional null, queueId={}", queue.getId());
+                session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
+            } else {
+                saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
+                        session.getSymbol(), state.getDirection(),
+                        state.getEntryPrice(), currentPrice, state.getEntryNotional(), session.getTradeMode());
+            }
 
             session.addLog(now() + " [매도 성공] " + closeSide + " "
                     + actualAmount.stripTrailingZeros().toPlainString() + "$ "
@@ -721,6 +744,8 @@ public class AutoTradeService {
             // 블록 리셋 + 재진입 준비
             state.setCurrentBlockOrder(1);
             state.setEntryPrice(null);
+            state.setEntryQty(null);      // 다음 포지션을 위해 초기화
+            state.setEntryNotional(null); // 포지션 리셋 시 초기화
             state.setPhase(TradePhase.POSITION_OPEN);
 
         } catch (Exception e) {
@@ -751,12 +776,19 @@ public class AutoTradeService {
         String closeSide = state.getDirection() == Side.LONG ? "Sell" : "Buy";
 
         try {
-            // USDT 금액을 코인 수량으로 변환
-            String closeQty = marketService.convertUsdtToQty(
-                    session.getSymbol(), currentPattern.getAmount(), new BigDecimal(currentPrice));
-            if (closeQty == null) {
-                session.addLog(now() + " [청산 실패] 수량 변환 실패: " + session.getSymbol());
-                deactivateQueue(queue, state, session, "청산 수량 변환 실패");
+            // 진입 시 저장한 qty 사용 (현재가 재계산 시 포지션 일부만 청산되는 문제 방지)
+            String closeQty = state.getEntryQty();
+            if (closeQty == null || "0".equals(closeQty)) {
+                // 진입 수량 정보 없음 → 스킵 횟수 제한 적용
+                int skipCount = state.getCloseSkipCount() + 1;
+                state.setCloseSkipCount(skipCount);
+                session.addLog(now() + " [청산 스킵] 청산 수량 확인 불가 (" + skipCount + "/5): " + session.getSymbol());
+                if (skipCount >= 5) {
+                    log.warn(LogMessage.CLOSE_QTY_SKIP_DEACTIVATED.getMessage(), queue.getId(), "LIQUIDATION");
+                    session.addLog(now() + " [청산 중단] 청산 수량을 5회 연속 확인할 수 없어 큐를 비활성화합니다."
+                            + " 열린 포지션을 수동으로 확인해 주세요.");
+                    deactivateQueue(queue, state, session, "청산 수량 오류 5회 초과");
+                }
                 return;
             }
 
@@ -788,10 +820,17 @@ public class AutoTradeService {
             history.setOrderResult(OrderResult.SUCCESS);
             saveTradeHistory(history, session.getTradeMode());
 
-            // 투자 히스토리 저장 (포지션 사이클 완료 기록)
-            saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
-                    session.getSymbol(), state.getDirection(),
-                    state.getEntryPrice(), currentPrice, actualAmount, session.getTradeMode());
+            // 투자 히스토리 저장 (진입 시 차감한 원금 기준으로 손익 반영)
+            if (state.getEntryNotional() == null) {
+                // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
+                log.warn("투자 히스토리 저장 건너뜀: entryNotional null, queueId={}", queue.getId());
+                session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
+            } else {
+                saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
+                        session.getSymbol(), state.getDirection(),
+                        state.getEntryPrice(), currentPrice, state.getEntryNotional(), session.getTradeMode());
+            }
+            state.setEntryNotional(null); // 포지션 리셋 시 초기화
 
             session.addLog(now() + " [청산 완료] " + closeSide + " "
                     + actualAmount.stripTrailingZeros().toPlainString() + "$ "
@@ -829,6 +868,7 @@ public class AutoTradeService {
         state.setDirection(liquidationDirection);
         state.setCurrentBlockOrder(1);
         state.setEntryPrice(null);
+        state.setEntryQty(null);      // 다음 포지션을 위해 초기화
         state.setPhase(TradePhase.POSITION_OPEN);
 
         session.addLog(now() + " [다음 단계] " + nextStepLevel + "단계 "

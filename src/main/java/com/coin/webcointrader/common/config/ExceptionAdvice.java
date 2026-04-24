@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.config;
 
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.LogMessage;
+import com.coin.webcointrader.common.exception.CustomException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -10,9 +11,19 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.util.Map;
+
 @Slf4j
 @ControllerAdvice
 public class ExceptionAdvice {
+
+    @ExceptionHandler(CustomException.class)
+    public ResponseEntity<Map<String, String>> handleCustomException(CustomException e) {
+        // ExceptionMessage에 정의된 HTTP 상태코드와 메시지를 그대로 반환
+        return ResponseEntity
+                .status(e.getExceptionMessage().getStatus())
+                .body(Map.of("message", e.getMessage()));
+    }
 
     @ExceptionHandler(value = Exception.class)
     public Object defualtExceptionHandler(Exception e, HttpServletRequest request) {
