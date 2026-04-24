@@ -267,11 +267,12 @@ public class MarketService {
         BigDecimal steps = rawQty.divide(qtyStep, 0, RoundingMode.DOWN); // 내림
         BigDecimal qty = steps.multiply(qtyStep);
 
-        // 최소 수량 체크 (0 이하면 주문 불가)
+        // 최소 수량 체크: 금액 대비 현재가가 너무 높아 최소 주문 단위 미달
+        // null(캐시 미스)과 구분하기 위해 "0" 반환 → 호출부에서 이번 틱 스킵 처리
         if (qty.compareTo(BigDecimal.ZERO) <= 0) {
             log.warn(LogMessage.QTY_CONVERT_ZERO.getMessage(),
                     symbol, usdtAmount, currentPrice, qtyStep);
-            return null;
+            return "0";
         }
 
         return qty.stripTrailingZeros().toPlainString();

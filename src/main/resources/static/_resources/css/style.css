@@ -1092,6 +1092,57 @@ body {
     text-decoration: underline;
 }
 
+.pattern-edit-btn {
+    background: none;
+    border: none;
+    color: #fd7e14;
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    flex-shrink: 0;
+}
+
+.pattern-edit-btn:hover {
+    text-decoration: underline;
+}
+
+.pattern-edit-btn:disabled {
+    color: #adb5bd;
+    cursor: not-allowed;
+    text-decoration: none;
+}
+
+/* 큐 수정 모달 - 단계 카드 */
+.edit-step-card {
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 8px;
+    background: #fcfcfd;
+}
+
+.edit-pattern-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0;
+    border-bottom: 1px solid #f1f3f5;
+}
+
+.edit-pattern-row:last-child {
+    border-bottom: none;
+}
+
+/* 인라인 패턴 편집 폼 */
+.edit-pattern-form {
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 8px;
+    margin-top: 6px;
+    background: #fff;
+}
+
 /* 큐 토글 버튼 */
 .queue-toggle-btn {
     border: none;
