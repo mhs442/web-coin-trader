@@ -65,25 +65,32 @@
             </div>
         </div>
 
-        <!-- 사이드 패널 (패턴 관리 큐 + 큐 설정) -->
+        <!-- 사이드 패널 -->
         <div class="side-panel">
-            <!-- 패턴 관리 큐 (SRS 20, 21번) - 등록된 큐의 단계/패턴 계층 표시 -->
+            <!-- 패턴 관리 큐 -->
             <div class="side-pattern-manage-panel">
                 <div class="pattern-manage-header">
                     <h3>패턴 관리 큐</h3>
-                    <button id="btn-import-queue" class="import-queue-btn" onclick="openImportQueueModal()">큐 가져오기</button>
+                    <div style="display:flex; gap:6px;">
+                        <button class="import-queue-btn" onclick="openRegisterQueueModal()">큐 등록</button>
+                        <button id="btn-import-queue" class="import-queue-btn" onclick="openImportQueueModal()">큐 가져오기</button>
+                    </div>
                 </div>
                 <!-- 서버에 저장된 큐 목록 -->
                 <div id="server-queues" class="queue-display"></div>
-                <!-- 로컬에서 구성 중인 큐 미리보기 -->
-                <div id="local-queue-preview" class="queue-display"></div>
             </div>
+        </div>
+    </div>
 
-            <!-- 큐 설정 영역 -->
-            <div id="builder-panel" class="trade-form-panel queue-settings-panel">
-                <h3>큐 설정</h3>
-
-                <!-- 트리거 설정 (SRS 9번) -->
+    <!-- 큐 등록 모달 -->
+    <div id="register-queue-modal" class="import-modal-overlay" style="display:none;">
+        <div class="import-modal-box" style="width:520px;">
+            <div class="import-modal-header">
+                <h3>큐 등록</h3>
+                <button class="import-modal-close" onclick="closeRegisterQueueModal()">✕</button>
+            </div>
+            <div class="import-modal-body">
+                <!-- 트리거 설정 -->
                 <div class="trigger-settings">
                     <label class="builder-label">트리거 설정</label>
                     <div class="trigger-input-row">
@@ -93,20 +100,18 @@
                         </div>
                     </div>
                 </div>
-
+                <!-- 구성 중인 큐 미리보기 -->
+                <div id="local-queue-preview" class="queue-display"></div>
                 <!-- 단계 추가 영역 -->
                 <div class="step-builder">
                     <label class="builder-label">
                         <span id="step-number-label">1단계</span> 추가
                     </label>
-
-                    <!-- 추가된 패턴 미리보기 (현재 단계에 추가된 패턴 0~2개 표시) -->
+                    <!-- 추가된 패턴 미리보기 -->
                     <div id="pending-patterns-preview" class="pending-patterns-preview"></div>
-
-                    <!-- 단일 패턴 입력 영역 -->
+                    <!-- 패턴 입력 영역 -->
                     <div class="pattern-input-group">
                         <div class="pattern-input-header">패턴 입력</div>
-                        <!-- 블록 입력: 조건 블록 + 콜론 + 리프 블록 -->
                         <div class="block-builder-row">
                             <div class="block-area">
                                 <div id="condition-blocks" class="pattern-blocks condition-blocks">
@@ -125,7 +130,6 @@
                             <button onclick="setLeafBlock('LONG')" class="builder-add-btn long-btn leaf-btn">리프 L</button>
                             <button onclick="setLeafBlock('SHORT')" class="builder-add-btn short-btn leaf-btn">리프 S</button>
                         </div>
-                        <!-- 패턴 설정 (금액, 레버리지, 손절, 익절) -->
                         <div class="pattern-settings-row">
                             <div class="pattern-setting-item">
                                 <label>금액(USDT)</label>
@@ -146,17 +150,16 @@
                                 <input type="number" id="pattern-takeprofit" step="0.01" min="0" placeholder="선택">
                             </div>
                         </div>
-                        <!-- 패턴 추가 버튼 -->
                         <button onclick="addPatternToStep()" class="trade-btn btn-outline" style="width:100%; margin-top:4px;">패턴 추가</button>
                     </div>
-
-                    <!-- 단계 추가 / 큐 저장 버튼 -->
                     <div class="step-action-buttons">
                         <button onclick="addStepToQueue()" class="trade-btn btn-outline" style="flex:1;">단계 추가</button>
                         <button onclick="saveQueue()" class="trade-btn queue-save-btn" style="flex:1;">큐 저장</button>
                     </div>
                 </div>
-
+            </div>
+            <div style="padding:12px 20px; border-top:1px solid #dee2e6;">
+                <button onclick="closeRegisterQueueModal()" class="trade-btn btn-outline" style="width:100%;">취소</button>
             </div>
         </div>
     </div>
@@ -202,7 +205,9 @@
         let rangeEndCandle = null;      // 범위 측정 끝 캔들
         let rangeClickState = 0;        // 0: 대기, 1: 시작 선택됨, 2: 결과 표시 중
         let rangeAnnotations = [];      // 현재 표시 중인 xaxis annotation 설정 저장
-        let entryPriceAnnotation = null; // 진입가 yaxis annotation (BLOCK_MATCHING 중에만 표시)
+        let entryPriceAnnotation = null; // 진입가 yaxis annotation (POSITION_HOLDING 중에만 표시)
+        let tpPriceAnnotation = null;    // 익절가 yaxis annotation (POSITION_HOLDING 중에만 표시)
+        let slPriceAnnotation = null;    // 손절가 yaxis annotation (POSITION_HOLDING 중에만 표시)
         let rangeOverlayHtml = '';      // 결과 오버레이 HTML 저장
         let klineFetchIntervalId = null;
         let orderBookFetchIntervalId = null;
@@ -212,6 +217,65 @@
         let stompClient = null;              // STOMP 클라이언트 인스턴스
         let priceSubscription = null;        // /topic/price.{symbol} 구독 핸들
         let autoTradeSubscription = null;    // /topic/autotrade.status.{symbol} 구독 핸들
+
+        // ─── 자동매매 상태 로컬 카운터 (가격 변동 무관하게 1초마다 갱신) ───
+        let statusTimerInterval = null;      // setInterval ID
+        let localElapsedSeconds = 0;         // 트리거 경과 시간(초) - 1초마다 +1
+        let localBlockRemainingSeconds = 0;  // 블록 잔여 시간(초) - 1초마다 -1
+        let localPhase = null;               // 현재 페이즈 (타이머 분기용)
+        let localChangeRate = null;          // 현재 변동률 (텍스트 갱신용)
+        let localAmount = null;              // 투입 금액 (텍스트 갱신용)
+        let localEntryPrice = null;          // 진입가 (POSITION_HOLDING 텍스트 갱신용)
+        let localTpPrice = null;             // 익절가 (POSITION_HOLDING 텍스트 갱신용)
+        let localSlPrice = null;             // 손절가 (POSITION_HOLDING 텍스트 갱신용)
+
+        /** 로컬 카운터 타이머를 시작한다. 기존 타이머가 있으면 먼저 정리한다. */
+        function startStatusTimer() {
+            stopStatusTimer();
+            statusTimerInterval = setInterval(function() {
+                if (localPhase === 'TRIGGER_WAIT') {
+                    localElapsedSeconds++;
+                } else if (localPhase === 'BLOCK_MATCHING') {
+                    if (localBlockRemainingSeconds > 0) localBlockRemainingSeconds--;
+                }
+                updateTriggerStateDisplay();
+            }, 1000);
+        }
+
+        /** 로컬 카운터 타이머를 정지한다. */
+        function stopStatusTimer() {
+            if (statusTimerInterval !== null) {
+                clearInterval(statusTimerInterval);
+                statusTimerInterval = null;
+            }
+        }
+
+        /** trigger-state-info 텍스트만 갱신한다. (전체 DOM 재생성 없이 1초마다 호출) */
+        function updateTriggerStateDisplay() {
+            var $info = $('.trigger-state-info');
+            if ($info.length === 0) return;
+            var text = '';
+            if (localPhase === 'TRIGGER_WAIT' && localChangeRate !== null) {
+                var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
+                text = '경과: ' + localElapsedSeconds + '초 / 변동률: ' + rateStr + '%';
+            } else if (localPhase === 'BLOCK_MATCHING') {
+                var remainStr = '블록 대기: ' + localBlockRemainingSeconds + '초';
+                if (localAmount !== null) {
+                    remainStr += ' / 투입: ' + localAmount + ' USDT';
+                }
+                text = remainStr;
+            } else if (localPhase === 'POSITION_HOLDING') {
+                // 포지션 보유 중: 진입가/현재 변동률 (TP/SL 가격은 차트 가로선으로만 표시)
+                var parts = [];
+                if (localEntryPrice !== null) parts.push('진입: ' + localEntryPrice);
+                if (localChangeRate !== null) {
+                    var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
+                    parts.push('변동률: ' + rateStr + '%');
+                }
+                text = parts.join(' / ');
+            }
+            if (text) $info.text(text);
+        }
 
         document.addEventListener('DOMContentLoaded', () => {
             loadChart('1');
@@ -289,8 +353,8 @@
                     series: [{ data: seriesData }],
                     annotations: {
                         xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); }),
-                        // 차트 갱신 시에도 진입가 가로선 유지
-                        yaxis: entryPriceAnnotation ? [entryPriceAnnotation] : []
+                        // 차트 갱신 시에도 진입가/익절가/손절가 가로선 유지
+                        yaxis: collectYAxisAnnotations()
                     }
                 };
                 // 줌 상태일 때 xaxis 범위를 함께 지정하여 줌 풀림 방지
@@ -376,6 +440,8 @@
                 xaxis: {
                     type: 'datetime',
                     labels: {
+                        // KST(브라우저 로컬 시간) 기준으로 X축 레이블 표시 (기본값 true는 UTC)
+                        datetimeUTC: false,
                         datetimeFormatter: {
                             year: 'yyyy년',
                             month: 'yyyy년 M월',
@@ -387,6 +453,12 @@
                 yaxis: {
                     tooltip: {
                         enabled: true
+                    }
+                },
+                tooltip: {
+                    x: {
+                        // 캔들 hover 시 표시되는 시각도 KST로 (브라우저 로컬 시간)
+                        format: 'yyyy-MM-dd HH:mm'
                     }
                 },
                 plotOptions: {
@@ -665,9 +737,15 @@
          */
         function renderServerQueues(queues) {
             var $container = $('#server-queues');
+            var hasQueues = queues && queues.length > 0;
 
-            if (!queues || queues.length === 0) {
-                $container.html('<div class="pattern-manage-empty">등록된 큐가 없습니다. 아래에서 큐를 구성해주세요.</div>');
+            // 큐가 존재하면 등록/가져오기 버튼 비활성화
+            var disabledTitle = hasQueues ? '등록된 큐가 있으면 사용할 수 없습니다.' : '';
+            $('button[onclick="openRegisterQueueModal()"]').prop('disabled', hasQueues).attr('title', disabledTitle);
+            $('#btn-import-queue').prop('disabled', hasQueues).attr('title', disabledTitle);
+
+            if (!hasQueues) {
+                $container.html('<div class="pattern-manage-empty">등록된 큐가 없습니다.</div>');
                 return;
             }
 
@@ -1080,10 +1158,7 @@
                 data: JSON.stringify(queueData),
                 success: function() {
                     alert('큐가 등록되었습니다.');
-                    queueSteps = [];
-                    document.getElementById('trigger-rate').value = '';
-                    document.getElementById('step-number-label').textContent = '1단계';
-                    renderQueueDisplay();
+                    closeRegisterQueueModal();
                     loadPatterns();
                 },
                 error: function(xhr) {
@@ -1569,6 +1644,33 @@
         // ─── 큐 가져오기 모달 ───
 
         /**
+         * 큐 등록 모달을 열고 상태를 초기화한다.
+         */
+        function openRegisterQueueModal() {
+            queueSteps = [];
+            pendingStepPatterns = [];
+            conditionBlocks = [];
+            leafBlock = null;
+            document.getElementById('trigger-rate').value = '';
+            document.getElementById('step-number-label').textContent = '1단계';
+            renderPatternBlocks();
+            renderPendingPatterns();
+            renderQueueDisplay();
+            $('#register-queue-modal').show();
+        }
+
+        /**
+         * 큐 등록 모달을 닫고 상태를 초기화한다.
+         */
+        function closeRegisterQueueModal() {
+            queueSteps = [];
+            pendingStepPatterns = [];
+            conditionBlocks = [];
+            leafBlock = null;
+            $('#register-queue-modal').hide();
+        }
+
+        /**
          * 큐 가져오기 모달을 열고 전체 큐 목록을 조회하여 렌더링한다.
          */
         function openImportQueueModal() {
@@ -1817,6 +1919,8 @@
                 autoTradeSubscription.unsubscribe();
                 autoTradeSubscription = null;
             }
+            stopStatusTimer();
+            localPhase = null;
         }
 
         /**
@@ -1854,8 +1958,33 @@
         }
 
         /**
-         * 진입가를 차트에 가로선(yaxis annotation)으로 표시한다. (SRS 27)
-         * BLOCK_MATCHING 상태에서 포지션 진입 시 호출되며, 진입가를 주황색 굵은 선으로 표시한다.
+         * 현재 활성 yaxis annotation들을 배열로 반환한다.
+         * 진입가/익절가/손절가 중 세팅된 것만 포함.
+         */
+        function collectYAxisAnnotations() {
+            var ys = [];
+            if (entryPriceAnnotation) ys.push(entryPriceAnnotation);
+            if (tpPriceAnnotation) ys.push(tpPriceAnnotation);
+            if (slPriceAnnotation) ys.push(slPriceAnnotation);
+            return ys;
+        }
+
+        /**
+         * 차트의 yaxis annotation을 현재 상태로 다시 그린다.
+         */
+        function refreshChartAnnotations() {
+            if (!chart) return;
+            chart.updateOptions({
+                annotations: {
+                    xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); }),
+                    yaxis: collectYAxisAnnotations()
+                }
+            }, false, false);
+        }
+
+        /**
+         * 진입가를 차트에 가로선(yaxis annotation)으로 표시한다.
+         * POSITION_HOLDING 상태에서 호출되며, 진입가를 주황색 굵은 선으로 표시한다.
          *
          * @param entryPrice 진입가 문자열 (예: "50000.00")
          */
@@ -1864,43 +1993,70 @@
 
             entryPriceAnnotation = {
                 y: parseFloat(entryPrice),
-                borderColor: '#FF9800',   // 주황색 (가시성 높고 매매 진입선 의미)
-                borderWidth: 3,           // 굵은 선
-                strokeDashArray: 0,       // 실선
+                borderColor: '#FF9800',   // 주황색 (매매 진입선 의미)
+                borderWidth: 3,
+                strokeDashArray: 0,
                 label: {
                     borderColor: '#FF9800',
-                    style: {
-                        color: '#fff',
-                        background: '#FF9800',
-                        fontWeight: 'bold',
-                        fontSize: '12px'
-                    },
+                    style: { color: '#fff', background: '#FF9800', fontWeight: 'bold', fontSize: '12px' },
                     text: '진입가: ' + entryPrice + ' USDT',
                     position: 'right'
                 }
             };
-
-            chart.updateOptions({
-                annotations: {
-                    xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); }),
-                    yaxis: [entryPriceAnnotation]
-                }
-            }, false, false);
+            refreshChartAnnotations();
         }
 
         /**
-         * 진입가 가로선 annotation을 차트에서 제거한다.
-         * BLOCK_MATCHING 종료(매도 성공, 청산, 비활성화) 시 호출된다.
+         * 익절가/손절가를 차트에 가로선(yaxis annotation)으로 표시한다.
+         * POSITION_HOLDING 상태에서 호출된다. (TP=초록, SL=빨강)
+         */
+        function updateTpSlAnnotation(tpPrice, slPrice) {
+            if (!chart) return;
+            if (tpPrice != null) {
+                tpPriceAnnotation = {
+                    y: parseFloat(tpPrice),
+                    borderColor: '#4CAF50',   // 초록색 (익절)
+                    borderWidth: 2,
+                    strokeDashArray: 4,       // 점선
+                    label: {
+                        borderColor: '#4CAF50',
+                        style: { color: '#fff', background: '#4CAF50', fontWeight: 'bold', fontSize: '11px' },
+                        text: '익절가: ' + parseFloat(tpPrice).toFixed(4),
+                        position: 'right'
+                    }
+                };
+            } else {
+                tpPriceAnnotation = null;
+            }
+            if (slPrice != null) {
+                slPriceAnnotation = {
+                    y: parseFloat(slPrice),
+                    borderColor: '#F44336',   // 빨간색 (손절)
+                    borderWidth: 2,
+                    strokeDashArray: 4,
+                    label: {
+                        borderColor: '#F44336',
+                        style: { color: '#fff', background: '#F44336', fontWeight: 'bold', fontSize: '11px' },
+                        text: '손절가: ' + parseFloat(slPrice).toFixed(4),
+                        position: 'right'
+                    }
+                };
+            } else {
+                slPriceAnnotation = null;
+            }
+            refreshChartAnnotations();
+        }
+
+        /**
+         * 진입가/익절가/손절가 가로선을 모두 차트에서 제거한다.
+         * POSITION_HOLDING 종료(매도 성공, 청산, 비활성화) 시 호출된다.
          */
         function clearEntryPriceAnnotation() {
-            if (!chart || !entryPriceAnnotation) return;
+            if (!chart) return;
             entryPriceAnnotation = null;
-            chart.updateOptions({
-                annotations: {
-                    xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); }),
-                    yaxis: []
-                }
-            }, false, false);
+            tpPriceAnnotation = null;
+            slPriceAnnotation = null;
+            refreshChartAnnotations();
         }
 
         /**
@@ -1913,12 +2069,27 @@
          */
         function highlightActiveStep(data) {
             if (!data.active) {
-                // 실행 중이 아니면 queue-running 해제, 트리거 상태 제거, 진입가 선 제거
+                // 실행 중이 아니면 queue-running 해제, 트리거 상태 제거, 진입가/TP/SL 선 제거
                 $('.server-queue-card').removeClass('queue-running');
                 $('.trigger-state-info').remove();
                 clearEntryPriceAnnotation();
+                stopStatusTimer();
+                localPhase = null;
+                localEntryPrice = null;
+                localTpPrice = null;
+                localSlPrice = null;
                 return;
             }
+
+            // 로컬 카운터를 서버 값으로 동기화 (서버 push마다 기준점 재설정)
+            localPhase = data.phase;
+            localElapsedSeconds = data.elapsedSeconds;
+            localBlockRemainingSeconds = data.blockRemainingSeconds;
+            localChangeRate = data.changeRate;
+            localAmount = data.amount;
+            localEntryPrice = data.entryPrice;
+            localTpPrice = data.tpPrice;
+            localSlPrice = data.slPrice;
 
             // 현재 실행 중인 큐 카드 찾기
             var $queueCard = $('.server-queue-card[data-queue-id="' + data.currentQueueId + '"]');
@@ -1939,42 +2110,65 @@
             $activeStep.addClass('step-active');
             $activeStep.find('.step-card-header').append('<span class="step-active-badge">현재 진행 단계</span>');
 
-            // BLOCK_MATCHING: 활성 패턴의 블록에 진행 상태 표시
-            if (data.phase === 'BLOCK_MATCHING' && data.activePatternOrder > 0) {
+            // BLOCK_MATCHING / POSITION_HOLDING: 활성 패턴의 블록에 진행 상태 표시
+            if ((data.phase === 'BLOCK_MATCHING' || data.phase === 'POSITION_HOLDING')
+                    && data.activePatternOrder > 0) {
                 var $patternRow = $activeStep.find('.step-pattern-row[data-pattern-order="' + data.activePatternOrder + '"]');
-                $patternRow.find('.block-tag').each(function() {
-                    var blockOrder = parseInt($(this).data('block-order'));
-                    if (blockOrder < data.currentBlockOrder) {
-                        // 매칭 완료된 블록
-                        $(this).addClass('block-matched');
-                    } else if (blockOrder === data.currentBlockOrder) {
-                        // 현재 매칭 중인 블록
-                        $(this).addClass('block-current');
-                    }
-                });
+
+                if (data.phase === 'POSITION_HOLDING') {
+                    // 포지션 보유 중: 조건 블록은 매칭 완료, leaf 블록만 깜빡임 (TP/SL 모니터링 중)
+                    // leaf는 패턴 row 내 두 번째 .step-pattern-blocks 안에 있음
+                    var $leaf = $patternRow.find('.step-pattern-blocks').last().find('.block-tag');
+                    $patternRow.find('.block-tag').not($leaf).addClass('block-matched');
+                    $leaf.addClass('block-current');
+                } else {
+                    // BLOCK_MATCHING: 이전 블록은 완료, 현재 블록만 깜빡임
+                    $patternRow.find('.block-tag').each(function() {
+                        var blockOrder = parseInt($(this).data('block-order'));
+                        if (blockOrder < data.currentBlockOrder) {
+                            $(this).addClass('block-matched');
+                        } else if (blockOrder === data.currentBlockOrder) {
+                            $(this).addClass('block-current');
+                        }
+                    });
+                }
             }
 
-            // 트리거 상태 표시 (큐 헤더 하단) + 진입가 차트 가로선 관리
+            // 트리거 상태 표시 (큐 헤더 하단) + 진입가/TP/SL 차트 가로선 관리
             var triggerHtml = '';
-            if (data.phase === 'TRIGGER_WAIT' && data.changeRate !== null) {
-                var rateStr = data.changeRate >= 0 ? '+' + data.changeRate.toFixed(2) : data.changeRate.toFixed(2);
-                triggerHtml = '<div class="trigger-state-info">경과: ' + data.elapsedSeconds + '초 / 변동률: ' + rateStr + '%</div>';
-                // TRIGGER_WAIT 중에는 아직 포지션 없으므로 진입가 선 제거
+            if (data.phase === 'TRIGGER_WAIT' && localChangeRate !== null) {
+                var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
+                triggerHtml = '<div class="trigger-state-info">경과: ' + localElapsedSeconds + '초 / 변동률: ' + rateStr + '%</div>';
                 clearEntryPriceAnnotation();
-            } else if (data.phase === 'BLOCK_MATCHING' && data.changeRate !== null) {
-                var rateStr = data.changeRate >= 0 ? '+' + data.changeRate.toFixed(2) : data.changeRate.toFixed(2);
-                // 투입 금액 표시 (SRS 27)
-                var amountStr = data.amount !== null ? ' / 투입: ' + data.amount + ' USDT' : '';
-                triggerHtml = '<div class="trigger-state-info">변동률: ' + rateStr + '%' + amountStr + '</div>';
-                // 진입가를 차트에 주황색 굵은 가로선으로 표시 (SRS 27)
+            } else if (data.phase === 'BLOCK_MATCHING') {
+                var remainStr = '블록 대기: ' + localBlockRemainingSeconds + '초';
+                if (localAmount !== null) {
+                    remainStr += ' / 투입: ' + localAmount + ' USDT';
+                }
+                triggerHtml = '<div class="trigger-state-info">' + remainStr + '</div>';
+                clearEntryPriceAnnotation();
+            } else if (data.phase === 'POSITION_HOLDING') {
+                // 진입가/현재 변동률만 텍스트로 표시 (TP/SL 가격은 차트 가로선으로만)
+                var parts = [];
+                if (localEntryPrice !== null) parts.push('진입: ' + localEntryPrice);
+                if (localChangeRate !== null) {
+                    var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
+                    parts.push('변동률: ' + rateStr + '%');
+                }
+                triggerHtml = '<div class="trigger-state-info">' + parts.join(' / ') + '</div>';
+                // 차트 가로선 갱신 (TP=초록 / SL=빨강 점선)
                 if (data.entryPrice !== null) {
                     updateEntryPriceAnnotation(data.entryPrice);
                 }
+                updateTpSlAnnotation(data.tpPrice, data.slPrice);
             }
 
             if (triggerHtml) {
                 $queueCard.find('.server-queue-header').after(triggerHtml);
             }
+
+            // 로컬 카운터 타이머 시작 (서버 push와 무관하게 1초마다 텍스트 갱신)
+            startStatusTimer();
         }
     </script>
 

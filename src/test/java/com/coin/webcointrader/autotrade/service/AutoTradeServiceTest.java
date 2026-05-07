@@ -8,6 +8,8 @@ import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
+import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.TradeMode;
@@ -232,7 +234,7 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("상승률 충족 시 LONG으로 전환한다")
+        @DisplayName("상승률 충족 시 LONG으로 전환하고 첫 블록 자동 매칭으로 currentBlockOrder=2부터 시작한다")
         void transitionsToLongOnRiseAboveTrigger() {
             PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
             QueueStateDTO state = QueueStateDTO.initial(1L);
@@ -244,11 +246,13 @@ class AutoTradeServiceTest {
             autoTradeService.processTriggerWait(queue, state, session, "50600.00");
 
             assertThat(state.getDirection()).isEqualTo(Side.LONG);
-            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            // 첫 블록은 트리거로 자동 매칭된 것으로 간주 → currentBlockOrder=2부터 시작
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
         }
 
         @Test
-        @DisplayName("하락률 충족 시 SHORT으로 전환한다")
+        @DisplayName("하락률 충족 시 SHORT으로 전환하고 첫 블록 자동 매칭으로 currentBlockOrder=2부터 시작한다")
         void transitionsToShortOnDropBelowTrigger() {
             // SHORT 패턴도 포함된 큐 생성
             PatternQueue queue = makePatternQueueWithBothPatterns(1L, 1L, "BTCUSDT");
@@ -261,7 +265,8 @@ class AutoTradeServiceTest {
             autoTradeService.processTriggerWait(queue, state, session, "49400.00");
 
             assertThat(state.getDirection()).isEqualTo(Side.SHORT);
-            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
         }
     }
 
@@ -308,119 +313,129 @@ class AutoTradeServiceTest {
     }
 
     // ─────────────────────────────────────────────
-    // 신호 판별 (determineSignal)
+    // 봉 마감 push 처리 (onKlineConfirmed)
     // ─────────────────────────────────────────────
 
     @Nested
-    @DisplayName("determineSignal")
-    class DetermineSignalTest {
+    @DisplayName("onKlineConfirmed")
+    class OnKlineConfirmedTest {
 
-        @Test
-        @DisplayName("레버리지 기반 임계값으로 LONG 신호를 판별한다")
-        void detectsLongSignalWithLeverage() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
+        /**
+         * 활성 세션에 큐를 등록하고 BLOCK_MATCHING 상태로 만든다.
+         * blockBaseTime은 mock 봉 구간([startMs, endMs])에 속하도록 설정.
+         */
+        private AutoTradeSessionDTO setupSessionWithCondBlock(PatternQueue queue, long blockBaseMs) {
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            state.setPhase(TradePhase.BLOCK_MATCHING);
             state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+            state.setActiveStepId(10L);
+            state.setCurrentBlockOrder(1); // 조건 블록 위치
+            state.setBlockBaseTime(LocalDateTime.ofInstant(
+                    java.time.Instant.ofEpochMilli(blockBaseMs),
+                    java.time.ZoneId.systemDefault()));
+            state.setBlockBasePrice("50000.00");
 
-            // leverage=10 → threshold=10%
-            Pattern pattern = makePatternWithLeverage(10);
+            // activeSessions에 세션 직접 등록 (init 호출 없이도 onKlineConfirmed가 작동)
+            var activeSessions = (java.util.concurrent.ConcurrentHashMap<String, AutoTradeSessionDTO>)
+                    ReflectionTestUtils.getField(autoTradeService, "activeSessions");
+            session.setTradeMode(TradeMode.MAIN);
+            activeSessions.put(1L + ":BTCUSDT:" + TradeMode.MAIN, session);
+            return session;
+        }
 
-            // 50000 → 55500 = +11% → LONG
-            Side signal = autoTradeService.determineSignal(state, pattern, "55500.00");
-            assertThat(signal).isEqualTo(Side.LONG);
+        private WebSocketKlineDTO.KlineData makeKline(long startMs, String open, String close) {
+            WebSocketKlineDTO.KlineData k = new WebSocketKlineDTO.KlineData();
+            k.setStart(startMs);
+            k.setEnd(startMs + 59_999); // 1분봉의 마지막 ms
+            k.setOpen(open);
+            k.setClose(close);
+            k.setConfirm(true);
+            return k;
         }
 
         @Test
-        @DisplayName("레버리지 기반 임계값으로 SHORT 신호를 판별한다")
-        void detectsShortSignalWithLeverage() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
+        @DisplayName("양봉(close > open)이고 조건 블록이 LONG이면 다음 블록으로 이동한다")
+        void advancesOnLongCandleMatchingLongBlock() {
+            // 3블록 패턴: cond(L), cond(L), leaf(L) — currentBlockOrder=1(첫 cond)에서 시작
+            PatternQueue queue = makeThreeBlockLongQueue(10);
+            // 봉 구간을 과거로 잡아 blockBaseTime이 안전하게 origBaseTime > 이후 갱신값 비교 가능
+            long startMs = System.currentTimeMillis() - 60_000;
+            AutoTradeSessionDTO session = setupSessionWithCondBlock(queue, startMs + 5_000);
 
-            Pattern pattern = makePatternWithLeverage(10);
+            // 양봉 (50000 → 55000)
+            autoTradeService.onKlineConfirmed("BTCUSDT", makeKline(startMs, "50000", "55000"));
 
-            // 50000 → 44500 = -11% → SHORT
-            Side signal = autoTradeService.determineSignal(state, pattern, "44500.00");
-            assertThat(signal).isEqualTo(Side.SHORT);
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
         }
 
         @Test
-        @DisplayName("임계값 미달 시 null을 반환한다")
-        void returnsNullWhenBelowThreshold() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
+        @DisplayName("음봉(close < open)인데 조건 블록이 LONG이면 다음 단계로 이동한다 (포지션 미보유 → 청산X)")
+        void movesToNextStepOnOppositeCandleSignal() {
+            // 2단계 큐 (1단계: LONG, 2단계: LONG/SHORT 양쪽)
+            PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
+            long startMs = System.currentTimeMillis() - 60_000;
+            AutoTradeSessionDTO session = setupSessionWithCondBlock(queue, startMs + 5_000);
 
-            Pattern pattern = makePatternWithLeverage(10);
+            // 음봉 (50000 → 45000) → SHORT 신호 → 1단계 패턴 첫 블록(L)과 반대
+            autoTradeService.onKlineConfirmed("BTCUSDT", makeKline(startMs, "50000", "45000"));
 
-            // 50000 → 52000 = +4% (threshold=10% 미달)
-            Side signal = autoTradeService.determineSignal(state, pattern, "52000.00");
-            assertThat(signal).isNull();
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            assertThat(state.getCurrentStepLevel()).isEqualTo(2);
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2); // 첫 블록 자동 매칭
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("손절 5%, 익절 10% LONG일 때 +5.2%는 신호 없음 (익절 임계값 미달)")
-        void noSignalWhenBelowProfitThreshold() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
+        @DisplayName("도지(close == open)이면 블록 위치 변화 없이 다음 봉을 재대기한다")
+        void resetsAndWaitsOnDoji() {
+            PatternQueue queue = makeThreeBlockLongQueue(10);
+            long startMs = System.currentTimeMillis() - 60_000;
+            AutoTradeSessionDTO session = setupSessionWithCondBlock(queue, startMs + 5_000);
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            LocalDateTime origBaseTime = state.getBlockBaseTime();
 
-            // stopLossRate=5%, takeProfitRate=10%
-            Pattern pattern = makePatternWithLeverage(10);
-            pattern.setStopLossRate(new BigDecimal("5.00"));
-            pattern.setTakeProfitRate(new BigDecimal("10.00"));
+            // 도지 (open == close)
+            autoTradeService.onKlineConfirmed("BTCUSDT", makeKline(startMs, "50000", "50000"));
 
-            // 50000 → 52600 = +5.2% (익절 10% 미달, 손절 -5% 미달)
-            Side signal = autoTradeService.determineSignal(state, pattern, "52600.00");
-            assertThat(signal).isNull();
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(1); // 변화 없음
+            assertThat(state.getBlockBaseTime()).isAfter(origBaseTime); // 기준 시각 리셋
         }
 
         @Test
-        @DisplayName("손절 5%, 익절 10% LONG일 때 +10% 도달 시 수익 신호")
-        void profitSignalAtTakeProfitRate() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
+        @DisplayName("blockBaseTime이 봉 구간 밖이면 신호를 무시한다")
+        void ignoresWhenBlockBaseOutsideCandle() {
+            PatternQueue queue = makeThreeBlockLongQueue(10);
+            long startMs = System.currentTimeMillis() - 60_000;
+            // blockBaseTime이 봉 시작 이전(=다른 봉)
+            AutoTradeSessionDTO session = setupSessionWithCondBlock(queue, startMs - 10_000);
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
 
-            Pattern pattern = makePatternWithLeverage(10);
-            pattern.setStopLossRate(new BigDecimal("5.00"));
-            pattern.setTakeProfitRate(new BigDecimal("10.00"));
+            autoTradeService.onKlineConfirmed("BTCUSDT", makeKline(startMs, "50000", "55000"));
 
-            // 50000 → 55000 = +10% → LONG(수익)
-            Side signal = autoTradeService.determineSignal(state, pattern, "55000.00");
-            assertThat(signal).isEqualTo(Side.LONG);
+            // blockBaseTime이 봉 구간에 속하지 않으므로 무시 → 변화 없음
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("손절 5%, 익절 10% LONG일 때 -5% 도달 시 손실 신호")
-        void lossSignalAtStopLossRate() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
+        @DisplayName("leaf 블록을 관찰 중이면 onKlineConfirmed에서 무시한다 (진입은 가격 push에서)")
+        void ignoresLeafBlock() {
+            PatternQueue queue = makeThreeBlockLongQueue(10);
+            long startMs = System.currentTimeMillis() - 60_000;
+            AutoTradeSessionDTO session = setupSessionWithCondBlock(queue, startMs + 5_000);
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            // leaf 위치로 변경 (3블록 패턴의 leaf=order 3)
+            state.setCurrentBlockOrder(3);
 
-            Pattern pattern = makePatternWithLeverage(10);
-            pattern.setStopLossRate(new BigDecimal("5.00"));
-            pattern.setTakeProfitRate(new BigDecimal("10.00"));
+            autoTradeService.onKlineConfirmed("BTCUSDT", makeKline(startMs, "50000", "55000"));
 
-            // 50000 → 47500 = -5% → SHORT(손실)
-            Side signal = autoTradeService.determineSignal(state, pattern, "47500.00");
-            assertThat(signal).isEqualTo(Side.SHORT);
-        }
-
-        @Test
-        @DisplayName("손절만 설정 시 수익 임계값은 레버리지 기반으로 적용된다")
-        void usesLeverageForProfitWhenOnlyStopLossSet() {
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-
-            // stopLossRate=5%, takeProfitRate=null → 수익 임계값=100/10=10%
-            Pattern pattern = makePatternWithLeverage(10);
-            pattern.setStopLossRate(new BigDecimal("5.00"));
-
-            // 50000 → 55500 = +11% → LONG(수익, 레버리지 기반 10% 초과)
-            Side signal = autoTradeService.determineSignal(state, pattern, "55500.00");
-            assertThat(signal).isEqualTo(Side.LONG);
+            // leaf는 봉 마감 신호로 트리거되지 않음 (가격 push의 즉시 진입에서 처리)
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(3);
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
         }
     }
 
@@ -429,69 +444,154 @@ class AutoTradeServiceTest {
     // ─────────────────────────────────────────────
 
     @Nested
-    @DisplayName("processPositionOpen")
-    class ProcessPositionOpenTest {
+    @DisplayName("openPosition (leaf 블록 즉시 진입)")
+    class OpenPositionTest {
+
+        /**
+         * leaf 블록 도달 → 즉시 진입을 트리거하기 위한 공통 setup.
+         * processBlockMatching이 호출되면 currentBlockOrder=2(leaf)이므로 60초 안 세고 즉시 openPosition 진입.
+         */
+        private QueueStateDTO leafReadyState() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setActiveStepId(10L);
+            state.setActivePatternId(10L);
+            state.setCurrentBlockOrder(2); // leaf 위치
+            return state;
+        }
 
         @Test
         @DisplayName("진입 시 notional(amount × leverage)로 convertUsdtToQty를 호출한다")
         void callsConvertUsdtToQtyWithNotional() {
             // amount=100, leverage=10 → notional=1000
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.POSITION_OPEN);
-            state.setDirection(Side.LONG);
-            state.setActiveStepId(10L);
-            state.setActivePatternId(10L);
+            QueueStateDTO state = leafReadyState();
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
             ArgumentCaptor<BigDecimal> notionalCaptor = ArgumentCaptor.forClass(BigDecimal.class);
             given(marketService.convertUsdtToQty(eq("BTCUSDT"), notionalCaptor.capture(), any()))
                     .willReturn("0.002");
 
-            autoTradeService.processPositionOpen(queue, state, session, "50000.00");
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
             // amount(100) × leverage(10) = 1000 USDT 로 호출되어야 함
             assertThat(notionalCaptor.getValue()).isEqualByComparingTo(new BigDecimal("1000"));
         }
 
         @Test
-        @DisplayName("진입 성공 시 entryQty와 entryNotional을 state에 저장한다")
-        void savesEntryQtyAndNotionalOnSuccess() {
+        @DisplayName("진입 성공 시 entryQty/entryMargin을 저장하고 POSITION_HOLDING 페이즈로 전환한다")
+        void savesEntryQtyAndTransitionsToPositionHolding() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.POSITION_OPEN);
-            state.setDirection(Side.LONG);
-            state.setActiveStepId(10L);
-            state.setActivePatternId(10L);
+            QueueStateDTO state = leafReadyState();
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // qty=0.002, price=50000 → actualAmount = 0.002 × 50000 = 100 USDT
             given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.002");
 
-            autoTradeService.processPositionOpen(queue, state, session, "50000.00");
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
             assertThat(state.getEntryQty()).isEqualTo("0.002");
-            assertThat(state.getEntryNotional()).isEqualByComparingTo(new BigDecimal("100.00"));
-            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            assertThat(state.getEntryMargin()).isEqualByComparingTo(new BigDecimal("100.00"));
+            assertThat(state.getEntryPrice()).isEqualTo("50000.00");
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
         }
 
         @Test
         @DisplayName("진입 성공 시 closeSkipCount를 0으로 초기화한다")
         void resetsCloseSkipCountOnSuccess() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.POSITION_OPEN);
-            state.setDirection(Side.LONG);
-            state.setActiveStepId(10L);
-            state.setActivePatternId(10L);
+            QueueStateDTO state = leafReadyState();
             state.setCloseSkipCount(3); // 이전에 스킵이 있었던 상태 가정
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
             given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.002");
 
-            autoTradeService.processPositionOpen(queue, state, session, "50000.00");
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
             assertThat(state.getCloseSkipCount()).isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("LONG 진입 시 leverage 기반으로 TP/SL 가격을 계산한다 (default 100/leverage)")
+        void calculatesTpSlOnLongEntry() {
+            // leverage=10 → 기본 TP/SL = 10% → entry=50000, tp=55000, sl=45000
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            QueueStateDTO state = leafReadyState();
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.002");
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
+        }
+
+        @Test
+        @DisplayName("SHORT 진입 시 TP는 진입가 미만, SL은 진입가 초과로 계산된다")
+        void calculatesTpSlOnShortEntry() {
+            // leverage=10 → 10% → entry=50000, SHORT TP=45000(아래쪽), SL=55000(위쪽)
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.SHORT, 10);
+            QueueStateDTO state = leafReadyState();
+            state.setDirection(Side.SHORT);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.002");
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+        }
+
+        @Test
+        @DisplayName("S:L 패턴 - 트리거 SHORT지만 leaf=LONG이므로 LONG 포지션으로 진입한다")
+        void enterLongOnShortLeafLongPattern() {
+            // S:L 패턴 = cond(SHORT) + leaf(LONG): 진입 방향은 leaf side(LONG)
+            PatternQueue queue = makePatternWithCondAndLeafSides(Side.SHORT, Side.LONG, 10);
+            QueueStateDTO state = leafReadyState();
+            state.setDirection(Side.SHORT); // 트리거가 SHORT 방향이었음을 시뮬레이션
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.002");
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            // 진입 방향은 leaf side(LONG)로 갱신되어야 함
+            assertThat(state.getDirection()).isEqualTo(Side.LONG);
+            // TP/SL은 LONG 기준 — 익절가는 진입가보다 높고, 손절가는 낮아야 함
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
+            // Bybit 주문 side 검증: LONG → "Buy"
+            ArgumentCaptor<CreateOrderRequest> orderCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+            then(tradeFacade).should().placeOrder(orderCaptor.capture(), any(), any(), any());
+            assertThat(orderCaptor.getValue().getSide()).isEqualTo("Buy");
+        }
+
+        @Test
+        @DisplayName("L:S 패턴 - 트리거 LONG지만 leaf=SHORT이므로 SHORT 포지션으로 진입한다")
+        void enterShortOnLongLeafShortPattern() {
+            // L:S 패턴 = cond(LONG) + leaf(SHORT): 진입 방향은 leaf side(SHORT)
+            PatternQueue queue = makePatternWithCondAndLeafSides(Side.LONG, Side.SHORT, 10);
+            QueueStateDTO state = leafReadyState();
+            state.setDirection(Side.LONG); // 트리거가 LONG 방향이었음을 시뮬레이션
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            given(marketService.convertUsdtToQty(any(), any(), any())).willReturn("0.002");
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            // 진입 방향은 leaf side(SHORT)로 갱신
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            // TP/SL은 SHORT 기준 — 익절가는 진입가보다 낮고, 손절가는 높아야 함
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
+            // Bybit 주문 side 검증: SHORT → "Sell"
+            ArgumentCaptor<CreateOrderRequest> orderCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+            then(tradeFacade).should().placeOrder(orderCaptor.capture(), any(), any(), any());
+            assertThat(orderCaptor.getValue().getSide()).isEqualTo("Sell");
         }
     }
 
@@ -499,176 +599,239 @@ class AutoTradeServiceTest {
     // 블록 매칭 (processBlockMatching)
     // ─────────────────────────────────────────────
 
+    /**
+     * 3블록 패턴 헬퍼: cond(L)/cond(L)/leaf(L) — BlockMatchingTest, OnKlineConfirmedTest 공용
+     */
+    private PatternQueue makeThreeBlockLongQueue(int leverage) {
+        PatternQueue queue = new PatternQueue();
+        queue.setId(1L);
+        queue.setUserId(1L);
+        queue.setSymbol("BTCUSDT");
+        queue.setActive(true);
+        queue.setTriggerRate(new BigDecimal("1.0"));
+        queue.setFull(false);
+        ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
+
+        PatternBlock c1 = new PatternBlock(); c1.setId(101L); c1.setSide(Side.LONG); c1.setBlockOrder(1); c1.setLeaf(false);
+        PatternBlock c2 = new PatternBlock(); c2.setId(102L); c2.setSide(Side.LONG); c2.setBlockOrder(2); c2.setLeaf(false);
+        PatternBlock leaf = new PatternBlock(); leaf.setId(103L); leaf.setSide(Side.LONG); leaf.setBlockOrder(3); leaf.setLeaf(true);
+
+        Pattern pattern = new Pattern();
+        pattern.setId(10L);
+        pattern.setPatternOrder(1);
+        pattern.setAmount(new BigDecimal("100"));
+        pattern.setLeverage(leverage);
+        pattern.getBlocks().add(c1);
+        pattern.getBlocks().add(c2);
+        pattern.getBlocks().add(leaf);
+
+        PatternStep step = new PatternStep();
+        step.setId(10L);
+        step.setStepLevel(1);
+        step.setFull(false);
+        step.getPatterns().add(pattern);
+        step.setQueue(queue);
+        queue.getSteps().add(step);
+        return queue;
+    }
+
     @Nested
-    @DisplayName("processBlockMatching")
+    @DisplayName("processBlockMatching (조건 블록 → 봉 마감 대기 셋업)")
     class BlockMatchingTest {
 
         @Test
-        @DisplayName("임계값 미달 시 아무 작업도 하지 않는다")
-        void doesNothingWhenBelowThreshold() {
-            PatternQueue queue = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+        @DisplayName("조건 블록 도달 시 blockBaseTime이 null이면 새로 세팅하고 종료한다 (신호 판단은 onKlineConfirmed)")
+        void setsBlockBaseTimeOnFirstHit() {
+            PatternQueue queue = makeThreeBlockLongQueue(10);
             QueueStateDTO state = QueueStateDTO.initial(1L);
             state.setPhase(TradePhase.BLOCK_MATCHING);
             state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L); // makePatternQueue에서 pattern id = 1*10 = 10
+            state.setActivePatternId(10L);
+            state.setActiveStepId(10L);
             state.setCurrentBlockOrder(2);
+            // blockBaseTime은 null 상태
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 50000 → 50100 = +0.2% (leverage=1 → threshold=100%, 미달)
             autoTradeService.processBlockMatching(queue, state, session, "50100.00");
 
-            // 상태 변화 없음
+            // blockBaseTime/Price는 세팅되고, 블록 위치는 변하지 않음 (신호 판단은 봉 마감 시)
+            assertThat(state.getBlockBaseTime()).isNotNull();
+            assertThat(state.getBlockBasePrice()).isEqualTo("50100.00");
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
             assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("조건 블록에서 blockBaseTime이 이미 세팅되어 있으면 처리하지 않는다")
+        void doesNothingWhenBlockBaseAlreadySet() {
+            PatternQueue queue = makeThreeBlockLongQueue(10);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setActivePatternId(10L);
+            state.setActiveStepId(10L);
+            state.setCurrentBlockOrder(2);
+            LocalDateTime origBase = LocalDateTime.now().minusSeconds(10);
+            state.setBlockBaseTime(origBase);
+            state.setBlockBasePrice("50000.00");
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            autoTradeService.processBlockMatching(queue, state, session, "55000.00");
+
+            // 기존 값 변화 없음
+            assertThat(state.getBlockBaseTime()).isEqualTo(origBase);
+            assertThat(state.getBlockBasePrice()).isEqualTo("50000.00");
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
+        }
+    }
+
+
+    // ─────────────────────────────────────────────
+    // 포지션 보유 중 (processPositionHolding) - TP/SL 트리거
+    // ─────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("processPositionHolding (TP/SL 트리거)")
+    class PositionHoldingTest {
+
+        /**
+         * 진입 완료 직후 상태를 시뮬레이션하는 헬퍼.
+         * - phase=POSITION_HOLDING / direction LONG / entryPrice=50000
+         * - tpPrice/slPrice는 leverage=10 기준 (default 10%) 반영
+         */
+        private QueueStateDTO holdingState(Side direction, BigDecimal tpPrice, BigDecimal slPrice) {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.POSITION_HOLDING);
+            state.setDirection(direction);
+            state.setActiveStepId(10L);
+            state.setActivePatternId(10L);
+            state.setEntryPrice("50000.00");
+            state.setEntryQty("0.001");
+            state.setEntryMargin(new BigDecimal("100"));
+            state.setTpPrice(tpPrice);
+            state.setSlPrice(slPrice);
+            state.setCurrentBlockOrder(2);
+            return state;
+        }
+
+        @Test
+        @DisplayName("LONG 포지션 + 현재가가 TP/SL 사이면 아무 작업도 하지 않는다")
+        void longBetweenTpSl_doesNothing() {
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 50000 → 51000: TP 미달, SL 미달 → 대기
+            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LONG TP 도달 시 매도 성공 → 1단계 LONG 패턴으로 재진입 (currentBlockOrder=2)")
+        void longTpReached_sellAndReenterStep1Long() {
+            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
+            state.setActivePatternId(100L); // LONG 패턴
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // TP 도달
+            autoTradeService.processPositionHolding(queue, state, session, "55500.00");
+
+            // 매도 주문 + 거래/투자 이력 저장
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(TradeHistory.class), any());
+            then(tradeHistoryRepository).should(times(1)).save(any(TradeHistory.class));
+            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+
+            // 1단계 LONG 재진입, currentBlockOrder=2 (첫 블록 자동 매칭)
+            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
+            assertThat(state.getDirection()).isEqualTo(Side.LONG);
+            assertThat(state.getActivePatternId()).isEqualTo(100L);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            // TP/SL 가격은 리셋되어야 함
+            assertThat(state.getTpPrice()).isNull();
+            assertThat(state.getSlPrice()).isNull();
+        }
+
+        @Test
+        @DisplayName("LONG SL 도달 시 청산(SHORT 신호) → 2단계 SHORT 패턴 이동 (currentBlockOrder=2)")
+        void longSlReached_liquidateAndMoveToStep2Short() {
+            PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // SL 도달
+            autoTradeService.processPositionHolding(queue, state, session, "44500.00");
+
+            // 청산 주문 + 거래/투자 이력 저장
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
+            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+
+            // 2단계 SHORT 이동, currentBlockOrder=2
+            assertThat(state.getCurrentStepLevel()).isEqualTo(2);
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
+            assertThat(state.getTpPrice()).isNull();
+            assertThat(state.getSlPrice()).isNull();
+        }
+
+        @Test
+        @DisplayName("SHORT TP 도달 시 매도 성공 → 1단계 SHORT 패턴으로 재진입 (currentBlockOrder=2)")
+        void shortTpReached_sellAndReenterStep1Short() {
+            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
+            QueueStateDTO state = holdingState(Side.SHORT,
+                    new BigDecimal("45000"), new BigDecimal("55000"));
+            state.setActivePatternId(200L); // SHORT 패턴
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // SHORT TP는 가격 하락 → SL 미만으로
+            autoTradeService.processPositionHolding(queue, state, session, "44500.00");
+
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
+            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
+            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
+            assertThat(state.getActivePatternId()).isEqualTo(200L);
             assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
         }
 
         @Test
-        @DisplayName("리프 블록 일치 시 매도 성공하고 같은 단계를 반복한다")
-        void sellSuccessAndRepeatStep() {
-            // leverage=1 → threshold=100%로는 테스트 불가, leverage=10 사용
-            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            // 리프 블록은 blockOrder=2
-            state.setCurrentBlockOrder(2);
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-
-            // 진입 시 저장되는 값 직접 설정 (processPositionOpen에서 저장, qty=0.001, price=50000 → notional=50)
-            state.setEntryQty("0.001");
-            state.setEntryNotional(new BigDecimal("50"));
-
-            // 50000 → 55500 = +11% (threshold=10%) → LONG → 리프 LONG 일치
-            autoTradeService.processBlockMatching(queue, state, session, "55500.00");
-
-            // 매도 성공 → 같은 단계 반복 (POSITION_OPEN)
-            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
-            assertThat(state.getCurrentBlockOrder()).isEqualTo(1);
-            // 매도 주문 실행 확인 (reduceOnly 포함)
-            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(TradeHistory.class), any());
-            // 거래 이력 저장 확인
-            then(tradeHistoryRepository).should(times(1)).save(any(TradeHistory.class));
-            // 투자 히스토리 저장 확인 (포지션 사이클 완료 기록)
-            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
-        }
-
-        @Test
-        @DisplayName("반대 신호 시 기존 포지션을 청산하고 다음 단계로 이동한다")
-        void movesToNextStepOnLiquidation() {
-            // 2단계 큐 생성
+        @DisplayName("SHORT SL 도달 시 청산(LONG 신호) → 2단계 LONG 패턴 이동 (currentBlockOrder=2)")
+        void shortSlReached_liquidateAndMoveToStep2Long() {
             PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2); // 리프 블록 위치
+            QueueStateDTO state = holdingState(Side.SHORT,
+                    new BigDecimal("45000"), new BigDecimal("55000"));
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 진입 시 저장되는 값 직접 설정
-            state.setEntryQty("0.001");
-            state.setEntryNotional(new BigDecimal("50"));
+            // SHORT SL은 가격 상승 → SL 초과
+            autoTradeService.processPositionHolding(queue, state, session, "55500.00");
 
-            // 50000 → 44500 = -11% (threshold=10%) → SHORT → 리프 LONG과 불일치 → 청산
-            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
-
-            // 청산 주문 실행 검증
-            then(tradeFacade).should(times(1)).placeOrder(any(), eq(1L), any(), any());
-            then(tradeHistoryRepository).should(times(1)).save(any());
-            // 투자 히스토리 저장 확인 (포지션 사이클 완료 기록)
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
             then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
-
-            // 다음 단계(2)로 이동, SHORT 방향
             assertThat(state.getCurrentStepLevel()).isEqualTo(2);
-            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
-            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
-        }
-
-        @Test
-        @DisplayName("Long 매도 성공 후 1단계 Long 패턴으로 재진입한다 (SRS 11, 12)")
-        void sellSuccess_long_resetsToStep1WithLongPattern() {
-            // 1단계에 LONG(id=100) + SHORT(id=200) 양쪽 패턴, leverage=10
-            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);       // Long 포지션
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(100L);      // Long 패턴 (index 0)
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2);       // 리프 블록
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-
-            state.setEntryQty("0.001");
-            state.setEntryNotional(new BigDecimal("50"));
-
-            // 50000 → 55500 = +11% (threshold=10%) → LONG 신호 → 리프 LONG 일치 → 매도 성공
-            autoTradeService.processBlockMatching(queue, state, session, "55500.00");
-
-            // 매도 성공 → 1단계 Long 패턴(id=100)으로 재진입
-            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
-            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
             assertThat(state.getDirection()).isEqualTo(Side.LONG);
-            assertThat(state.getActivePatternId()).isEqualTo(100L);
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2);
         }
 
         @Test
-        @DisplayName("Short 매도 성공 후 1단계 Short 패턴으로 재진입한다 (SRS 11, 12)")
-        void sellSuccess_short_resetsToStep1WithShortPattern() {
-            // 1단계에 LONG(id=100) + SHORT(id=200) 양쪽 패턴, leverage=10
-            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.SHORT);      // Short 포지션
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(200L);      // Short 패턴 (index 1)
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2);       // 리프 블록
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-
-            state.setEntryQty("0.001");
-            state.setEntryNotional(new BigDecimal("50"));
-
-            // 50000 → 44500 = -11% (threshold=10%) → SHORT 신호 → 리프 SHORT 일치 → 매도 성공
-            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
-
-            // 매도 성공 → 1단계 Short 패턴(id=200)으로 재진입
-            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_OPEN);
-            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
-            assertThat(state.getDirection()).isEqualTo(Side.SHORT);
-            assertThat(state.getActivePatternId()).isEqualTo(200L);
-        }
-
-        @Test
-        @DisplayName("마지막 단계 청산 시 포지션을 닫고 큐를 비활성화한다")
-        void deactivatesQueueOnLastStepLiquidation() {
-            // 1단계만 있는 큐
+        @DisplayName("마지막 단계 SL 도달 시 큐가 비활성화된다")
+        void lastStepSl_deactivatesQueue() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2);
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 진입 시 저장되는 값 직접 설정
-            state.setEntryQty("0.001");
-            state.setEntryNotional(new BigDecimal("50"));
+            autoTradeService.processPositionHolding(queue, state, session, "44500.00");
 
-            // 청산 → 포지션 닫기 → 다음 단계 없음 → 큐 비활성화
-            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
-
-            // 청산 주문 실행 검증
-            then(tradeFacade).should(times(1)).placeOrder(any(), eq(1L), any(), any());
-            // 투자 히스토리 저장 확인
-            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
-
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
             assertThat(queue.isActive()).isFalse();
             then(patternQueueRepository).should(times(1)).save(queue);
         }
@@ -677,22 +840,15 @@ class AutoTradeServiceTest {
         @DisplayName("매도 시 entryQty가 null이면 closeSkipCount를 증가시키고 매도를 스킵한다")
         void sellSkips_whenEntryQtyIsNull() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2); // 리프 블록
-            state.setEntryQty(null);       // 진입 수량 없음 (비정상 상태 시뮬레이션)
-            state.setEntryNotional(new BigDecimal("50"));
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
+            state.setEntryQty(null);    // 비정상 상태 시뮬레이션
             state.setCloseSkipCount(0);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 55500: +11% → LONG 신호 → 리프 LONG 일치 → handleSellSuccess 진입
-            autoTradeService.processBlockMatching(queue, state, session, "55500.00");
+            // TP 도달 → 매도 시도하지만 entryQty null로 skip
+            autoTradeService.processPositionHolding(queue, state, session, "55500.00");
 
-            // 주문 미실행, 스킵 카운터만 증가, 큐는 아직 활성
             then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
             assertThat(state.getCloseSkipCount()).isEqualTo(1);
             assertThat(queue.isActive()).isTrue();
@@ -702,21 +858,14 @@ class AutoTradeServiceTest {
         @DisplayName("매도 시 entryQty null 스킵이 5회 도달하면 큐를 비활성화한다")
         void sellDeactivatesQueue_whenSkipCountReaches5() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2); // 리프 블록
-            state.setEntryQty(null);       // 진입 수량 없음
-            state.setEntryNotional(new BigDecimal("50"));
-            state.setCloseSkipCount(4);    // 이미 4회 스킵 (다음 호출에서 5회 도달)
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
+            state.setEntryQty(null);
+            state.setCloseSkipCount(4);  // 다음 호출에서 5회 도달
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            autoTradeService.processBlockMatching(queue, state, session, "55500.00");
+            autoTradeService.processPositionHolding(queue, state, session, "55500.00");
 
-            // 5회 도달 → 큐 비활성화, 주문 미실행
             assertThat(queue.isActive()).isFalse();
             then(patternQueueRepository).should(times(1)).save(queue);
             then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
@@ -726,49 +875,18 @@ class AutoTradeServiceTest {
         @DisplayName("청산 시 entryQty가 null이면 closeSkipCount를 증가시키고 청산을 스킵한다")
         void liquidationSkips_whenEntryQtyIsNull() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2); // 리프 블록
-            state.setEntryQty(null);       // 진입 수량 없음 (비정상 상태 시뮬레이션)
-            state.setEntryNotional(new BigDecimal("50"));
+            QueueStateDTO state = holdingState(Side.LONG,
+                    new BigDecimal("55000"), new BigDecimal("45000"));
+            state.setEntryQty(null);
             state.setCloseSkipCount(0);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 44500: -11% → SHORT 신호 → 리프 LONG 불일치 → handleLiquidation 진입
-            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
+            // SL 도달 → 청산 시도하지만 entryQty null로 skip
+            autoTradeService.processPositionHolding(queue, state, session, "44500.00");
 
-            // 주문 미실행, 스킵 카운터만 증가, 큐는 아직 활성
             then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
             assertThat(state.getCloseSkipCount()).isEqualTo(1);
             assertThat(queue.isActive()).isTrue();
-        }
-
-        @Test
-        @DisplayName("청산 시 entryQty null 스킵이 5회 도달하면 큐를 비활성화한다")
-        void liquidationDeactivatesQueue_whenSkipCountReaches5() {
-            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            QueueStateDTO state = QueueStateDTO.initial(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            state.setDirection(Side.LONG);
-            state.setEntryPrice("50000.00");
-            state.setActivePatternId(10L);
-            state.setActiveStepId(10L);
-            state.setCurrentBlockOrder(2); // 리프 블록
-            state.setEntryQty(null);       // 진입 수량 없음
-            state.setEntryNotional(new BigDecimal("50"));
-            state.setCloseSkipCount(4);    // 이미 4회 스킵 (다음 호출에서 5회 도달)
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-
-            autoTradeService.processBlockMatching(queue, state, session, "44500.00");
-
-            // 5회 도달 → 큐 비활성화, 주문 미실행
-            assertThat(queue.isActive()).isFalse();
-            then(patternQueueRepository).should(times(1)).save(queue);
-            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
         }
     }
 
@@ -823,8 +941,8 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("BLOCK_MATCHING 시 진입가 대비 변동률을 반환한다")
-        void returnsChangeRateOnBlockMatching() {
+        @DisplayName("POSITION_HOLDING 시 진입가 대비 변동률과 TP/SL 가격을 반환한다")
+        void returnsChangeRateAndTpSlOnPositionHolding() {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
@@ -832,11 +950,13 @@ class AutoTradeServiceTest {
                     userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
-            // BLOCK_MATCHING 상태로 설정 (활성 패턴 ID 포함)
+            // POSITION_HOLDING 상태로 설정 (활성 패턴 + 진입가 + TP/SL)
             var state = autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates().get(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setPhase(TradePhase.POSITION_HOLDING);
             state.setDirection(Side.LONG);
             state.setEntryPrice("50000.00");
+            state.setTpPrice(new BigDecimal("55000.00"));
+            state.setSlPrice(new BigDecimal("45000.00"));
             state.setActivePatternId(10L); // makeStep에서 pattern.id = queueId * 10 = 10
 
             // WebSocket 현재가 모킹
@@ -847,19 +967,20 @@ class AutoTradeServiceTest {
             var response = autoTradeService.getStatusResponse(userId, symbol, TradeMode.MAIN);
 
             assertThat(response.isActive()).isTrue();
-            assertThat(response.getPhase()).isEqualTo("BLOCK_MATCHING");
-            assertThat(response.getElapsedSeconds()).isEqualTo(0); // BLOCK_MATCHING은 경과시간 없음
+            assertThat(response.getPhase()).isEqualTo("POSITION_HOLDING");
             // 50000 → 52500 = +5.0%
             assertThat(response.getChangeRate()).isNotNull();
             assertThat(response.getChangeRate().doubleValue()).isCloseTo(5.0, org.assertj.core.api.Assertions.within(0.01));
             // 투입 금액 = 100 USDT (makeStep에서 설정)
-            assertThat(response.getAmount()).isNotNull();
             assertThat(response.getAmount()).isEqualByComparingTo(new BigDecimal("100"));
+            // TP/SL 가격이 응답에 포함되어야 함
+            assertThat(response.getTpPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+            assertThat(response.getSlPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
         }
 
         @Test
-        @DisplayName("BLOCK_MATCHING 시 진입가(entryPrice)를 반환한다 (SRS 27)")
-        void returnsEntryPriceOnBlockMatching() {
+        @DisplayName("POSITION_HOLDING 시 진입가(entryPrice)를 반환한다")
+        void returnsEntryPriceOnPositionHolding() {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
@@ -867,9 +988,8 @@ class AutoTradeServiceTest {
                     userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
-            // BLOCK_MATCHING 상태 + 진입가 설정
             var state = autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates().get(1L);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setPhase(TradePhase.POSITION_HOLDING);
             state.setDirection(Side.LONG);
             state.setEntryPrice("50000.00");
             state.setActivePatternId(10L);
@@ -880,7 +1000,6 @@ class AutoTradeServiceTest {
 
             var response = autoTradeService.getStatusResponse(userId, symbol, TradeMode.MAIN);
 
-            // 진입가가 응답에 포함되어야 함
             assertThat(response.getEntryPrice()).isEqualTo("50000.00");
         }
 
@@ -982,6 +1101,50 @@ class AutoTradeServiceTest {
         ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
 
         PatternStep step = makeStep(id, leafSide, leverage, 1);
+        step.setQueue(queue);
+        queue.getSteps().add(step);
+        return queue;
+    }
+
+    /**
+     * cond 블록과 leaf 블록의 side를 다르게 지정한 PatternQueue 생성
+     * (예: cond=SHORT, leaf=LONG → "S:L" 패턴)
+     */
+    private PatternQueue makePatternWithCondAndLeafSides(Side condSide, Side leafSide, int leverage) {
+        PatternQueue queue = new PatternQueue();
+        queue.setId(1L);
+        queue.setUserId(1L);
+        queue.setSymbol("BTCUSDT");
+        queue.setActive(true);
+        queue.setTriggerRate(new BigDecimal("1.0"));
+        queue.setFull(false);
+        ReflectionTestUtils.setField(queue, "createdAt", LocalDateTime.now());
+
+        PatternBlock cond = new PatternBlock();
+        cond.setId(101L);
+        cond.setSide(condSide);
+        cond.setBlockOrder(1);
+        cond.setLeaf(false);
+
+        PatternBlock leaf = new PatternBlock();
+        leaf.setId(102L);
+        leaf.setSide(leafSide);
+        leaf.setBlockOrder(2);
+        leaf.setLeaf(true);
+
+        Pattern pattern = new Pattern();
+        pattern.setId(10L);
+        pattern.setPatternOrder(1);
+        pattern.setAmount(new BigDecimal("100"));
+        pattern.setLeverage(leverage);
+        pattern.getBlocks().add(cond);
+        pattern.getBlocks().add(leaf);
+
+        PatternStep step = new PatternStep();
+        step.setId(10L);
+        step.setStepLevel(1);
+        step.setFull(false);
+        step.getPatterns().add(pattern);
         step.setQueue(queue);
         queue.getSteps().add(step);
         return queue;

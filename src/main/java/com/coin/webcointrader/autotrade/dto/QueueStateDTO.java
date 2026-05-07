@@ -29,11 +29,17 @@ public class QueueStateDTO {
     private Long activePatternId;      // 현재 활성 패턴 ID
     private int currentBlockOrder;     // 현재 블록 순서
 
+    // 블록 매칭 상태 (시간 기반 신호 판별용)
+    private LocalDateTime blockBaseTime;   // 현재 블록 기준 시각 (60초 카운터 시작점)
+    private String blockBasePrice;         // 현재 블록 기준가 (60초 후 비교 대상)
+
     // 포지션 상태
     private String entryPrice;         // 포지션 진입가
     private String entryQty;           // 진입 시 코인 수량 (매도/청산 시 포지션 전량 청산에 재사용)
-    private BigDecimal entryNotional;  // 진입 시 실제 차감된 금액 (applyProfitLoss 반환 기준)
+    private BigDecimal entryMargin;    // 진입 시 마진 (pattern.amount, applyProfitLoss 원금 기준)
     private int closeSkipCount;        // 청산 수량 오류 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
+    private BigDecimal tpPrice;        // 익절가 (POSITION_HOLDING 매도 트리거 기준, 진입 시점 계산)
+    private BigDecimal slPrice;        // 손절가 (POSITION_HOLDING 청산 트리거 기준, 진입 시점 계산)
 
     // 처리 중 플래그 (중복 주문 방지)
     private final AtomicBoolean processing = new AtomicBoolean(false);
