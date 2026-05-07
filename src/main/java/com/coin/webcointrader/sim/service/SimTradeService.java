@@ -65,18 +65,18 @@ public class SimTradeService {
         // 잔고 차감 (진입 주문 시에만 차감 — 매도/청산은 applyProfitLoss에서 손익 반영)
         if (history != null && history.getAmount() != null
                 && TradeOrderType.ENTRY.getTradeOrderType().equals(history.getOrderType())) {
-            BigDecimal orderAmount = history.getAmount();
+            // 마진 + 진입 수수료 합산 차감
+            BigDecimal fee = history.getFee() != null ? history.getFee() : BigDecimal.ZERO;
+            BigDecimal orderAmount = history.getAmount().add(fee);
 
             // 잔고 부족 시 실패 처리
             if (wallet.getBalance().compareTo(orderAmount) < 0) {
-                if (history != null) {
-                    // SimTradeHistory로 변환하여 실패 기록 저장
-                    SimTradeHistory simHistory = toSimTradeHistory(history);
-                    simHistory.setExecutedPrice(BigDecimal.ZERO);
-                    simHistory.setOrderResult(OrderResult.FAILED);
-                    simHistory.setErrorMessage("모의투자 잔고 부족");
-                    simTradeHistoryRepository.save(simHistory);
-                }
+                // SimTradeHistory로 변환하여 실패 기록 저장
+                SimTradeHistory simHistory = toSimTradeHistory(history);
+                simHistory.setExecutedPrice(BigDecimal.ZERO);
+                simHistory.setOrderResult(OrderResult.FAILED);
+                simHistory.setErrorMessage("모의투자 잔고 부족");
+                simTradeHistoryRepository.save(simHistory);
                 throw new CustomException(ExceptionMessage.ORDER_FAILED, "모의투자 잔고 부족");
             }
 
@@ -165,6 +165,7 @@ public class SimTradeService {
         sim.setExecutedPrice(history.getExecutedPrice());
         sim.setOrderType(history.getOrderType());
         sim.setOrderResult(history.getOrderResult());
+        sim.setFee(history.getFee());
         sim.setErrorMessage(history.getErrorMessage());
         return sim;
     }

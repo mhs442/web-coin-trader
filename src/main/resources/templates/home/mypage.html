@@ -464,6 +464,7 @@
                                         <th>방향</th>
                                         <th>투입 금액</th>
                                         <th>체결가</th>
+                                        <th>수수료</th>
                                         <th>유형</th>
                                         <th>상태</th>
                                         <th>비고</th>
@@ -495,6 +496,7 @@
                         '<td class="' + sideClass + '">' + t.side + '</td>' +
                         '<td class="mono-cell">' + t.amount + '</td>' +
                         '<td class="mono-cell">' + t.executedPrice + '</td>' +
+                        '<td class="mono-cell">' + (t.fee || '-') + '</td>' +
                         '<td>' + orderTypeLabel + '</td>' +
                         '<td><span class="' + statusClass + '">' + t.orderStatus + '</span></td>' +
                         '<td class="error-cell">' + (t.errorMessage || '-') + '</td>';
@@ -602,9 +604,12 @@
                                         '<th>코인</th>' +
                                         '<th>방향</th>' +
                                         '<th>투입 금액</th>' +
+                                        '<th>레버리지</th>' +
                                         '<th>진입가</th>' +
                                         '<th>청산가</th>' +
-                                        '<th>손익금</th>' +
+                                        '<th>익절 예상가</th>' +
+                                        '<th>손절 예상가</th>' +
+                                        '<th>순손익</th>' +
                                     '</tr>' +
                                 '</thead>' +
                                 '<tbody></tbody>' +
@@ -631,8 +636,11 @@
                         '<td><strong>' + inv.symbol + '</strong></td>' +
                         '<td class="' + sideClass + '">' + inv.side + '</td>' +
                         '<td class="mono-cell">' + inv.amount + '</td>' +
+                        '<td>' + (inv.leverage ? inv.leverage + 'x' : '-') + '</td>' +
                         '<td class="mono-cell">' + inv.entryPrice + '</td>' +
                         '<td class="mono-cell">' + inv.exitPrice + '</td>' +
+                        '<td class="mono-cell">' + (inv.tpPrice || '-') + '</td>' +
+                        '<td class="mono-cell">' + (inv.slPrice || '-') + '</td>' +
                         '<td class="mono-cell ' + profitClass + '">' + profitPrefix + inv.profitLoss + '</td>'
                     );
                     $tbody.append($tr);

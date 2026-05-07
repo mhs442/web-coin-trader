@@ -11,6 +11,7 @@ public class TradeHistoryResponse {
     private String side;            // 매매 방향 (LONG / SHORT)
     private String amount;          // 주문 금액 (USDT)
     private String executedPrice;   // 체결 가격
+    private String fee;             // 거래 수수료 (taker 0.055%, 기존 데이터는 null)
     private String orderType;       // 주문 유형 (ENTRY / SELL / LIQUIDATION)
     private String orderStatus;     // 주문 결과 (SUCCESS / FAILED)
     private String errorMessage;    // 오류 메시지 (FAILED 시)

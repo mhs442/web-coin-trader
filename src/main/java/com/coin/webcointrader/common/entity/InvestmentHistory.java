@@ -46,5 +46,14 @@ public class InvestmentHistory extends BaseEntity {
     private BigDecimal exitPrice;       // 청산가
 
     @Column(nullable = false, precision = 20, scale = 8)
-    private BigDecimal amount;          // 투입 금액 (USDT)
+    private BigDecimal amount;          // 투입 금액 (마진, 레버리지 미포함)
+
+    @Column(nullable = false)
+    private int leverage;               // 레버리지
+
+    @Column(precision = 20, scale = 8)
+    private BigDecimal tpPrice;         // 익절 예상가
+
+    @Column(precision = 20, scale = 8)
+    private BigDecimal slPrice;         // 손절 예상가
 }

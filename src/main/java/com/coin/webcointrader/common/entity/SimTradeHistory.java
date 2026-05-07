@@ -46,6 +46,9 @@ public class SimTradeHistory extends BaseEntity {
     @Column(length = 100)
     private String orderId;             // 주문 ID (SIM- 접두어)
 
+    @Column(precision = 20, scale = 8)
+    private BigDecimal fee;             // 거래 수수료 (taker 0.055%, 기존 데이터는 null)
+
     @Column(nullable = false, length = 20)
     private String orderType;           // 주문 유형 (ENTRY / SELL / LIQUIDATION)
 
