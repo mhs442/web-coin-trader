@@ -1,5 +1,6 @@
 package com.coin.webcointrader.common.client.market;
 
+import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
 import com.coin.webcointrader.common.client.market.dto.WebSocketRequest;
 import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.common.enums.LogMessage;
@@ -58,12 +59,19 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
 
     private volatile WebSocketSession session;  // 현재 WebSocket 세션
 
-    // 현재 구독 중인 심볼 목록
+    // 현재 구독 중인 심볼 목록 (tickers 토픽)
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
+
+    // 현재 kline.1 구독 중인 심볼 목록 (1분봉 봉 마감 알림용)
+    private final Set<String> subscribedKlineSymbols = ConcurrentHashMap.newKeySet();
 
     // 티커 데이터 수신 콜백
     @Setter
     private Consumer<WebSocketTickerDTO> tickerCallback;    // WebSocketTickerDTO를 처리할 콜백 함수
+
+    // Kline(봉) 데이터 수신 콜백 (confirm=true 메시지 포함, 콜백 측에서 필터링)
+    @Setter
+    private Consumer<WebSocketKlineDTO> klineCallback;
 
     // heartbeat 스케줄러
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
@@ -143,23 +151,58 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
     }
 
     /**
-     * 구독 목록을 주어진 심볼 집합과 동기화한다.
-     * 새로운 심볼은 구독하고, 불필요한 심볼은 구독 해제한다.
+     * 특정 심볼의 1분봉 kline 토픽을 구독한다.
+     * confirm:true 메시지 수신 시 1분봉이 마감되었음을 의미한다.
+     *
+     * @param symbol 구독할 심볼 (예: "BTCUSDT")
+     */
+    public void subscribeKline(String symbol) {
+        if (!subscribedKlineSymbols.add(symbol)) {
+            return;
+        }
+        String topic = "kline.1." + symbol;
+        sendMessage(WebSocketRequest.subscribe(List.of(topic)));
+        log.info(LogMessage.WS_SUBSCRIBE.getMessage(), topic);
+    }
+
+    /**
+     * 특정 심볼의 1분봉 kline 토픽 구독을 해제한다.
+     */
+    public void unsubscribeKline(String symbol) {
+        if (!subscribedKlineSymbols.remove(symbol)) {
+            return;
+        }
+        String topic = "kline.1." + symbol;
+        sendMessage(WebSocketRequest.unsubscribe(List.of(topic)));
+        log.info(LogMessage.WS_UNSUBSCRIBE.getMessage(), topic);
+    }
+
+    /**
+     * 구독 목록(tickers + kline.1)을 주어진 심볼 집합과 동기화한다.
+     * 새로운 심볼은 두 토픽 모두 구독하고, 불필요한 심볼은 두 토픽 모두 해제한다.
      *
      * @param targetSymbols 활성 세션의 심볼 집합
      */
     public void syncSubscriptions(Set<String> targetSymbols) {
-        // 새로 추가된 심볼 구독
+        // 새로 추가된 심볼 구독 (tickers + kline)
         for (String symbol : targetSymbols) {
             if (!subscribedSymbols.contains(symbol)) {
                 subscribe(symbol);
             }
+            if (!subscribedKlineSymbols.contains(symbol)) {
+                subscribeKline(symbol);
+            }
         }
 
-        // 제거된 심볼 구독 해제
+        // 제거된 심볼 구독 해제 (tickers + kline)
         for (String symbol : Set.copyOf(subscribedSymbols)) {
             if (!targetSymbols.contains(symbol)) {
                 unsubscribe(symbol);
+            }
+        }
+        for (String symbol : Set.copyOf(subscribedKlineSymbols)) {
+            if (!targetSymbols.contains(symbol)) {
+                unsubscribeKline(symbol);
             }
         }
     }
@@ -171,6 +214,13 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
      */
     public Set<String> getSubscribedSymbols() {
         return Set.copyOf(subscribedSymbols);
+    }
+
+    /**
+     * 현재 kline.1 구독 중인 심볼 목록을 반환한다.
+     */
+    public Set<String> getSubscribedKlineSymbols() {
+        return Set.copyOf(subscribedKlineSymbols);
     }
 
     // ─────────────────────────────────────────────
@@ -214,11 +264,19 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 return;
             }
 
-            // topic 필드가 있으면 티커 데이터 메시지
-            if (node.has("topic") && node.get("topic").asText().startsWith("tickers.")) {
-                WebSocketTickerDTO dto = objectMapper.readValue(payload, WebSocketTickerDTO.class);
-                if (tickerCallback != null) {
-                    tickerCallback.accept(dto);
+            // topic 필드 분기
+            if (node.has("topic")) {
+                String topic = node.get("topic").asText();
+                if (topic.startsWith("tickers.")) {
+                    WebSocketTickerDTO dto = objectMapper.readValue(payload, WebSocketTickerDTO.class);
+                    if (tickerCallback != null) {
+                        tickerCallback.accept(dto);
+                    }
+                } else if (topic.startsWith("kline.")) {
+                    WebSocketKlineDTO dto = objectMapper.readValue(payload, WebSocketKlineDTO.class);
+                    if (klineCallback != null) {
+                        klineCallback.accept(dto);
+                    }
                 }
             }
         } catch (JsonProcessingException e) {
@@ -306,18 +364,21 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
 
     /**
      * 기존 구독 토픽을 모두 재구독한다. (재연결 시 사용)
+     * tickers.{symbol}와 kline.1.{symbol} 두 종류 모두 재구독한다.
      */
     private void resubscribeAll() {
-        if (subscribedSymbols.isEmpty()) {
+        if (subscribedSymbols.isEmpty() && subscribedKlineSymbols.isEmpty()) {
             return;
         }
 
-        List<String> topics = subscribedSymbols.stream()
-                .map(symbol -> "tickers." + symbol)
-                .toList();
+        List<String> topics = new java.util.ArrayList<>();
+        subscribedSymbols.forEach(s -> topics.add("tickers." + s));
+        subscribedKlineSymbols.forEach(s -> topics.add("kline.1." + s));
 
-        sendMessage(WebSocketRequest.subscribe(topics));
-        log.info(LogMessage.WS_RESUBSCRIBE_COMPLETE.getMessage(), subscribedSymbols.size());
+        if (!topics.isEmpty()) {
+            sendMessage(WebSocketRequest.subscribe(topics));
+            log.info(LogMessage.WS_RESUBSCRIBE_COMPLETE.getMessage(), topics.size());
+        }
     }
 
     /**
