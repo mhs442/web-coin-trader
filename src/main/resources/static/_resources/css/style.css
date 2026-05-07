@@ -1338,9 +1338,8 @@ body {
 /* 사이드 패널 내 패턴 관리 */
 .side-pattern-manage-panel {
     padding: 15px;
-    border-bottom: 1px solid #dee2e6;
     overflow-y: auto;
-    flex: 0 0 40%;
+    flex: 1;
     min-height: 0;
 }
 
@@ -1986,6 +1985,16 @@ body {
 
 .import-queue-btn:hover {
     background: #343a40;
+}
+
+.import-queue-btn:disabled {
+    background: #ced4da;
+    color: #868e96;
+    cursor: not-allowed;
+}
+
+.import-queue-btn:disabled:hover {
+    background: #ced4da;
 }
 
 /* 모달 오버레이 */
