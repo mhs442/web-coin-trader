@@ -15,5 +15,6 @@ import java.util.List;
 @Setter
 public class UpdatePatternRequest {
     private BigDecimal triggerRate;                    // 수정할 트리거 기준 상승/하락률(%)
+    private boolean cycle;                             // 단계 소진 후 1단계 재시작 여부
     private List<AddPatternRequest.StepRequest> steps; // 교체할 단계 목록
 }

@@ -15,6 +15,7 @@ public class AddPatternRequest {
     private String symbol;              // 코인 심볼 (예: BTCUSDT)
     private String tradeMode;          // 거래 모드 ("MAIN" 또는 "SIM")
     private BigDecimal triggerRate;     // 트리거 기준 상승/하락률 (%)
+    private boolean cycle;             // 단계 소진 후 1단계 재시작 여부
     private List<StepRequest> steps;    // 단계 목록
 
     @Getter @Setter

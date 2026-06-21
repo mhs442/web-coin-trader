@@ -53,6 +53,9 @@ public class PatternQueue extends BaseEntity {
     @Column(nullable = false, length = 10)
     private TradeMode tradeMode = TradeMode.MAIN;         // 거래 모드 (MAIN: 실전, SIM: 모의)
 
+    @Column(nullable = false)
+    private boolean cycle = false;                        // 단계 소진 후 1단계 재시작 여부 (true: 반복, false: 큐 비활성화)
+
     @OneToMany(mappedBy = "queue", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PatternStep> steps = new ArrayList<>();  // 소속 단계 목록
 }

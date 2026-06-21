@@ -74,6 +74,7 @@ public class PatternQueueService {
         queue.setSymbol(request.getSymbol());
         queue.setTriggerRate(request.getTriggerRate());
         queue.setActive(false);
+        queue.setCycle(request.isCycle());
         // 거래 모드 설정 (프론트에서 전달, 없으면 MAIN)
         if ("SIM".equalsIgnoreCase(request.getTradeMode())) {
             queue.setTradeMode(TradeMode.SIM);
@@ -250,8 +251,9 @@ public class PatternQueueService {
         // 단계/패턴/블록 검증
         validateSteps(request.getSteps());
 
-        // triggerRate 교체
+        // triggerRate, cycle 교체
         queue.setTriggerRate(request.getTriggerRate());
+        queue.setCycle(request.isCycle());
 
         // 기존 단계 전체 삭제 (orphanRemoval이 하위 엔티티 cascade 처리)
         queue.getSteps().clear();
@@ -345,12 +347,10 @@ public class PatternQueueService {
         for (AddPatternRequest.StepRequest step : steps) {
             List<AddPatternRequest.PatternRequest> patterns = step.getPatterns();
 
-            // 패턴 최대 2개 검증
-            if (patterns == null || patterns.isEmpty()) {
-                throw new CustomException(ExceptionMessage.EMPTY_PATTERNS);
-            }
-            if (patterns.size() > 2) {
-                throw new CustomException(ExceptionMessage.EXCEED_MAX_PATTERNS);
+            // 패턴 정확히 2개 검증 (LONG 시작 1개 + SHORT 시작 1개)
+            // 매칭 실패 시 같은 단계 내 반대 방향 패턴으로 전환할 수 있도록 양방향 보장 필요
+            if (patterns == null || patterns.size() != 2) {
+                throw new CustomException(ExceptionMessage.INVALID_PATTERN_COUNT);
             }
 
             for (AddPatternRequest.PatternRequest pattern : patterns) {
@@ -370,6 +370,13 @@ public class PatternQueueService {
         // 레버리지 검증
         if (pattern.getLeverage() == null || pattern.getLeverage() <= 0) {
             throw new CustomException(ExceptionMessage.INVALID_LEVERAGE);
+        }
+        // 손절율 0% 초과 100% 미만 검증 — 투자금 기준이므로 100% 이상이면 전액 손실
+        if (pattern.getStopLossRate() != null) {
+            if (pattern.getStopLossRate().compareTo(BigDecimal.ZERO) <= 0
+                    || pattern.getStopLossRate().compareTo(BigDecimal.valueOf(100)) >= 0) {
+                throw new CustomException(ExceptionMessage.INVALID_STOP_LOSS_RATE);
+            }
         }
         // 리프 블록 필수
         if (pattern.getLeafBlock() == null) {

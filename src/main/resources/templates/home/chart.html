@@ -15,7 +15,10 @@
     <div class="trade-layout-container">
         <!-- 메인 콘텐츠 (차트) -->
         <div class="main-content">
-            <a href="/dashboard" class="back-link">← 대시보드로 돌아가기</a>
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                <a href="/dashboard" class="back-link">← 대시보드로 돌아가기</a>
+                <a href="/mypage" class="mypage-link">마이페이지</a>
+            </div>
             <div class="chart-container">
                 <div class="chart-header">
                     <h2 th:text="${symbol} + ' 상세 차트'"></h2>
@@ -99,6 +102,12 @@
                             <input type="number" id="trigger-rate" step="0.01" min="0.01">
                         </div>
                     </div>
+                    <div class="trigger-input-row" style="margin-top:8px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                            <input type="checkbox" id="cycle-toggle">
+                            <span>단계 소진 후 1단계 재시작 (사이클 모드)</span>
+                        </label>
+                    </div>
                 </div>
                 <!-- 구성 중인 큐 미리보기 -->
                 <div id="local-queue-preview" class="queue-display"></div>
@@ -181,6 +190,12 @@
                             <input type="number" id="edit-trigger-rate" step="0.01" min="0.01">
                         </div>
                     </div>
+                    <div class="trigger-input-row" style="margin-top:8px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                            <input type="checkbox" id="edit-cycle-toggle">
+                            <span>단계 소진 후 1단계 재시작 (사이클 모드)</span>
+                        </label>
+                    </div>
                 </div>
                 <!-- 단계 목록 (동적 렌더링) -->
                 <div id="edit-steps-container"></div>
@@ -217,6 +232,7 @@
         let stompClient = null;              // STOMP 클라이언트 인스턴스
         let priceSubscription = null;        // /topic/price.{symbol} 구독 핸들
         let autoTradeSubscription = null;    // /topic/autotrade.status.{symbol} 구독 핸들
+        let autoTradeAlertSubscription = null; // /topic/autotrade.alert.{symbol} 구독 핸들 (큐 비활성화 등 즉시 알림)
 
         // ─── 자동매매 상태 로컬 카운터 (가격 변동 무관하게 1초마다 갱신) ───
         let statusTimerInterval = null;      // setInterval ID
@@ -478,6 +494,8 @@
 
             chart = new ApexCharts(document.querySelector("#chart"), options);
             chart.render();
+            // 차트 생성 전에 checkAutoTradeStatus가 먼저 응답한 경우 이미 설정된 annotation 복원
+            refreshChartAnnotations();
         }
 
         function getIntervalLabel(interval) {
@@ -799,10 +817,12 @@
                 var toggleLabel = queue.active ? 'ON' : 'OFF';
                 var toggleClass = queue.active ? 'toggle-on' : 'toggle-off';
 
+                var cycleBadge = queue.cycle ? '<span class="cycle-badge">🔄 사이클</span>' : '';
                 return '<div class="server-queue-card ' + (queue.active ? 'queue-active' : 'queue-inactive') + '" data-queue-id="' + queue.id + '">' +
                     '<div class="server-queue-header">' +
                     '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '">' + toggleLabel + '</button>' +
                     '<span class="queue-trigger-info">트리거: ' + queue.triggerRate + '%</span>' +
+                    cycleBadge +
                     '<button onclick="startEditQueue(' + queue.id + ')" class="pattern-edit-btn" ' + (queue.active ? 'disabled title="비활성화 후 수정하세요"' : '') + '>수정</button>' +
                     '<button onclick="deletePattern(' + queue.id + ')" class="pattern-delete-btn">삭제</button>' +
                     '</div>' +
@@ -965,12 +985,21 @@
                 alert('금액(USDT)을 입력해주세요.');
                 return false;
             }
+            // 손절율 0 초과 100 미만 검증 (투자금 기준 %)
+            const lev = parseInt(leverage) || 1;
+            if (stopLoss) {
+                const sl = parseFloat(stopLoss);
+                if (sl <= 0 || sl >= 100) {
+                    alert('손절율은 0% 초과 100% 미만으로 입력해주세요.\n(투자금 기준: 50% 설정 시 투자금의 절반 손실 시 청산)');
+                    return false;
+                }
+            }
 
             return {
                 conditionBlocks: [...conditionBlocks],
                 leafBlock: leafBlock,
                 amount: parseFloat(amount),
-                leverage: parseInt(leverage) || 1,
+                leverage: lev,
                 stopLoss: stopLoss ? parseFloat(stopLoss) : null,
                 takeProfit: takeProfit ? parseFloat(takeProfit) : null
             };
@@ -1061,9 +1090,10 @@
                 return;
             }
 
-            // pendingStepPatterns가 비어있으면 차단
-            if (pendingStepPatterns.length === 0) {
-                alert('패턴을 최소 1개 추가해주세요.');
+            // 단계당 패턴 정확히 2개 강제 (LONG 시작 1개 + SHORT 시작 1개)
+            // 매칭 실패 시 같은 단계 내 반대 방향 패턴으로 전환하므로 양방향 보장 필요
+            if (pendingStepPatterns.length !== MAX_PATTERNS_PER_STEP) {
+                alert(`각 단계에는 패턴이 정확히 ${MAX_PATTERNS_PER_STEP}개 필요합니다. (LONG 시작 1개 + SHORT 시작 1개)`);
                 return;
             }
 
@@ -1116,6 +1146,14 @@
                 return;
             }
 
+            // 모든 단계가 정확히 2개 패턴을 가지는지 검증 (양방향 매칭 보장)
+            for (let i = 0; i < queueSteps.length; i++) {
+                if (queueSteps[i].patterns.length !== MAX_PATTERNS_PER_STEP) {
+                    alert(`${i + 1}단계에 패턴이 ${queueSteps[i].patterns.length}개입니다. 각 단계에는 정확히 ${MAX_PATTERNS_PER_STEP}개의 패턴(LONG 시작 + SHORT 시작)이 필요합니다.`);
+                    return;
+                }
+            }
+
             const triggerRate = document.getElementById('trigger-rate').value;
 
             if (!triggerRate || parseFloat(triggerRate) <= 0) {
@@ -1149,6 +1187,7 @@
                 symbol: symbol,
                 tradeMode: getTradeMode().toUpperCase(),
                 triggerRate: parseFloat(triggerRate),
+                cycle: document.getElementById('cycle-toggle').checked,
                 steps: stepsData
             };
             $.ajax({
@@ -1207,6 +1246,7 @@
             });
 
             document.getElementById('edit-trigger-rate').value = queue.triggerRate;
+            document.getElementById('edit-cycle-toggle').checked = queue.cycle;
 
             renderEditSteps();
             $('#edit-queue-modal').show();
@@ -1409,12 +1449,21 @@
             if (inlineForm.condBlocks.length === 0) { alert('조건 블록을 추가해주세요.'); return false; }
             if (!inlineForm.leafBlock) { alert('리프 블록(실행 방향)을 설정해주세요.'); return false; }
             if (!amount || parseFloat(amount) <= 0) { alert('금액(USDT)을 입력해주세요.'); return false; }
+            // 손절율 0 초과 100 미만 검증 (투자금 기준 %)
+            var inlineLev = parseInt(leverage) || 1;
+            if (stopLoss) {
+                var slVal = parseFloat(stopLoss);
+                if (slVal <= 0 || slVal >= 100) {
+                    alert('손절율은 0% 초과 100% 미만으로 입력해주세요.\n(투자금 기준: 50% 설정 시 투자금의 절반 손실 시 청산)');
+                    return false;
+                }
+            }
 
             return {
                 conditionBlocks: [...inlineForm.condBlocks],
                 leafBlock: inlineForm.leafBlock,
                 amount: parseFloat(amount),
-                leverage: parseInt(leverage) || 1,
+                leverage: inlineLev,
                 stopLoss: stopLoss ? parseFloat(stopLoss) : null,
                 takeProfit: takeProfit ? parseFloat(takeProfit) : null
             };
@@ -1558,10 +1607,10 @@
                 return;
             }
 
-            // 모든 단계에 패턴이 최소 1개인지 확인
+            // 모든 단계가 정확히 2개 패턴을 가지는지 확인 (양방향 매칭 보장)
             for (var i = 0; i < editSteps.length; i++) {
-                if (editSteps[i].patterns.length === 0) {
-                    alert((i + 1) + '단계에 패턴이 없습니다. 패턴을 추가해주세요.');
+                if (editSteps[i].patterns.length !== MAX_PATTERNS_PER_STEP) {
+                    alert((i + 1) + '단계에 패턴이 ' + editSteps[i].patterns.length + '개입니다. 각 단계에는 정확히 ' + MAX_PATTERNS_PER_STEP + '개의 패턴(LONG 시작 + SHORT 시작)이 필요합니다.');
                     return;
                 }
             }
@@ -1594,7 +1643,7 @@
                 url: '/api/autotrade/patterns/' + editQueueId,
                 type: 'PUT',
                 contentType: 'application/json',
-                data: JSON.stringify({ triggerRate: parseFloat(triggerRate), steps: stepsData }),
+                data: JSON.stringify({ triggerRate: parseFloat(triggerRate), cycle: document.getElementById('edit-cycle-toggle').checked, steps: stepsData }),
                 success: function() {
                     alert('큐가 수정되었습니다.');
                     cancelEditQueue();
@@ -1652,6 +1701,7 @@
             conditionBlocks = [];
             leafBlock = null;
             document.getElementById('trigger-rate').value = '';
+            document.getElementById('cycle-toggle').checked = false;
             document.getElementById('step-number-label').textContent = '1단계';
             renderPatternBlocks();
             renderPendingPatterns();
@@ -1828,6 +1878,10 @@
                 // 실시간 가격 구독: 서버의 MarketService가 Bybit WebSocket에서 받은 가격을 여기로 push한다
                 subscribePriceTopic();
 
+                // 자동매매 알림 구독: 큐 비활성화 등 즉시 사용자 알림이 필요한 이벤트
+                // (자동매매 활성화 여부와 무관하게 항상 구독 — 비활성화 시점에 알림을 받아야 하므로)
+                subscribeAutoTradeAlertTopic();
+
                 // 자동매매 상태 초기 확인 (REST로 1회 조회 → 활성이면 STOMP 구독 시작)
                 checkAutoTradeStatus();
 
@@ -1872,6 +1926,27 @@
         }
 
         /**
+         * /topic/autotrade.alert.{symbol} 토픽을 구독한다.
+         * 서버가 큐 비활성화 등 즉시 알림이 필요할 때 push하는 이벤트를 받아 alert으로 표시한다.
+         *
+         * 수신 데이터: AutoTradeAlertResponse {queueId, symbol, reason, level, occurredAt}
+         */
+        function subscribeAutoTradeAlertTopic() {
+            if (autoTradeAlertSubscription) {
+                autoTradeAlertSubscription.unsubscribe();
+            }
+            autoTradeAlertSubscription = stompClient.subscribe('/topic/autotrade.alert.' + symbol, function(message) {
+                var alertData = JSON.parse(message.body);
+                var levelLabel = alertData.level === 'ERROR' ? '⛔ 자동매매 오류' :
+                                 alertData.level === 'WARN'  ? '⚠️ 자동매매 경고' : 'ℹ️ 자동매매 알림';
+                var msg = levelLabel + '\n\n[' + alertData.occurredAt + '] 큐 #' + alertData.queueId + ' 비활성화\n\n사유: ' + alertData.reason;
+                alert(msg);
+                // 큐 목록 갱신 (비활성화 상태 즉시 반영)
+                loadPatterns();
+            });
+        }
+
+        /**
          * /topic/autotrade.status.{symbol} 토픽을 구독한다.
          * 서버의 AutoTradeService가 가격 변동 시마다 자동매매 상태를 이 토픽으로 push한다.
          *
@@ -1898,8 +1973,8 @@
                     highlightActiveStep(data);
                     unsubscribeAutoTradeTopic();
                     // 큐 목록 새로고침 (비활성화 상태 반영)
+                    // 비활성화 사유는 별도 /topic/autotrade.alert 구독에서 alert으로 표시되므로 여기선 메시지 생략
                     loadPatterns();
-                    alert('자동매매가 중지되었습니다. 주문 실패로 큐가 비활성화되었습니다.');
                     return;
                 }
 
@@ -1989,8 +2064,10 @@
          * @param entryPrice 진입가 문자열 (예: "50000.00")
          */
         function updateEntryPriceAnnotation(entryPrice) {
-            if (!chart || !entryPrice) return;
+            if (!entryPrice) return;
 
+            // 차트 존재 여부와 무관하게 변수를 항상 세팅 (race condition 대응)
+            // → chart가 null일 때도 변수를 설정해두고, 차트 생성 직후 refreshChartAnnotations()가 복원
             entryPriceAnnotation = {
                 y: parseFloat(entryPrice),
                 borderColor: '#FF9800',   // 주황색 (매매 진입선 의미)
@@ -2003,7 +2080,7 @@
                     position: 'right'
                 }
             };
-            refreshChartAnnotations();
+            if (chart) refreshChartAnnotations();
         }
 
         /**
@@ -2011,7 +2088,7 @@
          * POSITION_HOLDING 상태에서 호출된다. (TP=초록, SL=빨강)
          */
         function updateTpSlAnnotation(tpPrice, slPrice) {
-            if (!chart) return;
+            // 차트 존재 여부와 무관하게 변수를 항상 세팅 (race condition 대응)
             if (tpPrice != null) {
                 tpPriceAnnotation = {
                     y: parseFloat(tpPrice),
@@ -2044,7 +2121,7 @@
             } else {
                 slPriceAnnotation = null;
             }
-            refreshChartAnnotations();
+            if (chart) refreshChartAnnotations();
         }
 
         /**
@@ -2052,11 +2129,11 @@
          * POSITION_HOLDING 종료(매도 성공, 청산, 비활성화) 시 호출된다.
          */
         function clearEntryPriceAnnotation() {
-            if (!chart) return;
+            // 차트 존재 여부와 무관하게 변수는 항상 초기화
             entryPriceAnnotation = null;
             tpPriceAnnotation = null;
             slPriceAnnotation = null;
-            refreshChartAnnotations();
+            if (chart) refreshChartAnnotations();
         }
 
         /**
