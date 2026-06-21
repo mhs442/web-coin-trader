@@ -785,6 +785,15 @@ body {
     font-weight: 600;
 }
 
+.cycle-badge {
+    font-size: 0.75rem;
+    color: #0d6efd;
+    background-color: #e7f1ff;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
 /* 단계 카드 */
 .step-card {
     border: 2px solid #dee2e6;
@@ -1543,6 +1552,14 @@ body {
     background-color: #f8f9fa;
 }
 
+.mypage-table thead th {
+    position: sticky;
+    top: 0;
+    background-color: #f8f9fa;
+    z-index: 1;
+    box-shadow: 0 1px 0 #dee2e6;
+}
+
 .mypage-table th,
 .mypage-table td {
     padding: 12px 16px;
@@ -2175,4 +2192,340 @@ body {
     padding: 20px 0;
     color: #868e96;
     font-size: 0.9rem;
+}
+
+/* =====================================================
+   히스토리 탭 — 뷰 토글
+   ===================================================== */
+.history-view-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+
+.view-toggle-btn {
+    padding: 7px 18px;
+    background: #f1f3f5;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #6c757d;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.view-toggle-btn:hover {
+    background: #e9ecef;
+    color: #343a40;
+}
+
+.view-toggle-btn.active {
+    background: #007bff;
+    border-color: #007bff;
+    color: #fff;
+}
+
+/* =====================================================
+   히스토리 탭 — 요약 카드 4개
+   ===================================================== */
+.history-summary-cards {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.history-summary-card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.summary-card-label {
+    font-size: 0.78rem;
+    color: #868e96;
+    font-weight: 500;
+}
+
+.summary-card-value {
+    font-size: 1.15rem;
+    font-weight: 700;
+    font-family: monospace;
+    color: #212529;
+}
+
+/* =====================================================
+   히스토리 탭 — 액션 바 (삭제 버튼 영역)
+   ===================================================== */
+.history-action-bar {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-bottom: 10px;
+}
+
+/* =====================================================
+   히스토리 탭 — 거래 상세 인라인 확장
+   ===================================================== */
+.trade-detail-icon {
+    font-size: 0.8rem;
+    color: #868e96;
+    padding: 4px 6px;
+    line-height: 1;
+    user-select: none;
+}
+
+.inv-row:hover .trade-detail-icon {
+    color: #007bff;
+}
+
+.inv-row:hover {
+    background: #f5f9ff !important;
+}
+
+.inv-row-active {
+    background: #e8f0fe !important;
+    border-left: 3px solid #4285f4;
+}
+
+.inv-row-active .trade-detail-icon {
+    color: #4285f4;
+}
+
+.trade-detail-row.active-detail td {
+    border-left: 3px solid #4285f4;
+}
+
+.trade-detail-row td {
+    padding: 0 !important;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.trade-detail-inner {
+    background: #fff;
+    padding: 14px 20px;
+    border-left: 3px solid #4285f4;
+}
+
+
+/* 손/익절율 요약 바 */
+.tpsl-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    margin-bottom: 10px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 0.82rem;
+}
+
+.tpsl-item { display: inline-flex; align-items: center; gap: 4px; }
+
+.tpsl-tp strong { color: #26a69a; }
+.tpsl-sl strong { color: #ef5350; }
+
+.tpsl-divider { color: #dee2e6; }
+
+.tpsl-note {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: #adb5bd;
+}
+
+.trade-detail-loading,
+.trade-detail-empty {
+    text-align: center;
+    padding: 14px 0;
+    color: #868e96;
+    font-size: 0.85rem;
+}
+
+.trade-detail-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    background: #fff;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.trade-detail-table th,
+.trade-detail-table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid #f1f3f5;
+    white-space: nowrap;
+}
+
+.trade-detail-table th {
+    background: #e9ecef;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #495057;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.trade-detail-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* 주문 타입 뱃지 */
+.order-type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.order-type-badge.type-entry {
+    background: #d4edda;
+    color: #155724;
+}
+
+.order-type-badge.type-sell {
+    background: #cce5ff;
+    color: #004085;
+}
+
+.order-type-badge.type-liquidation {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* =====================================================
+   히스토리 탭 — 차트 레이아웃
+   ===================================================== */
+/* 차트 기간 선택 버튼 */
+.chart-period-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+.chart-period-btn {
+    padding: 5px 14px;
+    border: 1px solid #dee2e6;
+    border-radius: 20px;
+    background: #fff;
+    color: #495057;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.chart-period-btn:hover {
+    border-color: #4285f4;
+    color: #4285f4;
+}
+
+.chart-period-btn.active {
+    background: #4285f4;
+    border-color: #4285f4;
+    color: #fff;
+    font-weight: 600;
+}
+
+.chart-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.chart-card {
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 18px 16px 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    margin-bottom: 16px;
+}
+
+.chart-row .chart-card {
+    margin-bottom: 0;
+}
+
+.chart-card-wide {
+    flex: 2;
+}
+
+.chart-card-narrow {
+    flex: 1;
+}
+
+.chart-card-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #495057;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #f1f3f5;
+}
+
+.chart-empty {
+    text-align: center;
+    padding: 40px 0;
+    color: #868e96;
+    font-size: 0.88rem;
+}
+
+/* =====================================================
+   히스토리 탭 — 페이지네이션
+   ===================================================== */
+.pagination-wrapper {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+}
+
+.pagination {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.page-btn {
+    min-width: 34px;
+    height: 34px;
+    padding: 0 8px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    font-size: 0.85rem;
+    color: #495057;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.page-btn:hover {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+
+.page-btn.active {
+    background: #007bff;
+    border-color: #007bff;
+    color: #fff;
+    font-weight: 700;
+}
+
+.page-btn:disabled {
+    background: #f8f9fa;
+    color: #adb5bd;
+    cursor: default;
+    border-color: #dee2e6;
 }

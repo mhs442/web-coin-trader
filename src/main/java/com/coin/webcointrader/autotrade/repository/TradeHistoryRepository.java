@@ -47,6 +47,29 @@ public interface TradeHistoryRepository extends JpaRepository<TradeHistory, Long
             Long userId, LocalDateTime start, LocalDateTime end, Pageable pageable);
 
     /**
+     * 투자 행 클릭 시 해당 투자 사이클의 거래 내역을 조회한다.
+     * InvestmentHistory.patternStepId = TradeHistory.queueStepId 관계로 연결된다.
+     *
+     * @param queueStepId 패턴 단계 ID
+     * @param userId      사용자 ID (권한 검증)
+     * @return 거래 내역 목록 (체결 일시 오름차순)
+     */
+    List<TradeHistory> findByQueueStepIdAndUserIdOrderByCreatedAtAsc(Long queueStepId, Long userId);
+
+    /**
+     * 특정 투자 사이클에 속한 거래만 조회한다.
+     * 큐 사이클 반복 시 같은 단계 ID가 재사용되므로, investment.createdAt을 상한선으로
+     * 가장 최근 N건(ENTRY + EXIT)만 가져와 해당 사이클 거래를 특정한다.
+     *
+     * @param queueStepId 패턴 단계 ID
+     * @param userId      사용자 ID (권한 검증)
+     * @param upperBound  투자 히스토리 생성 일시 (이 시각 이하만 조회)
+     * @return 최신순 거래 최대 10건 (서비스에서 해당 사이클 쌍 추출)
+     */
+    List<TradeHistory> findByQueueStepIdAndUserIdAndCreatedAtLessThanEqualOrderByCreatedAtDesc(
+            Long queueStepId, Long userId, LocalDateTime upperBound);
+
+    /**
      * 선택한 ID 목록 중 해당 사용자 소유 거래 히스토리를 삭제한다. (선택 삭제)
      *
      * @param ids    삭제할 거래 히스토리 ID 목록

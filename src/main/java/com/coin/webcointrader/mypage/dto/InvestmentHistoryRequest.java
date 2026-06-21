@@ -2,15 +2,18 @@ package com.coin.webcointrader.mypage.dto;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.format.annotation.DateTimeFormat;
 
 import java.time.LocalDateTime;
 
 @Getter @Setter
 public class InvestmentHistoryRequest {
     private String symbol;
-    // 2022/1/1/00:00:00 부터
-    private LocalDateTime startDate = LocalDateTime.of(2022, 1, 1, 0, 0, 0, 0);
+    // 기본 1주일 전부터
+    @DateTimeFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    private LocalDateTime startDate = LocalDateTime.now().minusDays(7).toLocalDate().atStartOfDay();
     // 현재시간까지
+    @DateTimeFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime endDate = LocalDateTime.now();
     private String sort = "desc";
     private int page = 0;

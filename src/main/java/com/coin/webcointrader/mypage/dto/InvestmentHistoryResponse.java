@@ -7,6 +7,7 @@ import lombok.Getter;
 @Builder
 public class InvestmentHistoryResponse {
     private Long id;                // 투자 히스토리 PK
+    private Long patternStepId;     // 패턴 단계 ID (거래 상세 조회 시 사용)
     private String symbol;          // 종목 심볼
     private String side;            // 매매 방향 (LONG / SHORT)
     private String entryPrice;      // 진입가
