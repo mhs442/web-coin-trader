@@ -65,6 +65,9 @@ public class MarketService {
     // 종목별 qtyStep 캐시 (심볼 → qtyStep, 예: "BTCUSDT" → "0.001")
     private final ConcurrentHashMap<String, String> qtyStepCache = new ConcurrentHashMap<>();
 
+    // WebSocket 마지막 수신 시각 (ms) — tick() fallback 스킵 판단에 사용
+    private volatile long lastWsTickMs = 0;
+
     /**
      * 1초마다 Bybit API를 호출하여 Ticker 정보를 가져와 내부 캐시를 업데이트합니다.
      * USDT 마켓 종목만 필터링하고, 24시간 거래량 기준 내림차순으로 정렬합니다.
@@ -114,6 +117,9 @@ public class MarketService {
             return;
         }
 
+        // WebSocket 활성 시각 갱신 (tick() fallback 스킵 판단용)
+        lastWsTickMs = System.currentTimeMillis();
+
         if ("snapshot".equals(dto.getType())) {
             // snapshot: 전체 데이터 교체
             FindTickerResponse.TickerInfo tickerInfo = toTickerInfo(data);
@@ -142,6 +148,16 @@ public class MarketService {
         if (wsInfo != null) {
             messagingTemplate.convertAndSend("/topic/price." + symbol, wsInfo);
         }
+    }
+
+    /**
+     * WebSocket 데이터가 최근 5초 이내에 수신되었는지 반환한다.
+     * AutoTradeService.tick()의 REST fallback 스킵 여부 판단에 사용한다.
+     *
+     * @return WebSocket 활성 상태이면 true
+     */
+    public boolean isWsActive() {
+        return System.currentTimeMillis() - lastWsTickMs < 5_000;
     }
 
     /**

@@ -38,6 +38,7 @@ public class QueueStateDTO {
     private String entryQty;           // 진입 시 코인 수량 (매도/청산 시 포지션 전량 청산에 재사용)
     private BigDecimal entryMargin;    // 진입 시 마진 (pattern.amount, applyProfitLoss 원금 기준)
     private int closeSkipCount;        // 청산 수량 오류 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
+    private int entrySkipCount;        // 진입 시 최소 주문 단위 미달(qty=0) 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
     private BigDecimal tpPrice;        // 익절가 (POSITION_HOLDING 매도 트리거 기준, 진입 시점 계산)
     private BigDecimal slPrice;        // 손절가 (POSITION_HOLDING 청산 트리거 기준, 진입 시점 계산)
 
@@ -73,5 +74,30 @@ public class QueueStateDTO {
         state.currentStepLevel = 1;
         state.currentBlockOrder = 1;
         return state;
+    }
+
+    /**
+     * 현재 인스턴스를 초기 상태로 리셋한다.
+     * processing AtomicBoolean은 유지하여 락 정합성을 보존한다.
+     * 사이클 재시작 시 새 인스턴스 생성 없이 호출한다.
+     */
+    public void reset() {
+        phase = TradePhase.TRIGGER_WAIT;
+        basePrice = null;
+        baseTime = null;
+        direction = null;
+        activeStepId = null;
+        currentStepLevel = 1;
+        activePatternId = null;
+        currentBlockOrder = 1;
+        blockBaseTime = null;
+        blockBasePrice = null;
+        entryPrice = null;
+        entryQty = null;
+        entryMargin = null;
+        closeSkipCount = 0;
+        entrySkipCount = 0;
+        tpPrice = null;
+        slPrice = null;
     }
 }

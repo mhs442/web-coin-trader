@@ -6,9 +6,9 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 자동매매 세션의 인메모리 상태를 관리하는 DTO.
@@ -21,7 +21,7 @@ public class AutoTradeSessionDTO {
     private String symbol;
     private TradeMode tradeMode = TradeMode.MAIN;                  // 거래 모드 (MAIN: 실전, SIM: 모의)
     private List<PatternQueue> queues;                              // DB에서 로드한 패턴 큐 목록
-    private Map<Long, QueueStateDTO> queueStates = new HashMap<>(); // 큐 ID → 런타임 상태
+    private Map<Long, QueueStateDTO> queueStates = new ConcurrentHashMap<>(); // 큐 ID → 런타임 상태
     private List<String> tradeLog = new ArrayList<>();              // 매매 로그 (최대 50건)
 
     /**

@@ -1,5 +1,6 @@
 package com.coin.webcointrader.autotrade.service;
 
+import com.coin.webcointrader.autotrade.dto.AutoTradeAlertResponse;
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
 import com.coin.webcointrader.autotrade.dto.AutoTradeStatusResponse;
 import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
@@ -74,6 +75,10 @@ public class AutoTradeService {
     private static final BigDecimal TAKER_FEE_RATE = new BigDecimal("0.00055");
     // 블록 매칭 고정 대기 시간 (초)
     private static final long BLOCK_WAIT_SECONDS = 60L;
+    // SL/TP 기본값 안전 계수: 강제청산 거리(100/leverage)의 80%만 사용해
+    // 거래소 강제청산보다 봇 SL이 먼저 트리거되도록 마진 확보
+    // 주의: leverage 25 초과(특히 50+)에서는 이 마진으로도 부족할 수 있음 (현재는 미적용)
+    private static final BigDecimal SL_TP_SAFETY_FACTOR = new BigDecimal("0.8");
 
     /**
      * 애플리케이션 시작 시 WebSocket 가격/봉마감 리스너를 등록한다.
@@ -197,8 +202,27 @@ public class AutoTradeService {
                     session.addLog(now() + " [블록 매칭] " + signal + " 일치 → 블록 "
                             + state.getCurrentBlockOrder() + " (큐 #" + queue.getId() + ")");
                 } else {
-                    // 신호 반대 → 청산 없이 다음 단계로 (포지션 미보유)
-                    handleNextStep(queue, state, session, signal);
+                    // 신호 반대 → 같은 단계에서 신호 방향 시작 패턴 새로 선택 (단계 유지)
+                    // 단계당 패턴 2개 보장(LONG 시작+SHORT 시작)이라 selectPattern은 항상 매칭됨
+                    PatternStep currentStep = findStepByLevel(queue, state.getCurrentStepLevel());
+                    Pattern nextPattern = currentStep != null ? selectPattern(currentStep, signal) : null;
+                    if (nextPattern == null) {
+                        // 방어 코드: 단계당 양방향 패턴 검증을 통과한 큐에서는 발생하지 않음
+                        log.warn("[패턴 전환 실패] 단계 {}에 {} 시작 패턴 없음, queueId={}",
+                                state.getCurrentStepLevel(), signal, queue.getId());
+                        deactivateQueue(queue, state, session,
+                                state.getCurrentStepLevel() + "단계에 " + signal + " 시작 패턴 없음");
+                        continue;
+                    }
+                    state.setActivePatternId(nextPattern.getId());
+                    state.setDirection(signal);
+                    // 첫 블록은 새 신호로 자동 매칭 간주 → 두 번째 블록부터 매칭 재시작
+                    state.setCurrentBlockOrder(2);
+                    state.setBlockBaseTime(null);
+                    state.setBlockBasePrice(null);
+                    session.addLog(now() + " [패턴 전환] " + signal + " 신호 → 단계 "
+                            + state.getCurrentStepLevel() + " " + signal + " 시작 패턴 (큐 #"
+                            + queue.getId() + ")");
                 }
             } finally {
                 state.unlock();
@@ -396,6 +420,10 @@ public class AutoTradeService {
     @Scheduled(fixedRate = 1000)
     public void tick() {
         if (activeSessions.isEmpty()) {
+            return;
+        }
+        // WebSocket이 활성 상태이면 REST fallback 불필요 — 동시 processQueue 호출 방지
+        if (marketService.isWsActive()) {
             return;
         }
 
@@ -719,9 +747,11 @@ public class AutoTradeService {
 
         // leaf 블록 도달 → 즉시 진입 (포지션 방향은 leaf의 side)
         if (currentBlock.isLeaf()) {
+            log.info("Success match the leaf block! ===>{} \n Insert the Money ===> {}", currentBlock ,currentPrice);
             openPosition(queue, state, session, pattern, currentPrice);
             return;
         }
+        log.info("Success match the next block! ===> {}", currentBlock);
 
         // 조건 블록: 관찰 시작 시각만 한 번 기록 — 신호 판단은 1분봉 마감 push에서
         if (state.getBlockBaseTime() == null) {
@@ -766,7 +796,35 @@ public class AutoTradeService {
         String side = entryDirection == Side.LONG ? "Buy" : "Sell";
         String leverageStr = String.valueOf(pattern.getLeverage());
 
-        // 마진 모드 Isolated 전환
+        // 1) 수량 계산 먼저 — 마진/레버리지 API 호출 전에 검증해서 무한 skip 시 API rate limit 회피
+        BigDecimal notional = pattern.getAmount().multiply(BigDecimal.valueOf(pattern.getLeverage()));
+        String qty = marketService.convertUsdtToQty(session.getSymbol(), notional, new BigDecimal(currentPrice));
+        if (qty == null) {
+            session.addLog(now() + " [진입 실패] qtyStep 조회 실패: " + session.getSymbol());
+            deactivateQueue(queue, state, session, "수량 변환 실패: qtyStep 조회 실패");
+            return;
+        }
+        if ("0".equals(qty)) {
+            // 최소 주문 단위 미달: 누적 카운터 증가 후 한도 초과 시 큐 비활성화 (무한 skip 방지)
+            int skipCount = state.getEntrySkipCount() + 1;
+            state.setEntrySkipCount(skipCount);
+            session.addLog(now() + " [진입 스킵] 최소 주문 단위 미달 (" + skipCount + "/5): "
+                    + session.getSymbol() + " " + pattern.getAmount() + "USDT × x" + pattern.getLeverage()
+                    + ", 현재가=" + currentPrice);
+            if (skipCount >= 5) {
+                log.error(LogMessage.ENTRY_SKIP_LIMIT_EXCEEDED.getMessage(),
+                        queue.getId(), session.getSymbol(), notional, currentPrice);
+                deactivateQueue(queue, state, session,
+                        "최소 주문 단위 미달 5회 초과 — 투입 금액(amount × leverage = "
+                                + notional.stripTrailingZeros().toPlainString()
+                                + " USDT)이 부족합니다. 큐 수정에서 amount 또는 leverage를 늘려주세요.");
+            }
+            return;
+        }
+        // qty 정상 확보 → 진입 시도이므로 skip 카운터 리셋
+        state.setEntrySkipCount(0);
+
+        // 2) qty 정상 확보 후 마진 모드 Isolated 전환 (qty=0이면 여기 도달 X → API 호출 회피)
         try {
             tradeFacade.switchToIsolated(session.getUserId(), session.getTradeMode());
         } catch (Exception e) {
@@ -776,27 +834,13 @@ public class AutoTradeService {
             return;
         }
 
-        // 레버리지 설정
+        // 3) 레버리지 설정 (실패해도 warn 로그만, 진행 계속 — 이미 동일 레버리지면 Bybit이 에러 반환)
         try {
             SetLeverageRequest leverageRequest = new SetLeverageRequest(
                     Category.LINEAR.getCategory(), session.getSymbol(), leverageStr, leverageStr);
             tradeFacade.setLeverage(leverageRequest, session.getUserId(), session.getTradeMode());
         } catch (Exception e) {
             log.warn(LogMessage.LEVERAGE_SET_FAILED.getMessage(), e.getMessage());
-        }
-
-        // 수량 계산 (notional = 마진 × 레버리지)
-        BigDecimal notional = pattern.getAmount().multiply(BigDecimal.valueOf(pattern.getLeverage()));
-        String qty = marketService.convertUsdtToQty(session.getSymbol(), notional, new BigDecimal(currentPrice));
-        if (qty == null) {
-            session.addLog(now() + " [진입 실패] qtyStep 조회 실패: " + session.getSymbol());
-            deactivateQueue(queue, state, session, "수량 변환 실패");
-            return;
-        }
-        if ("0".equals(qty)) {
-            session.addLog(now() + " [진입 스킵] 최소 주문 단위 미달: " + session.getSymbol()
-                    + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
-            return;
         }
 
         CreateOrderRequest orderRequest = CreateOrderRequest.builder()
@@ -838,22 +882,24 @@ public class AutoTradeService {
             // handleSellSuccess 1단계 재진입 등)이 실제 포지션 방향 기준으로 동작하도록 정합성 보장
             state.setDirection(entryDirection);
 
-            // 익절/손절 가격 계산 (pattern.takeProfitRate / stopLossRate 우선, 미설정 시 100/leverage 기본값)
+            // 익절/손절 가격 계산 — rate는 투자금(마진) 기준 손익률(%)
+            // 가격 변동폭 = rate / (100 × leverage), 미설정 시 default = 투자금의 80% 손실 기준
             BigDecimal entry = new BigDecimal(currentPrice);
             int leverage = pattern.getLeverage();
-            BigDecimal defaultThreshold = BigDecimal.valueOf(100.0 / leverage);
+            BigDecimal leverageBd = BigDecimal.valueOf(leverage);
+            BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 80%
             BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
             BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
-            BigDecimal hundred = BigDecimal.valueOf(100);
+            BigDecimal hundredLev = BigDecimal.valueOf(100).multiply(leverageBd);
             BigDecimal tpPrice;
             BigDecimal slPrice;
             // LONG: 가격 상승 시 익절 / SHORT: 가격 하락 시 익절
             if (entryDirection == Side.LONG) {
-                tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-                slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+                tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+                slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
             } else {
-                tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-                slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+                tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+                slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
             }
             state.setTpPrice(tpPrice);
             state.setSlPrice(slPrice);
@@ -927,46 +973,7 @@ public class AutoTradeService {
         }
     }
 
-    /**
-     * 조건 블록에서 반대 신호 발생 시 청산 없이 다음 단계로만 이동한다.
-     * (포지션을 보유하지 않은 상태이므로 실제 주문 없음)
-     *
-     * @param queue         현재 큐
-     * @param state         큐 런타임 상태
-     * @param session       세션
-     * @param nextDirection 반대 신호 방향 (다음 단계 패턴 선택 기준)
-     */
-    private void handleNextStep(PatternQueue queue, QueueStateDTO state,
-                                AutoTradeSessionDTO session, Side nextDirection) {
-        int nextStepLevel = state.getCurrentStepLevel() + 1;
-        PatternStep nextStep = findStepByLevel(queue, nextStepLevel);
-
-        if (nextStep == null) {
-            deactivateQueue(queue, state, session, "모든 단계 소진");
-            return;
-        }
-
-        Pattern nextPattern = selectPattern(nextStep, nextDirection);
-        if (nextPattern == null) {
-            deactivateQueue(queue, state, session,
-                    nextStepLevel + "단계에 " + nextDirection + " 패턴 없음");
-            return;
-        }
-
-        state.setCurrentStepLevel(nextStepLevel);
-        state.setActiveStepId(nextStep.getId());
-        state.setActivePatternId(nextPattern.getId());
-        state.setDirection(nextDirection);
-        // 첫 블록은 직전 신호(반대 방향 포착)로 자동 매칭된 것으로 간주 → 두 번째 블록부터 매칭
-        state.setCurrentBlockOrder(2);
-        state.setBlockBaseTime(null);
-        state.setBlockBasePrice(null);
-        // phase는 BLOCK_MATCHING 유지 (포지션 없음)
-
-        session.addLog(now() + " [다음 단계] 블록 불일치 → " + nextStepLevel + "단계 "
-                + nextDirection + " (큐 #" + queue.getId() + ")");
-    }
-
+    // [제거] handleNextStep: 조건 블록 반대 신호는 단계 이동이 아니라 같은 단계 내 패턴 전환으로 처리됨 (applyKlineSignal 참고).
     // [제거] determineSignal: 1분봉 신호 판단은 거래소가 push하는 onKlineConfirmed에서 직접 처리한다.
 
     /**
@@ -1190,8 +1197,12 @@ public class AutoTradeService {
         PatternStep nextStep = findStepByLevel(queue, nextStepLevel);
 
         if (nextStep == null) {
-            // 모든 단계 소진 → 큐 비활성화 (SRS 14)
-            deactivateQueue(queue, state, session, "모든 단계 소진");
+            // 모든 단계 소진 → cycle 설정에 따라 재시작 or 비활성화
+            if (queue.isCycle()) {
+                restartFromFirstStep(queue, state, session);
+            } else {
+                deactivateQueue(queue, state, session, "모든 단계 소진");
+            }
             return;
         }
 
@@ -1318,19 +1329,20 @@ public class AutoTradeService {
         BigDecimal totalFee = entryFee.add(exitFee);
         BigDecimal profitLoss = grossProfitLoss.subtract(totalFee);
 
-        // 익절/손절 가격 계산 (pattern.takeProfitRate / stopLossRate 우선, 미설정 시 100/leverage 기본값)
-        BigDecimal defaultThreshold = BigDecimal.valueOf(100.0 / leverage);
+        // 익절/손절 가격 계산 — openPosition과 동일한 공식 (투자금 기준 손익률)
+        // 가격 변동폭 = rate / (100 × leverage), 미설정 시 default = 투자금의 80% 손실 기준
+        BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 80%
         BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
         BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
-        BigDecimal hundred = BigDecimal.valueOf(100);
+        BigDecimal hundredLev = BigDecimal.valueOf(100).multiply(leverageBd);
         BigDecimal tpPrice;
         BigDecimal slPrice;
         if (side == Side.LONG) {
-            tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-            slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+            tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+            slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
         } else {
-            tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-            slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+            tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+            slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
         }
 
         if (tradeMode == TradeMode.SIM) {
@@ -1395,7 +1407,28 @@ public class AutoTradeService {
     }
 
     /**
+     * 모든 단계 소진 시 1단계 TRIGGER_WAIT 상태로 큐를 재시작한다.
+     * cycle=true 설정된 큐에서만 호출된다.
+     */
+    private void restartFromFirstStep(PatternQueue queue, QueueStateDTO state,
+                                      AutoTradeSessionDTO session) {
+        // 큐 DB 상태 초기화 (진행 중인 단계/패턴/블록 정보 제거)
+        queue.setCurrentStepId(null);
+        queue.setCurrentPatternId(null);
+        queue.setCurrentBlockOrder(null);
+        patternQueueRepository.save(queue);
+
+        // 런타임 상태를 1단계 TRIGGER_WAIT으로 초기화
+        // 새 인스턴스 생성 대신 reset()으로 기존 객체를 재사용 — AtomicBoolean 락 정합성 보존
+        state.reset();
+
+        session.addLog(now() + " [사이클 재시작] 모든 단계 소진 → 1단계 재시작 (큐 #" + queue.getId() + ")");
+        log.info("자동매매 사이클 재시작: queueId={}, symbol={}", queue.getId(), session.getSymbol());
+    }
+
+    /**
      * 큐를 비활성화하고 세션에서 제거한다.
+     * 사용자에게 즉시 알림이 필요하므로 error 로그 + STOMP 알림 토픽 push를 함께 수행한다.
      */
     private void deactivateQueue(PatternQueue queue, QueueStateDTO state,
                                  AutoTradeSessionDTO session, String reason) {
@@ -1410,12 +1443,39 @@ public class AutoTradeService {
         session.getQueueStates().remove(queue.getId());
 
         session.addLog(now() + " [큐 비활성화] 큐 #" + queue.getId() + " - " + reason);
-        log.info(LogMessage.QUEUE_DEACTIVATED.getMessage(), queue.getId(), reason);
+        // 비활성화는 사용자가 즉시 인지해야 하는 이벤트이므로 error 레벨로 기록
+        log.error(LogMessage.QUEUE_DEACTIVATED.getMessage(), queue.getId(), reason);
+
+        // 사용자에게 즉시 알림 (프론트에서 alert으로 표시)
+        pushAutoTradeAlert(session.getSymbol(), queue.getId(), reason);
 
         // 모든 큐가 제거되면 세션 정리
         if (session.getQueues().isEmpty()) {
             activeSessions.remove(sessionKey(session.getUserId(), session.getSymbol(), session.getTradeMode()));
             syncWebSocketSubscriptions();
+        }
+    }
+
+    /**
+     * 자동매매 큐 비활성화 등 즉시 사용자 알림이 필요한 이벤트를 STOMP로 push한다.
+     * 프론트는 /topic/autotrade.alert.{symbol} 토픽을 구독해 alert 메시지로 표시한다.
+     *
+     * @param symbol  코인 심볼
+     * @param queueId 비활성화된 큐 ID
+     * @param reason  비활성화 사유 (사용자 표시용 메시지)
+     */
+    private void pushAutoTradeAlert(String symbol, Long queueId, String reason) {
+        try {
+            AutoTradeAlertResponse alert = AutoTradeAlertResponse.builder()
+                    .queueId(queueId)
+                    .symbol(symbol)
+                    .reason(reason)
+                    .level("ERROR")
+                    .occurredAt(now())
+                    .build();
+            messagingTemplate.convertAndSend("/topic/autotrade.alert." + symbol, alert);
+        } catch (Exception e) {
+            log.warn("자동매매 알림 push 실패: symbol={}, error={}", symbol, e.getMessage());
         }
     }
 

@@ -51,6 +51,7 @@ public enum LogMessage {
     INVESTMENT_HISTORY_SAVED("투자 히스토리 저장: symbol={}, side={}, profitLoss={}, mode={}"),
     QUEUE_DEACTIVATED("큐 비활성화: queue={}, reason={}"),
     CLOSE_QTY_SKIP_DEACTIVATED("포지션 청산 수량 오류 5회 초과 → 큐 비활성화: queue={}, phase={}"),
+    ENTRY_SKIP_LIMIT_EXCEEDED("최소 주문 단위 미달 5회 초과 → 큐 비활성화 (amount × leverage 부족): queue={}, symbol={}, notional={}, currentPrice={}"),
 
     // ─────────────────────────────────────────────
     // SimTradeService
