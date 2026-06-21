@@ -186,6 +186,22 @@ class AutoTradeServiceTest {
     }
 
     @Test
+    @DisplayName("tick: WebSocket이 활성 상태이면 REST 폴링을 건너뛴다")
+    void tick_skipsWhenWebSocketIsActive() {
+        Long userId = 1L;
+        String symbol = "BTCUSDT";
+        PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
+        given(marketService.isWsActive()).willReturn(true);
+
+        autoTradeService.tick();
+
+        then(marketService).should(never()).getTickers();
+    }
+
+    @Test
     @DisplayName("tick: getTickers 응답이 null이면 처리를 중단한다")
     void tick_stopsWhenTickersNull() {
         Long userId = 1L;
@@ -373,21 +389,26 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("음봉(close < open)인데 조건 블록이 LONG이면 다음 단계로 이동한다 (포지션 미보유 → 청산X)")
-        void movesToNextStepOnOppositeCandleSignal() {
-            // 2단계 큐 (1단계: LONG, 2단계: LONG/SHORT 양쪽)
-            PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
+        @DisplayName("음봉(close < open)이면 같은 단계의 SHORT 시작 패턴으로 전환한다 (단계 유지)")
+        void switchesToShortPatternInSameStep() {
+            // 1단계에 LONG 패턴(id=100) + SHORT 패턴(id=200) 양쪽
+            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
             long startMs = System.currentTimeMillis() - 60_000;
             AutoTradeSessionDTO session = setupSessionWithCondBlock(queue, startMs + 5_000);
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            state.setActivePatternId(100L); // LONG 패턴 매칭 중
 
-            // 음봉 (50000 → 45000) → SHORT 신호 → 1단계 패턴 첫 블록(L)과 반대
+            // 음봉 (50000 → 45000) → SHORT 신호 → block1(LONG)과 반대
             autoTradeService.onKlineConfirmed("BTCUSDT", makeKline(startMs, "50000", "45000"));
 
-            QueueStateDTO state = session.getQueueStates().get(queue.getId());
-            assertThat(state.getCurrentStepLevel()).isEqualTo(2);
+            // 같은 1단계 유지, SHORT 시작 패턴(id=200)으로 전환
+            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
+            assertThat(state.getActivePatternId()).isEqualTo(200L);
             assertThat(state.getDirection()).isEqualTo(Side.SHORT);
-            assertThat(state.getCurrentBlockOrder()).isEqualTo(2); // 첫 블록 자동 매칭
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(2); // 첫 블록 자동 매칭으로 2부터
+            assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
             then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
+            then(investmentHistoryRepository).should(never()).save(any());
         }
 
         @Test
@@ -512,9 +533,9 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("LONG 진입 시 leverage 기반으로 TP/SL 가격을 계산한다 (default 100/leverage)")
+        @DisplayName("LONG 진입 시 leverage 기반으로 TP/SL 가격을 계산한다 (default 100/leverage × 0.8)")
         void calculatesTpSlOnLongEntry() {
-            // leverage=10 → 기본 TP/SL = 10% → entry=50000, tp=55000, sl=45000
+            // leverage=10 → default 8% (안전 계수 0.8 적용) → entry=50000, tp=54000, sl=46000
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
             QueueStateDTO state = leafReadyState();
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
@@ -523,14 +544,14 @@ class AutoTradeServiceTest {
 
             autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
-            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
-            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("54000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("46000.00"));
         }
 
         @Test
-        @DisplayName("SHORT 진입 시 TP는 진입가 미만, SL은 진입가 초과로 계산된다")
+        @DisplayName("SHORT 진입 시 TP는 진입가 미만, SL은 진입가 초과로 계산된다 (안전 계수 0.8 적용)")
         void calculatesTpSlOnShortEntry() {
-            // leverage=10 → 10% → entry=50000, SHORT TP=45000(아래쪽), SL=55000(위쪽)
+            // leverage=10 → default 8% → entry=50000, SHORT tp=46000(아래쪽), sl=54000(위쪽)
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.SHORT, 10);
             QueueStateDTO state = leafReadyState();
             state.setDirection(Side.SHORT);
@@ -540,8 +561,8 @@ class AutoTradeServiceTest {
 
             autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
-            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
-            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("46000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("54000.00"));
         }
 
         @Test
@@ -559,9 +580,9 @@ class AutoTradeServiceTest {
 
             // 진입 방향은 leaf side(LONG)로 갱신되어야 함
             assertThat(state.getDirection()).isEqualTo(Side.LONG);
-            // TP/SL은 LONG 기준 — 익절가는 진입가보다 높고, 손절가는 낮아야 함
-            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
-            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
+            // TP/SL은 LONG 기준 + 안전 계수 0.8 (default 8%) — 익절가는 진입가보다 높고, 손절가는 낮아야 함
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("54000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("46000.00"));
             assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
             // Bybit 주문 side 검증: LONG → "Buy"
             ArgumentCaptor<CreateOrderRequest> orderCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
@@ -584,9 +605,9 @@ class AutoTradeServiceTest {
 
             // 진입 방향은 leaf side(SHORT)로 갱신
             assertThat(state.getDirection()).isEqualTo(Side.SHORT);
-            // TP/SL은 SHORT 기준 — 익절가는 진입가보다 낮고, 손절가는 높아야 함
-            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("45000.00"));
-            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("55000.00"));
+            // TP/SL은 SHORT 기준 + 안전 계수 0.8 (default 8%) — 익절가는 진입가보다 낮고, 손절가는 높아야 함
+            assertThat(state.getTpPrice()).isEqualByComparingTo(new BigDecimal("46000.00"));
+            assertThat(state.getSlPrice()).isEqualByComparingTo(new BigDecimal("54000.00"));
             assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
             // Bybit 주문 side 검증: SHORT → "Sell"
             ArgumentCaptor<CreateOrderRequest> orderCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
@@ -1314,6 +1335,82 @@ class AutoTradeServiceTest {
         pattern.setLeverage(leverage);
         pattern.setAmount(new BigDecimal("100"));
         return pattern;
+    }
+
+    // ─────────────────────────────────────────────
+    // QueueStateDTO.reset()
+    // ─────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("QueueStateDTO.reset")
+    class QueueStateDTOResetTest {
+
+        @Test
+        @DisplayName("reset: 모든 상태 필드를 초기값으로 되돌린다")
+        void reset_resetsAllStateFields() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.POSITION_HOLDING);
+            state.setBasePrice("50000");
+            state.setDirection(Side.LONG);
+            state.setCurrentStepLevel(3);
+            state.setActiveStepId(99L);
+            state.setActivePatternId(88L);
+            state.setCurrentBlockOrder(5);
+            state.setEntryPrice("51000");
+            state.setEntryQty("0.01");
+            state.setEntryMargin(new BigDecimal("100"));
+            state.setCloseSkipCount(2);
+            state.setEntrySkipCount(3);
+            state.setTpPrice(new BigDecimal("55000"));
+            state.setSlPrice(new BigDecimal("48000"));
+
+            state.reset();
+
+            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
+            assertThat(state.getBasePrice()).isNull();
+            assertThat(state.getDirection()).isNull();
+            assertThat(state.getCurrentStepLevel()).isEqualTo(1);
+            assertThat(state.getActiveStepId()).isNull();
+            assertThat(state.getActivePatternId()).isNull();
+            assertThat(state.getCurrentBlockOrder()).isEqualTo(1);
+            assertThat(state.getEntryPrice()).isNull();
+            assertThat(state.getEntryQty()).isNull();
+            assertThat(state.getEntryMargin()).isNull();
+            assertThat(state.getCloseSkipCount()).isEqualTo(0);
+            assertThat(state.getEntrySkipCount()).isEqualTo(0);
+            assertThat(state.getTpPrice()).isNull();
+            assertThat(state.getSlPrice()).isNull();
+        }
+
+        @Test
+        @DisplayName("reset: processing AtomicBoolean은 reset 후에도 동일 인스턴스를 유지한다")
+        void reset_preservesProcessingAtomicBooleanInstance() {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            // 락을 걸고 reset해도 락이 해제되지 않음 (reset은 AtomicBoolean에 영향 없음)
+            state.tryLock();
+
+            state.reset();
+
+            // processing 필드는 reset으로 변경되지 않으므로 여전히 locked
+            assertThat(state.tryLock()).isFalse(); // 이미 locked 상태
+            state.unlock();
+
+            // unlock 후에는 정상적으로 락 획득 가능
+            assertThat(state.tryLock()).isTrue();
+            state.unlock();
+        }
+
+        @Test
+        @DisplayName("reset: queueId는 reset 후에도 유지된다")
+        void reset_preservesQueueId() {
+            QueueStateDTO state = QueueStateDTO.initial(42L);
+            state.setPhase(TradePhase.POSITION_HOLDING);
+            state.setEntryPrice("50000");
+
+            state.reset();
+
+            assertThat(state.getQueueId()).isEqualTo(42L);
+        }
     }
 
     private FindTickerResponse makeTickerResponse(String symbol, String price) {

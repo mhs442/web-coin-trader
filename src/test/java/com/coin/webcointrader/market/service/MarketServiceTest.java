@@ -71,14 +71,17 @@ class MarketServiceTest {
     }
 
     @Test
-    @DisplayName("refreshTickersCache: 거래량(volume24h) 기준 내림차순 정렬한다")
-    void refreshTickersCache_sortsByVolume() {
-        // given
-        FindTickerResponse response = makeTickerResponse(List.of(
-                makeTicker("ETHUSDT", "500.0"),
-                makeTicker("BTCUSDT", "10000.0"),
-                makeTicker("SOLUSDT", "2000.0")
-        ));
+    @DisplayName("refreshTickersCache: 거래대금(turnover24h) 기준 내림차순 정렬한다")
+    void refreshTickersCache_sortsByTurnover() {
+        // given — turnover24h 값을 다르게 설정하여 정렬 검증
+        FindTickerResponse.TickerInfo eth = makeTicker("ETHUSDT", "500.0");
+        eth.setTurnover24h("500000.0");   // 3등
+        FindTickerResponse.TickerInfo btc = makeTicker("BTCUSDT", "10000.0");
+        btc.setTurnover24h("10000000.0"); // 1등
+        FindTickerResponse.TickerInfo sol = makeTicker("SOLUSDT", "2000.0");
+        sol.setTurnover24h("2000000.0");  // 2등
+
+        FindTickerResponse response = makeTickerResponse(List.of(eth, btc, sol));
         given(marketClient.getTickers("linear")).willReturn(ResponseEntity.ok(response));
 
         // when
@@ -86,9 +89,9 @@ class MarketServiceTest {
 
         // then
         List<FindTickerResponse.TickerInfo> list = marketService.getTickers().getResult().getList();
-        assertThat(list.get(0).getSymbol()).isEqualTo("BTCUSDT");   // 10000.0 → 1등
-        assertThat(list.get(1).getSymbol()).isEqualTo("SOLUSDT");   // 2000.0 → 2등
-        assertThat(list.get(2).getSymbol()).isEqualTo("ETHUSDT");   // 500.0  → 3등
+        assertThat(list.get(0).getSymbol()).isEqualTo("BTCUSDT");   // 10,000,000 → 1등
+        assertThat(list.get(1).getSymbol()).isEqualTo("SOLUSDT");   // 2,000,000 → 2등
+        assertThat(list.get(2).getSymbol()).isEqualTo("ETHUSDT");   // 500,000 → 3등
     }
 
     // ─────────────────────────────────────────────
@@ -323,6 +326,46 @@ class MarketServiceTest {
         // then
         assertThat(result).isNotNull();
         then(marketClient).should().getOrderBook("linear", "BTCUSDT", 50);
+    }
+
+    // ─────────────────────────────────────────────
+    // isWsActive
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("isWsActive: WebSocket 수신 이력이 없으면 false를 반환한다")
+    void isWsActive_returnsFalseInitially() {
+        assertThat(marketService.isWsActive()).isFalse();
+    }
+
+    @Test
+    @DisplayName("isWsActive: onTickerUpdate 호출 직후에는 true를 반환한다")
+    void isWsActive_returnsTrueAfterTickerUpdate() {
+        WebSocketTickerDTO dto = makeWsTickerDTO("snapshot", "BTCUSDT", "50000.00", "10000.0");
+
+        marketService.onTickerUpdate(dto);
+
+        assertThat(marketService.isWsActive()).isTrue();
+    }
+
+    @Test
+    @DisplayName("isWsActive: 마지막 수신 시각이 5초를 초과하면 false를 반환한다")
+    void isWsActive_returnsFalseWhenLastTickIsOld() {
+        // 6초 전에 수신한 것으로 세팅
+        long sixSecondsAgo = System.currentTimeMillis() - 6_000;
+        ReflectionTestUtils.setField(marketService, "lastWsTickMs", sixSecondsAgo);
+
+        assertThat(marketService.isWsActive()).isFalse();
+    }
+
+    @Test
+    @DisplayName("isWsActive: 마지막 수신 시각이 5초 이내이면 true를 반환한다")
+    void isWsActive_returnsTrueWithinFiveSeconds() {
+        // 3초 전에 수신한 것으로 세팅
+        long threeSecondsAgo = System.currentTimeMillis() - 3_000;
+        ReflectionTestUtils.setField(marketService, "lastWsTickMs", threeSecondsAgo);
+
+        assertThat(marketService.isWsActive()).isTrue();
     }
 
     // ─────────────────────────────────────────────

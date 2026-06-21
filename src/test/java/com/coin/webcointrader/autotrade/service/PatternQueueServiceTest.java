@@ -61,8 +61,8 @@ class PatternQueueServiceTest {
         PatternStep step = result.getSteps().get(0);
         assertThat(step.getStepLevel()).isEqualTo(1);
 
-        // 패턴 검증
-        assertThat(step.getPatterns()).hasSize(1);
+        // 패턴 검증 (양방향 보장 — LONG 시작 + SHORT 시작)
+        assertThat(step.getPatterns()).hasSize(2);
         Pattern pattern = step.getPatterns().get(0);
         assertThat(pattern.getAmount()).isEqualByComparingTo(new BigDecimal("10"));
         assertThat(pattern.getLeverage()).isEqualTo(5);
@@ -87,7 +87,7 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("addQueue: 2단계 + 패턴 2개 구조도 정상 저장된다")
+    @DisplayName("addQueue: 2단계 + 각 단계마다 양방향 패턴 2개 구조도 정상 저장된다")
     void addQueue_multiStepMultiPattern_success() {
         // given
         Long userId = 1L;
@@ -101,10 +101,10 @@ class PatternQueueServiceTest {
 
         // then
         assertThat(result.getSteps()).hasSize(2);
-        // 1단계: 패턴 2개
+        // 1단계: 양방향 패턴 2개
         assertThat(result.getSteps().get(0).getPatterns()).hasSize(2);
-        // 2단계: 패턴 1개
-        assertThat(result.getSteps().get(1).getPatterns()).hasSize(1);
+        // 2단계: 양방향 패턴 2개
+        assertThat(result.getSteps().get(1).getPatterns()).hasSize(2);
     }
 
     // ─────────────────────────────────────────────
@@ -178,7 +178,7 @@ class PatternQueueServiceTest {
             sixBlocks.add(makeBlockRequest("LONG", i, false));
         }
         pattern.setConditionBlocks(sixBlocks);
-        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern, makeShortPatternRequest()))));
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
@@ -195,7 +195,7 @@ class PatternQueueServiceTest {
 
         AddPatternRequest.PatternRequest pattern = makePatternRequest();
         pattern.setAmount(BigDecimal.ZERO);
-        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern, makeShortPatternRequest()))));
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
@@ -212,7 +212,7 @@ class PatternQueueServiceTest {
 
         AddPatternRequest.PatternRequest pattern = makePatternRequest();
         pattern.setLeverage(0);
-        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern, makeShortPatternRequest()))));
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
@@ -243,7 +243,7 @@ class PatternQueueServiceTest {
 
         AddPatternRequest.PatternRequest pattern = makePatternRequest();
         pattern.setConditionBlocks(List.of(makeBlockRequest("INVALID", 1, false)));
-        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern, makeShortPatternRequest()))));
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
@@ -260,7 +260,7 @@ class PatternQueueServiceTest {
 
         AddPatternRequest.PatternRequest pattern = makePatternRequest();
         pattern.setLeafBlock(null);
-        request.setSteps(List.of(makeStepRequest(1, List.of(pattern))));
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern, makeShortPatternRequest()))));
 
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
@@ -370,7 +370,8 @@ class PatternQueueServiceTest {
     // ─────────────────────────────────────────────
 
     /**
-     * 기본 요청 생성 (1단계, 1패턴, 조건블록 1개 + 리프블록 1개)
+     * 기본 요청 생성 (1단계, 양방향 패턴 2개 — LONG 시작 + SHORT 시작)
+     * 단계당 패턴 2개 강제 검증을 통과하기 위해 양방향 보장 구조로 생성.
      */
     private AddPatternRequest makeFullRequest(String symbol) {
         AddPatternRequest request = new AddPatternRequest();
@@ -378,13 +379,13 @@ class PatternQueueServiceTest {
 
         request.setTriggerRate(new BigDecimal("1.0"));
         request.setSteps(List.of(
-                makeStepRequest(1, List.of(makePatternRequest()))
+                makeStepRequest(1, List.of(makePatternRequest(), makeShortPatternRequest()))
         ));
         return request;
     }
 
     /**
-     * 다단계 요청 생성 (2단계, 1단계에 패턴 2개, 2단계에 패턴 1개)
+     * 다단계 요청 생성 (2단계, 각 단계마다 양방향 패턴 2개씩)
      */
     private AddPatternRequest makeMultiStepRequest(String symbol) {
         AddPatternRequest request = new AddPatternRequest();
@@ -392,19 +393,19 @@ class PatternQueueServiceTest {
 
         request.setTriggerRate(new BigDecimal("1.0"));
 
-        // 1단계: 패턴 2개 (L:L, S:S)
+        // 1단계: LONG/SHORT 양쪽
         AddPatternRequest.PatternRequest pattern1 = makePatternRequest();
-        AddPatternRequest.PatternRequest pattern2 = makePatternRequest();
-        pattern2.setConditionBlocks(List.of(makeBlockRequest("SHORT", 1, false)));
-        pattern2.setLeafBlock(makeBlockRequest("SHORT", 2, true));
+        AddPatternRequest.PatternRequest pattern2 = makeShortPatternRequest();
 
-        // 2단계: 패턴 1개
+        // 2단계: LONG/SHORT 양쪽 (amount 다르게)
         AddPatternRequest.PatternRequest pattern3 = makePatternRequest();
         pattern3.setAmount(new BigDecimal("20"));
+        AddPatternRequest.PatternRequest pattern4 = makeShortPatternRequest();
+        pattern4.setAmount(new BigDecimal("20"));
 
         request.setSteps(List.of(
                 makeStepRequest(1, List.of(pattern1, pattern2)),
-                makeStepRequest(2, List.of(pattern3))
+                makeStepRequest(2, List.of(pattern3, pattern4))
         ));
         return request;
     }
@@ -428,6 +429,20 @@ class PatternQueueServiceTest {
         pattern.setTakeProfitRate(new BigDecimal("5.0"));
         pattern.setConditionBlocks(List.of(makeBlockRequest("LONG", 1, false)));
         pattern.setLeafBlock(makeBlockRequest("LONG", 2, true));
+        return pattern;
+    }
+
+    /**
+     * SHORT 시작 패턴 생성 (S:S 구조). 단계당 양방향 보장 검증 통과용 페어 패턴.
+     */
+    private AddPatternRequest.PatternRequest makeShortPatternRequest() {
+        AddPatternRequest.PatternRequest pattern = new AddPatternRequest.PatternRequest();
+        pattern.setAmount(new BigDecimal("10"));
+        pattern.setLeverage(5);
+        pattern.setStopLossRate(new BigDecimal("1.0"));
+        pattern.setTakeProfitRate(new BigDecimal("5.0"));
+        pattern.setConditionBlocks(List.of(makeBlockRequest("SHORT", 1, false)));
+        pattern.setLeafBlock(makeBlockRequest("SHORT", 2, true));
         return pattern;
     }
 

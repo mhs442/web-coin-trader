@@ -64,7 +64,8 @@ class PatternQueueServiceUpdateTest {
         // 기존 단계가 교체되어 2단계로 변경됨
         assertThat(result.getSteps()).hasSize(2);
         assertThat(result.getSteps().get(0).getStepLevel()).isEqualTo(1);
-        assertThat(result.getSteps().get(0).getPatterns()).hasSize(1);
+        // 단계당 양방향 패턴 2개 (LONG 시작 + SHORT 시작)
+        assertThat(result.getSteps().get(0).getPatterns()).hasSize(2);
         // 블록 구조 검증 (조건 블록 1개 + 리프 블록 1개)
         assertThat(result.getSteps().get(0).getPatterns().get(0).getBlocks()).hasSize(2);
     }
@@ -195,7 +196,8 @@ class PatternQueueServiceUpdateTest {
     private AddPatternRequest.StepRequest makeStepRequest(int stepOrder) {
         AddPatternRequest.StepRequest step = new AddPatternRequest.StepRequest();
         step.setStepOrder(stepOrder);
-        step.setPatterns(List.of(makePatternRequest()));
+        // 단계당 양방향 패턴 2개 강제 검증을 통과하기 위해 LONG/SHORT 두 패턴 생성
+        step.setPatterns(List.of(makePatternRequest(), makeShortPatternRequest()));
         return step;
     }
 
@@ -207,6 +209,17 @@ class PatternQueueServiceUpdateTest {
         pattern.setTakeProfitRate(new BigDecimal("5.0"));
         pattern.setConditionBlocks(List.of(makeBlockRequest("LONG", 1, false)));
         pattern.setLeafBlock(makeBlockRequest("LONG", 2, true));
+        return pattern;
+    }
+
+    private AddPatternRequest.PatternRequest makeShortPatternRequest() {
+        AddPatternRequest.PatternRequest pattern = new AddPatternRequest.PatternRequest();
+        pattern.setAmount(new BigDecimal("10"));
+        pattern.setLeverage(5);
+        pattern.setStopLossRate(new BigDecimal("1.0"));
+        pattern.setTakeProfitRate(new BigDecimal("5.0"));
+        pattern.setConditionBlocks(List.of(makeBlockRequest("SHORT", 1, false)));
+        pattern.setLeafBlock(makeBlockRequest("SHORT", 2, true));
         return pattern;
     }
 
