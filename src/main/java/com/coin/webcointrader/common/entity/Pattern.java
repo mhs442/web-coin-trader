@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.BatchSize;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -40,5 +41,6 @@ public class Pattern {
     private int patternOrder;               // 단계 내 패턴 실행 순서
 
     @OneToMany(mappedBy = "pattern", cascade = CascadeType.ALL, orphanRemoval = true)
+    @BatchSize(size = 50)  // N+1 방지: 여러 패턴의 blocks를 건별 조회 대신 IN절로 배치 조회
     private List<PatternBlock> blocks = new ArrayList<>();  // 소속 블록 목록
 }

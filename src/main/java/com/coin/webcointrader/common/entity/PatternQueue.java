@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.BatchSize;
 
 import com.coin.webcointrader.common.enums.TradeMode;
 
@@ -57,5 +58,6 @@ public class PatternQueue extends BaseEntity {
     private boolean cycle = false;                        // 단계 소진 후 1단계 재시작 여부 (true: 반복, false: 큐 비활성화)
 
     @OneToMany(mappedBy = "queue", cascade = CascadeType.ALL, orphanRemoval = true)
+    @BatchSize(size = 50)  // N+1 방지: 여러 큐의 steps를 건별 조회 대신 IN절로 배치 조회
     private List<PatternStep> steps = new ArrayList<>();  // 소속 단계 목록
 }

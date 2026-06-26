@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.BatchSize;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,5 +31,6 @@ public class PatternStep {
     private boolean isFull = false;     // 패턴이 최대 수(2개)로 가득 찬 상태 여부
 
     @OneToMany(mappedBy = "step", cascade = CascadeType.ALL, orphanRemoval = true)
+    @BatchSize(size = 50)  // N+1 방지: 여러 단계의 patterns를 건별 조회 대신 IN절로 배치 조회
     private List<Pattern> patterns = new ArrayList<>();  // 소속 패턴 목록
 }
