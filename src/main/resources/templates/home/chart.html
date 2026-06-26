@@ -271,9 +271,13 @@
             var $info = $('.trigger-state-info');
             if ($info.length === 0) return;
             var text = '';
-            if (localPhase === 'TRIGGER_WAIT' && localChangeRate !== null) {
-                var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
-                text = '경과: ' + localElapsedSeconds + '초 / 변동률: ' + rateStr + '%';
+            if (localPhase === 'TRIGGER_WAIT') {
+                var parts = ['경과: ' + localElapsedSeconds + '초'];
+                if (localChangeRate !== null) {
+                    var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
+                    parts.push('변동률: ' + rateStr + '%');
+                }
+                text = parts.join(' / ');
             } else if (localPhase === 'BLOCK_MATCHING') {
                 var remainStr = '블록 대기: ' + localBlockRemainingSeconds + '초';
                 if (localAmount !== null) {
@@ -1882,6 +1886,12 @@
                 // (자동매매 활성화 여부와 무관하게 항상 구독 — 비활성화 시점에 알림을 받아야 하므로)
                 subscribeAutoTradeAlertTopic();
 
+                // loadPatterns()가 STOMP 연결보다 먼저 완료되어 autoTradeActive=true인 상태일 수 있으므로
+                // 연결 직후 이미 활성이면 바로 구독 (checkAutoTradeStatus()의 !wasActive 조건을 우회)
+                if (autoTradeActive) {
+                    subscribeAutoTradeTopic();
+                }
+
                 // 자동매매 상태 초기 확인 (REST로 1회 조회 → 활성이면 STOMP 구독 시작)
                 checkAutoTradeStatus();
 
@@ -2213,9 +2223,13 @@
 
             // 트리거 상태 표시 (큐 헤더 하단) + 진입가/TP/SL 차트 가로선 관리
             var triggerHtml = '';
-            if (data.phase === 'TRIGGER_WAIT' && localChangeRate !== null) {
-                var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
-                triggerHtml = '<div class="trigger-state-info">경과: ' + localElapsedSeconds + '초 / 변동률: ' + rateStr + '%</div>';
+            if (data.phase === 'TRIGGER_WAIT') {
+                var twParts = ['경과: ' + localElapsedSeconds + '초'];
+                if (localChangeRate !== null) {
+                    var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
+                    twParts.push('변동률: ' + rateStr + '%');
+                }
+                triggerHtml = '<div class="trigger-state-info">' + twParts.join(' / ') + '</div>';
                 clearEntryPriceAnnotation();
             } else if (data.phase === 'BLOCK_MATCHING') {
                 var remainStr = '블록 대기: ' + localBlockRemainingSeconds + '초';
