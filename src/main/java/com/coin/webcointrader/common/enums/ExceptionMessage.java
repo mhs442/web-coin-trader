@@ -36,7 +36,10 @@ public enum ExceptionMessage {
     SET_TRADING_STOP_FAILED(HttpStatus.BAD_REQUEST, "손절/익절 설정 실패"),
     SWITCH_MARGIN_MODE_FAILED(HttpStatus.BAD_REQUEST, "마진 모드 변경 실패"),
     OTHER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "오류가 발생하였습니다."),
-    NOT_FOUND_RESOURCE(HttpStatus.NOT_FOUND, "요청한 리소스를 찾을 수 없습니다.")
+    NOT_FOUND_RESOURCE(HttpStatus.NOT_FOUND, "요청한 리소스를 찾을 수 없습니다."),
+    EXCHANGE_NOT_SUPPORTED(HttpStatus.BAD_REQUEST, "지원하지 않는 거래소입니다."),
+    API_KEY_NOT_FOUND(HttpStatus.BAD_REQUEST, "거래소 API 키를 찾을 수 없습니다."),
+    GET_WALLET_BALANCE_FAILED(HttpStatus.BAD_REQUEST, "지갑 잔고 조회 실패")
     ;
 
     private final HttpStatus status;
