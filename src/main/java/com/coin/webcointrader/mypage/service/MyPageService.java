@@ -39,7 +39,7 @@ public class MyPageService {
 
     /**
      * 사용자의 패턴 큐 목록을 페이징하여 조회한다.
-     * 심볼 키워드가 없으면 DB 페이징, 있으면 전체 조회 후 Java 필터 + 수동 페이징.
+     * 심볼 키워드 유무와 관계없이 DB 레벨에서 필터링 + 페이징한다.
      *
      * @param userId    사용자 ID
      * @param request   검색조건을 담은 객체
@@ -48,25 +48,19 @@ public class MyPageService {
     public PageResponse<MyPagePatternResponse> getPatterns(Long userId, MyPagePatternRequest request) {
         Sort dbSort = buildSort("createdAt", request.getSort());
         TradeMode tradeMode = resolveMode(request.getMode());
+        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
 
-        // 심볼 키워드가 있으면 전체 조회 후 Java 필터 + 수동 페이징
+        Page<PatternQueue> queuePage;
         if (hasValue(request.getSymbol())) {
-            List<PatternQueue> queues;
-            queues = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, tradeMode, request.getStartDate(), request.getEndDate(), dbSort);
-
-            String keyword = request.getSymbol().toUpperCase();
-            List<MyPagePatternResponse> filtered = queues.stream()
-                    .filter(q -> q.getSymbol().toUpperCase().contains(keyword))
-                    .map(this::toPatternResponse)
-                    .toList();
-
-            return PageResponse.fromList(filtered, request.getPage(), request.getSize());
+            // 심볼 키워드 있으면 DB 레벨 LIKE 필터로 페이징
+            queuePage = patternQueueRepository.findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
+                    userId, request.getSymbol(), tradeMode, request.getStartDate(), request.getEndDate(), pageable);
+        } else {
+            // 심볼 키워드 없으면 날짜 범위만으로 DB 페이징
+            queuePage = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                    userId, tradeMode, request.getStartDate(), request.getEndDate(), pageable);
         }
 
-        // 심볼 키워드 없으면 DB 페이징 사용
-        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-        Page<PatternQueue> queuePage;
-        queuePage = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(userId, tradeMode, request.getStartDate(), request.getEndDate(), pageable);
         return PageResponse.from(queuePage, this::toPatternResponse);
     }
 

@@ -4,7 +4,6 @@ import com.coin.webcointrader.common.entity.PatternQueue;
 import com.coin.webcointrader.common.enums.TradeMode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.LocalDateTime;
@@ -66,19 +65,6 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
     // ─────────────────────────────────────────────
 
     /**
-     * 사용자/거래모드의 패턴 큐를 날짜 범위 + 동적 정렬로 조회한다. (심볼 검색 시 Java 필터용)
-     *
-     * @param userId    사용자 ID
-     * @param tradeMode 거래 모드 (MAIN/SIM)
-     * @param start     조회 시작일시
-     * @param end       조회 종료일시
-     * @param sort      정렬 조건
-     * @return 패턴 큐 목록
-     */
-    List<PatternQueue> findByUserIdAndTradeModeAndCreatedAtBetween(
-            Long userId, TradeMode tradeMode, LocalDateTime start, LocalDateTime end, Sort sort);
-
-    /**
      * 사용자/거래모드의 패턴 큐를 날짜 범위 + 페이징 조회한다.
      *
      * @param userId    사용자 ID
@@ -90,4 +76,18 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
      */
     Page<PatternQueue> findByUserIdAndTradeModeAndCreatedAtBetween(
             Long userId, TradeMode tradeMode, LocalDateTime start, LocalDateTime end, Pageable pageable);
+
+    /**
+     * 사용자/거래모드의 패턴 큐를 심볼 키워드(대소문자 무시, 부분일치) + 날짜 범위 + 페이징으로 DB 레벨에서 조회한다.
+     *
+     * @param userId    사용자 ID
+     * @param symbol    심볼 검색 키워드
+     * @param tradeMode 거래 모드 (MAIN/SIM)
+     * @param start     조회 시작일시
+     * @param end       조회 종료일시
+     * @param pageable  페이징 조건
+     * @return 패턴 큐 페이지
+     */
+    Page<PatternQueue> findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
+            Long userId, String symbol, TradeMode tradeMode, LocalDateTime start, LocalDateTime end, Pageable pageable);
 }

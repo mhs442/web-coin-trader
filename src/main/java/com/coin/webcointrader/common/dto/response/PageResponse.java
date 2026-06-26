@@ -48,32 +48,4 @@ public class PageResponse<T> {
                 .last(page.isLast())
                 .build();
     }
-
-    /**
-     * 이미 변환된 리스트로부터 수동 페이징 PageResponse를 생성한다.
-     * Java 필터링 후 수동 페이징이 필요한 경우 사용한다.
-     *
-     * @param allItems 전체 필터링된 데이터 목록
-     * @param page     요청 페이지 번호 (0-based)
-     * @param size     페이지 크기
-     * @param <T>      데이터 타입
-     * @return PageResponse 인스턴스
-     */
-    public static <T> PageResponse<T> fromList(List<T> allItems, int page, int size) {
-        int totalElements = allItems.size();
-        int totalPages = (int) Math.ceil((double) totalElements / size);
-        int fromIndex = Math.min(page * size, totalElements);
-        int toIndex = Math.min(fromIndex + size, totalElements);
-
-        List<T> content = allItems.subList(fromIndex, toIndex);
-
-        return PageResponse.<T>builder()
-                .content(content)
-                .page(page)
-                .size(size)
-                .totalElements(totalElements)
-                .totalPages(totalPages)
-                .last(page >= totalPages - 1 || totalPages == 0)
-                .build();
-    }
 }

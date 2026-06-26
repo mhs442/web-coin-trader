@@ -21,7 +21,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -80,15 +79,15 @@ class MyPageServiceTest {
     }
 
     @Test
-    @DisplayName("getPatterns: symbol 키워드가 있으면 Java 필터 후 수동 페이징한다")
+    @DisplayName("getPatterns: symbol 키워드가 있으면 DB LEVEL LIKE 필터로 페이징한다")
     void getPatterns_withSymbolFilter() {
         // given
         Long userId = 1L;
         PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
-        PatternQueue eth = makePatternQueue(2L, userId, "ETHUSDT");
-        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
-                eq(userId), eq(TradeMode.MAIN), any(), any(), any(Sort.class)))
-                .willReturn(List.of(btc, eth));
+        Page<PatternQueue> page = new PageImpl<>(List.of(btc));
+        given(patternQueueRepository.findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
+                eq(userId), eq("BTC"), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
+                .willReturn(page);
 
         MyPagePatternRequest request = new MyPagePatternRequest();
         request.setSymbol("BTC");
@@ -131,54 +130,6 @@ class MyPageServiceTest {
     }
 
     // ─────────────────────────────────────────────
-    // getTradeHistories
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("getTradeHistories: 기본 검색조건으로 거래 히스토리를 페이징 조회한다")
-    void getTradeHistories_defaultRequest() {
-        // given
-        Long userId = 1L;
-        TradeHistory history = makeTradeHistory(1L, userId, "BTCUSDT");
-        Page<TradeHistory> page = new PageImpl<>(List.of(history));
-        given(tradeHistoryRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class)))
-                .willReturn(page);
-
-        TradeHistoryRequest request = new TradeHistoryRequest();
-
-        // when
-        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(userId, request);
-
-        // then
-        assertThat(result.getContent()).hasSize(1);
-        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
-    }
-
-    @Test
-    @DisplayName("getTradeHistories: symbol 키워드가 있으면 Java 필터 후 수동 페이징한다")
-    void getTradeHistories_withSymbolFilter() {
-        // given
-        Long userId = 1L;
-        TradeHistory btc = makeTradeHistory(1L, userId, "BTCUSDT");
-        TradeHistory eth = makeTradeHistory(2L, userId, "ETHUSDT");
-        given(tradeHistoryRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Sort.class)))
-                .willReturn(List.of(btc, eth));
-
-        TradeHistoryRequest request = new TradeHistoryRequest();
-        request.setSymbol("ETH");
-        request.setSort("asc");
-
-        // when
-        PageResponse<TradeHistoryResponse> result = myPageService.getTradeHistories(userId, request);
-
-        // then
-        assertThat(result.getContent()).hasSize(1);
-        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("ETHUSDT");
-    }
-
-    // ─────────────────────────────────────────────
     // getInvestmentHistories
     // ─────────────────────────────────────────────
 
@@ -218,19 +169,20 @@ class MyPageServiceTest {
     }
 
     @Test
-    @DisplayName("getInvestmentHistories: symbol 키워드가 있으면 Java 필터 후 수동 페이징 + 심볼별 합산한다")
+    @DisplayName("getInvestmentHistories: symbol 키워드가 있으면 DB LIKE 필터로 페이징 + 심볼별 합산한다")
     void getInvestmentHistories_withSymbolFilter() {
         // given
         Long userId = 1L;
-        InvestmentHistory btc = makeInvestmentHistory(1L, userId, "BTCUSDT");
         InvestmentHistory eth = makeInvestmentHistory(2L, userId, "ETHUSDT");
-        given(investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Sort.class)))
-                .willReturn(List.of(btc, eth));
-        // 심볼 필터 합산 쿼리 모킹
+        Page<InvestmentHistory> page = new PageImpl<>(List.of(eth));
+        given(investmentHistoryRepository.findByUserIdAndSymbolContainingIgnoreCaseAndCreatedAtBetween(
+                eq(userId), eq("ETH"), any(), any(), any(Pageable.class)))
+                .willReturn(page);
         given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
                 eq(userId), any(), any(), eq("ETH")))
                 .willReturn(summaryResult(new BigDecimal("200"), BigDecimal.ZERO));
+        given(investmentHistoryRepository.countWinLoss(eq(userId), any(), any()))
+                .willReturn(List.of());
 
         InvestmentHistoryRequest request = new InvestmentHistoryRequest();
         request.setSymbol("ETH");
