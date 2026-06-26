@@ -470,15 +470,20 @@
                             const typeClass = t.orderType === 'entry' ? 'type-entry' : (t.orderType === 'sell' ? 'type-sell' : 'type-liquidation');
                             const isExit = t.orderType === 'sell' || t.orderType === 'liquidation';
 
-                            // 순수익(총손익), 실세 손익금(순손익)은 청산/매도 행에만 표시
+                            // 순수익(총손익): 매도/청산 행에만 표시
                             const grossCell = isExit
                                 ? '<span class="' + (grossPL >= 0 ? 'status-active' : 'status-failed') + '">'
                                     + (grossPL >= 0 ? '+' : '') + grossPL.toFixed(4) + ' USDT</span>'
                                 : '-';
+
+                            // 실세 손익금:
+                            //   진입 행 → 진입 수수료를 비용으로 표시 (사용자가 진입+매도 수수료를 합산해 볼 수 있도록)
+                            //   매도/청산 행 → 진입+청산 수수료 모두 차감된 순손익
+                            const tradeFeeNum = parseFloat(t.fee) || 0;
                             const netCell = isExit
                                 ? '<span class="' + (netPL >= 0 ? 'status-active' : 'status-failed') + '">'
                                     + (netPL >= 0 ? '+' : '') + netPL.toFixed(4) + ' USDT</span>'
-                                : '-';
+                                : '<span class="status-failed">-' + tradeFeeNum.toFixed(4) + ' USDT</span>';
 
                             html +=
                                 '<tr>' +
@@ -487,7 +492,7 @@
                                     '<td class="mono-cell">' + (t.amount ? t.amount + ' USDT' : '-') + '</td>' +
                                     '<td class="mono-cell">' + leverage + 'x</td>' +
                                     '<td class="mono-cell">' + grossCell + '</td>' +
-                                    '<td class="mono-cell">' + (t.fee ? t.fee + ' USDT' : '-') + '</td>' +
+                                    '<td class="mono-cell">' + (t.fee ? tradeFeeNum.toFixed(4) + ' USDT' : '-') + '</td>' +
                                     '<td class="mono-cell">' + netCell + '</td>' +
                                     '<td>' + (t.createdAt || '-') + '</td>' +
                                 '</tr>';
