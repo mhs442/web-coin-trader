@@ -101,14 +101,22 @@ class AutoTradeControllerTest {
                                     "triggerRate": 1.0,
                                     "steps": [{
                                         "stepOrder": 1,
-                                        "patterns": [{
-                                            "amount": 10,
-                                            "leverage": 5,
-                                            "stopLossRate": 1.0,
-                                            "takeProfitRate": 5.0,
-                                            "conditionBlocks": [{"side": "LONG", "blockOrder": 1, "isLeaf": false}],
-                                            "leafBlock": {"side": "LONG", "blockOrder": 2, "isLeaf": true}
-                                        }]
+                                        "patterns": [
+                                            {
+                                                "amount": 10,
+                                                "leverage": 5,
+                                                "stopLossRate": 1.0,
+                                                "takeProfitRate": 5.0,
+                                                "conditionBlocks": [{"side": "LONG", "blockOrder": 1, "isLeaf": false}],
+                                                "leafBlock": {"side": "LONG", "blockOrder": 2, "isLeaf": true}
+                                            },
+                                            {
+                                                "amount": 10,
+                                                "leverage": 5,
+                                                "conditionBlocks": [{"side": "SHORT", "blockOrder": 1, "isLeaf": false}],
+                                                "leafBlock": {"side": "SHORT", "blockOrder": 2, "isLeaf": true}
+                                            }
+                                        ]
                                     }]
                                 }
                                 """)

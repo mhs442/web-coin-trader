@@ -82,12 +82,20 @@ class AutoTradeControllerUpdateTest {
                                     "triggerRate": 2.5,
                                     "steps": [{
                                         "stepOrder": 1,
-                                        "patterns": [{
-                                            "amount": 20,
-                                            "leverage": 3,
-                                            "conditionBlocks": [{"side": "SHORT", "blockOrder": 1, "isLeaf": false}],
-                                            "leafBlock": {"side": "SHORT", "blockOrder": 2, "isLeaf": true}
-                                        }]
+                                        "patterns": [
+                                            {
+                                                "amount": 20,
+                                                "leverage": 3,
+                                                "conditionBlocks": [{"side": "LONG", "blockOrder": 1, "isLeaf": false}],
+                                                "leafBlock": {"side": "LONG", "blockOrder": 2, "isLeaf": true}
+                                            },
+                                            {
+                                                "amount": 20,
+                                                "leverage": 3,
+                                                "conditionBlocks": [{"side": "SHORT", "blockOrder": 1, "isLeaf": false}],
+                                                "leafBlock": {"side": "SHORT", "blockOrder": 2, "isLeaf": true}
+                                            }
+                                        ]
                                     }]
                                 }
                                 """)
