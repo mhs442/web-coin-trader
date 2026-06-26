@@ -404,11 +404,11 @@
         let tpRate = null, slRate = null;
         if (entryPrice > 0 && tpPrice > 0 && slPrice > 0) {
             if (side === 'LONG') {
-                tpRate = (tpPrice - entryPrice) / entryPrice * leverage * 100;
-                slRate = (entryPrice - slPrice) / entryPrice * leverage * 100;
+                tpRate = (tpPrice - entryPrice) / entryPrice * 100;
+                slRate = (entryPrice - slPrice) / entryPrice * 100;
             } else {
-                tpRate = (entryPrice - tpPrice) / entryPrice * leverage * 100;
-                slRate = (slPrice - entryPrice) / entryPrice * leverage * 100;
+                tpRate = (entryPrice - tpPrice) / entryPrice * 100;
+                slRate = (slPrice - entryPrice) / entryPrice * 100;
             }
         }
 

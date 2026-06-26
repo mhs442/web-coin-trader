@@ -75,10 +75,8 @@ public class AutoTradeService {
     private static final BigDecimal TAKER_FEE_RATE = new BigDecimal("0.00055");
     // 블록 매칭 고정 대기 시간 (초)
     private static final long BLOCK_WAIT_SECONDS = 60L;
-    // SL/TP 기본값 안전 계수: 강제청산 거리(100/leverage)의 80%만 사용해
-    // 거래소 강제청산보다 봇 SL이 먼저 트리거되도록 마진 확보
-    // 주의: leverage 25 초과(특히 50+)에서는 이 마진으로도 부족할 수 있음 (현재는 미적용)
-    private static final BigDecimal SL_TP_SAFETY_FACTOR = new BigDecimal("0.8");
+    // SL/TP 기본값: 가격 변동 기준 8% (미설정 시 적용)
+    private static final BigDecimal SL_TP_SAFETY_FACTOR = new BigDecimal("0.08");
 
     /**
      * 애플리케이션 시작 시 WebSocket 가격/봉마감 리스너를 등록한다.
@@ -882,24 +880,21 @@ public class AutoTradeService {
             // handleSellSuccess 1단계 재진입 등)이 실제 포지션 방향 기준으로 동작하도록 정합성 보장
             state.setDirection(entryDirection);
 
-            // 익절/손절 가격 계산 — rate는 투자금(마진) 기준 손익률(%)
-            // 가격 변동폭 = rate / (100 × leverage), 미설정 시 default = 투자금의 80% 손실 기준
+            // 익절/손절 가격 계산 — rate는 가격 변동 기준 (%), 미설정 시 default = 8% 가격 변동
             BigDecimal entry = new BigDecimal(currentPrice);
-            int leverage = pattern.getLeverage();
-            BigDecimal leverageBd = BigDecimal.valueOf(leverage);
-            BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 80%
+            BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 8%
             BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
             BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
-            BigDecimal hundredLev = BigDecimal.valueOf(100).multiply(leverageBd);
+            BigDecimal hundred = BigDecimal.valueOf(100);
             BigDecimal tpPrice;
             BigDecimal slPrice;
             // LONG: 가격 상승 시 익절 / SHORT: 가격 하락 시 익절
             if (entryDirection == Side.LONG) {
-                tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
-                slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+                tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+                slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
             } else {
-                tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
-                slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+                tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+                slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
             }
             state.setTpPrice(tpPrice);
             state.setSlPrice(slPrice);
@@ -1329,20 +1324,20 @@ public class AutoTradeService {
         BigDecimal totalFee = entryFee.add(exitFee);
         BigDecimal profitLoss = grossProfitLoss.subtract(totalFee);
 
-        // 익절/손절 가격 계산 — openPosition과 동일한 공식 (투자금 기준 손익률)
-        // 가격 변동폭 = rate / (100 × leverage), 미설정 시 default = 투자금의 80% 손실 기준
-        BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 80%
+        // 익절/손절 가격 계산 — openPosition과 동일한 공식 (가격 변동 기준 %)
+        // 미설정 시 default = 8% 가격 변동
+        BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 8%
         BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
         BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
-        BigDecimal hundredLev = BigDecimal.valueOf(100).multiply(leverageBd);
+        BigDecimal hundred = BigDecimal.valueOf(100);
         BigDecimal tpPrice;
         BigDecimal slPrice;
         if (side == Side.LONG) {
-            tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
-            slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+            tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+            slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
         } else {
-            tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
-            slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundredLev, 6, RoundingMode.HALF_UP)));
+            tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
+            slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
         }
 
         if (tradeMode == TradeMode.SIM) {
