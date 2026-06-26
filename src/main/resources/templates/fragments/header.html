@@ -87,6 +87,10 @@
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2
                             }));
+                        } else {
+                            // 계좌 목록이 비어있는 경우(예: 실전 계좌에 UNIFIED 지갑 없음) — 이전 모드의 잔액이 화면에 남지 않도록 초기화
+                            $('#wallet-total-equity').text('--');
+                            $('#wallet-available').text('--');
                         }
                     },
                     error: function() {

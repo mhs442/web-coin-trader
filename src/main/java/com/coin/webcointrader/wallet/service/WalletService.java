@@ -25,10 +25,13 @@ public class WalletService {
 
     /**
      * 사용자의 UTA 지갑 잔고를 조회한다.
+     * Bybit 응답의 retCode가 "0"이 아니면(서명 오류, 권한 없음 등) 예외를 던진다.
+     * retCode 검증 없이 그대로 반환하면 프론트엔드가 실패를 인지하지 못해
+     * 이전에 표시된 값(예: 모의 지갑 잔액)이 화면에 그대로 남는 문제가 있었다.
      *
      * @param userId 사용자 ID
      * @return 지갑 잔고 응답 (totalEquity, totalWalletBalance, 코인별 잔고 포함)
-     * @throws CustomException 사용자를 찾을 수 없거나 API 호출 실패 시
+     * @throws CustomException 사용자를 찾을 수 없거나(USER_NOT_FOUND), API 호출 실패 시(GET_WALLET_BALANCE_FAILED)
      */
     public GetWalletBalanceResponse getWalletBalance(Long userId) {
         User user = loginRepository.findById(userId)
@@ -40,7 +43,15 @@ public class WalletService {
         );
 
         try {
-            return accountClient.getWalletBalance("UNIFIED").getBody();
+            GetWalletBalanceResponse response = accountClient.getWalletBalance("UNIFIED").getBody();
+
+            // Bybit 응답 에러 코드 검증 (HTTP 200이어도 retCode로 실패가 표현될 수 있음)
+            if (response == null || !"0".equals(response.getRetCode())) {
+                String errorMsg = response != null ? response.getRetMsg() : "응답 없음";
+                throw new CustomException(ExceptionMessage.GET_WALLET_BALANCE_FAILED, errorMsg);
+            }
+
+            return response;
         } finally {
             UserApiKeyContext.clear();
         }
