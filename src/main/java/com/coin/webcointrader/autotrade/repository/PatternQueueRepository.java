@@ -1,6 +1,7 @@
 package com.coin.webcointrader.autotrade.repository;
 
 import com.coin.webcointrader.common.entity.PatternQueue;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -59,6 +60,19 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
      */
     List<PatternQueue> findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
             Long userId, String symbol, boolean isActive, TradeMode tradeMode);
+
+    /**
+     * 사용자/심볼/거래모드/거래소의 활성화된 패턴 큐 목록을 생성일 오름차순으로 조회한다.
+     *
+     * @param userId       사용자 ID
+     * @param symbol       코인 심볼
+     * @param isActive     활성화 여부
+     * @param tradeMode    거래 모드 (MAIN/SIM)
+     * @param exchangeType 거래소 타입
+     * @return 활성 패턴 큐 목록 (createdAt 오름차순)
+     */
+    List<PatternQueue> findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+            Long userId, String symbol, boolean isActive, TradeMode tradeMode, ExchangeType exchangeType);
 
     // ─────────────────────────────────────────────
     // 마이페이지용 쿼리

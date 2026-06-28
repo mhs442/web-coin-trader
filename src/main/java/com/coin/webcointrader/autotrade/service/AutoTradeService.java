@@ -8,8 +8,11 @@ import com.coin.webcointrader.autotrade.dto.TradePhase;
 import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.common.exchange.ExchangeAdapter;
+import com.coin.webcointrader.common.exchange.ExchangeAdapterRegistry;
+import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.util.TradeCalculator;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
@@ -64,15 +67,13 @@ public class AutoTradeService {
     private final SimInvestmentHistoryRepository simInvestmentHistoryRepository;
     private final TradeFacade tradeFacade;
     private final MarketService marketService;
-    private final BybitWebSocketClient bybitWebSocketClient;
+    private final ExchangeAdapterRegistry adapterRegistry;
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
 
-    // 활성 세션 관리 (키: "userId:symbol")
+    // 활성 세션 관리 (키: "userId:exchangeType:symbol:tradeMode")
     private final ConcurrentHashMap<String, AutoTradeSessionDTO> activeSessions = new ConcurrentHashMap<>();
 
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
-    // Bybit Linear(USDT 선물) 시장가 주문 taker 수수료율
-    private static final BigDecimal TAKER_FEE_RATE = new BigDecimal("0.00055");
     // 블록 매칭 고정 대기 시간 (초)
     private static final long BLOCK_WAIT_SECONDS = 60L;
     // SL/TP 기본값: 가격 변동 기준 8% (미설정 시 적용)
@@ -85,8 +86,11 @@ public class AutoTradeService {
      */
     @PostConstruct
     public void init() {
-        marketService.addPriceListener(this::onPriceUpdate);
-        marketService.addKlineConfirmedListener(this::onKlineConfirmed);
+        // 등록된 모든 거래소 어댑터에 가격/봉마감 콜백을 등록
+        for (ExchangeAdapter adapter : adapterRegistry.getAll()) {
+            adapter.registerPriceCallback(this::onPriceUpdate);
+            adapter.registerKlineCallback(this::onKlineConfirmed);
+        }
         log.info(LogMessage.AUTO_TRADE_LISTENER_REGISTERED.getMessage());
     }
 
@@ -237,12 +241,30 @@ public class AutoTradeService {
      * @param symbol    코인 심볼
      * @param tradeMode 거래 모드 (MAIN/SIM)
      */
+    /**
+     * 기존 3-파라미터 오버로드. BYBIT을 기본 거래소로 사용한다.
+     */
     public void syncSession(Long userId, String symbol, TradeMode tradeMode) {
-        // isActive=true인 패턴 큐만 조회 (거래 모드별 분리)
-        List<PatternQueue> activeQueues = patternQueueRepository
-                .findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(userId, symbol, true, tradeMode);
+        syncSession(userId, ExchangeType.BYBIT, symbol, tradeMode);
+    }
 
-        String key = sessionKey(userId, symbol, tradeMode);
+    /**
+     * 패턴 활성화 상태 변경 시 자동매매 세션을 동기화한다.
+     * 활성 큐가 1개 이상이면 세션을 생성/갱신하고, 0개이면 세션을 제거한다.
+     * WebSocket 구독도 함께 동기화한다.
+     *
+     * @param userId       사용자 ID
+     * @param exchangeType 거래소 타입
+     * @param symbol       코인 심볼
+     * @param tradeMode    거래 모드 (MAIN/SIM)
+     */
+    public void syncSession(Long userId, ExchangeType exchangeType, String symbol, TradeMode tradeMode) {
+        // isActive=true인 패턴 큐만 조회 (거래 모드 + 거래소별 분리)
+        List<PatternQueue> activeQueues = patternQueueRepository
+                .findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                        userId, symbol, true, tradeMode, exchangeType);
+
+        String key = sessionKey(userId, exchangeType, symbol, tradeMode);
 
         if (activeQueues.isEmpty()) {
             if (activeSessions.remove(key) != null) {
@@ -260,6 +282,7 @@ public class AutoTradeService {
                 // 신규 세션 생성
                 AutoTradeSessionDTO session = new AutoTradeSessionDTO();
                 session.setUserId(userId);
+                session.setExchangeType(exchangeType);
                 session.setSymbol(symbol);
                 session.setTradeMode(tradeMode);
                 session.setQueues(activeQueues);
@@ -282,7 +305,11 @@ public class AutoTradeService {
      * @return 활성 세션이 존재하면 true
      */
     public boolean isActive(Long userId, String symbol, TradeMode tradeMode) {
-        return activeSessions.containsKey(sessionKey(userId, symbol, tradeMode));
+        return isActive(userId, ExchangeType.BYBIT, symbol, tradeMode);
+    }
+
+    public boolean isActive(Long userId, ExchangeType exchangeType, String symbol, TradeMode tradeMode) {
+        return activeSessions.containsKey(sessionKey(userId, exchangeType, symbol, tradeMode));
     }
 
     /**
@@ -294,7 +321,11 @@ public class AutoTradeService {
      * @return 활성 세션 DTO, 존재하지 않으면 null
      */
     public AutoTradeSessionDTO getSession(Long userId, String symbol, TradeMode tradeMode) {
-        return activeSessions.get(sessionKey(userId, symbol, tradeMode));
+        return getSession(userId, ExchangeType.BYBIT, symbol, tradeMode);
+    }
+
+    public AutoTradeSessionDTO getSession(Long userId, ExchangeType exchangeType, String symbol, TradeMode tradeMode) {
+        return activeSessions.get(sessionKey(userId, exchangeType, symbol, tradeMode));
     }
 
 
@@ -678,10 +709,7 @@ public class AutoTradeService {
         history.setAmount(pattern.getAmount()); // 마진(실제 투자금) 저장
 
         // 진입 수수료 계산: qty × 진입가 × taker 요율 (SIM 지갑 차감 및 히스토리 기록용)
-        BigDecimal entryFee = new BigDecimal(qty)
-                .multiply(new BigDecimal(currentPrice))
-                .multiply(TAKER_FEE_RATE)
-                .setScale(4, RoundingMode.HALF_UP);
+        BigDecimal entryFee = TradeCalculator.calcFee(new BigDecimal(currentPrice), new BigDecimal(qty));
         history.setFee(entryFee);
 
         // 주문 전 진입가 선점: 이중 진입 방지 (상단 가드와 함께 이중 안전장치)
@@ -857,10 +885,7 @@ public class AutoTradeService {
         history.setOrderType(TradeOrderType.ENTRY.getTradeOrderType());
         history.setAmount(pattern.getAmount()); // 마진 저장
 
-        BigDecimal entryFee = new BigDecimal(qty)
-                .multiply(new BigDecimal(currentPrice))
-                .multiply(TAKER_FEE_RATE)
-                .setScale(4, RoundingMode.HALF_UP);
+        BigDecimal entryFee = TradeCalculator.calcFee(new BigDecimal(currentPrice), new BigDecimal(qty));
         history.setFee(entryFee);
 
         // 이중 진입 방지: 주문 전 진입가 선점
@@ -1007,11 +1032,8 @@ public class AutoTradeService {
             history.setOrderType(TradeOrderType.SELL.getTradeOrderType());
             history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
 
-            // 매도 수수료 계산: closeQty × 체결가 × taker 요율
-            BigDecimal exitFee = new BigDecimal(closeQty)
-                    .multiply(new BigDecimal(currentPrice))
-                    .multiply(TAKER_FEE_RATE)
-                    .setScale(4, RoundingMode.HALF_UP);
+            // 매도 수수료 계산
+            BigDecimal exitFee = TradeCalculator.calcFee(new BigDecimal(currentPrice), new BigDecimal(closeQty));
             history.setFee(exitFee);
 
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
@@ -1038,10 +1060,8 @@ public class AutoTradeService {
                 session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
             } else {
                 // 진입 수수료 재계산 (state에서 entryQty, entryPrice 참조)
-                BigDecimal entryFee = new BigDecimal(state.getEntryQty())
-                        .multiply(new BigDecimal(state.getEntryPrice()))
-                        .multiply(TAKER_FEE_RATE)
-                        .setScale(4, RoundingMode.HALF_UP);
+                BigDecimal entryFee = TradeCalculator.calcFee(
+                        new BigDecimal(state.getEntryPrice()), new BigDecimal(state.getEntryQty()));
                 saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
                         session.getSymbol(), state.getDirection(),
                         state.getEntryPrice(), currentPrice, state.getEntryMargin(), pattern, entryFee, exitFee, session.getTradeMode());
@@ -1134,11 +1154,8 @@ public class AutoTradeService {
             history.setOrderType(TradeOrderType.LIQUIDATION.getTradeOrderType());
             history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
 
-            // 청산 수수료 계산: closeQty × 체결가 × taker 요율
-            BigDecimal exitFee = new BigDecimal(closeQty)
-                    .multiply(new BigDecimal(currentPrice))
-                    .multiply(TAKER_FEE_RATE)
-                    .setScale(4, RoundingMode.HALF_UP);
+            // 청산 수수료 계산
+            BigDecimal exitFee = TradeCalculator.calcFee(new BigDecimal(currentPrice), new BigDecimal(closeQty));
             history.setFee(exitFee);
 
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
@@ -1164,10 +1181,8 @@ public class AutoTradeService {
                 session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
             } else {
                 // 진입 수수료 재계산 (state에서 entryQty, entryPrice 참조)
-                BigDecimal entryFee = new BigDecimal(state.getEntryQty())
-                        .multiply(new BigDecimal(state.getEntryPrice()))
-                        .multiply(TAKER_FEE_RATE)
-                        .setScale(4, RoundingMode.HALF_UP);
+                BigDecimal entryFee = TradeCalculator.calcFee(
+                        new BigDecimal(state.getEntryPrice()), new BigDecimal(state.getEntryQty()));
                 saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
                         session.getSymbol(), state.getDirection(),
                         state.getEntryPrice(), currentPrice, state.getEntryMargin(), currentPattern, entryFee, exitFee, session.getTradeMode());
@@ -1303,23 +1318,10 @@ public class AutoTradeService {
         BigDecimal entry = new BigDecimal(entryPrice);
         BigDecimal exit = new BigDecimal(exitPrice);
         int leverage = pattern.getLeverage();
-        BigDecimal leverageBd = BigDecimal.valueOf(leverage);
 
-        // 총손익 계산: 마진 × 레버리지 기준 (레버리지 반영)
-        BigDecimal grossProfitLoss;
-        if (side == Side.LONG) {
-            // LONG: (청산가 - 진입가) / 진입가 × 마진 × 레버리지
-            grossProfitLoss = exit.subtract(entry)
-                    .divide(entry, 6, RoundingMode.HALF_UP)
-                    .multiply(margin).multiply(leverageBd)
-                    .setScale(4, RoundingMode.HALF_UP);
-        } else {
-            // SHORT: (진입가 - 청산가) / 진입가 × 마진 × 레버리지
-            grossProfitLoss = entry.subtract(exit)
-                    .divide(entry, 6, RoundingMode.HALF_UP)
-                    .multiply(margin).multiply(leverageBd)
-                    .setScale(4, RoundingMode.HALF_UP);
-        }
+        // 총손익 계산 (TradeCalculator 위임)
+        BigDecimal grossProfitLoss = TradeCalculator.calcGrossProfitLoss(side, entry, exit, margin, leverage);
+
         // 순손익 = 총손익 - (진입 수수료 + 청산 수수료) — DB 기록용
         BigDecimal totalFee = entryFee.add(exitFee);
         BigDecimal profitLoss = grossProfitLoss.subtract(totalFee);
@@ -1446,7 +1448,7 @@ public class AutoTradeService {
 
         // 모든 큐가 제거되면 세션 정리
         if (session.getQueues().isEmpty()) {
-            activeSessions.remove(sessionKey(session.getUserId(), session.getSymbol(), session.getTradeMode()));
+            activeSessions.remove(sessionKey(session.getUserId(), session.getExchangeType(), session.getSymbol(), session.getTradeMode()));
             syncWebSocketSubscriptions();
         }
     }
@@ -1528,18 +1530,27 @@ public class AutoTradeService {
     }
 
     /**
-     * 활성 세션의 심볼 목록과 WebSocket 구독을 동기화한다.
+     * 활성 세션의 심볼 목록과 WebSocket 구독을 거래소별로 동기화한다.
      */
     private void syncWebSocketSubscriptions() {
-        Set<String> activeSymbols = activeSessions.values().stream()
-                .map(AutoTradeSessionDTO::getSymbol)
-                .collect(Collectors.toSet());
+        // 거래소 타입별로 활성 심볼을 그룹핑하여 각 어댑터에 동기화
+        Map<ExchangeType, Set<String>> symbolsByExchange = activeSessions.values().stream()
+                .collect(Collectors.groupingBy(
+                        s -> s.getExchangeType() != null ? s.getExchangeType() : ExchangeType.BYBIT,
+                        Collectors.mapping(AutoTradeSessionDTO::getSymbol, Collectors.toSet())
+                ));
 
-        bybitWebSocketClient.syncSubscriptions(activeSymbols);
+        for (ExchangeAdapter adapter : adapterRegistry.getAll()) {
+            Set<String> symbols = symbolsByExchange.getOrDefault(adapter.getExchangeType(), Set.of());
+            adapter.syncSubscriptions(symbols);
+        }
     }
 
-    private String sessionKey(Long userId, String symbol, TradeMode tradeMode) {
-        return userId + ":" + symbol + ":" + tradeMode.name();
+    /**
+     * 세션 키를 생성한다. 형식: "userId:exchangeType:symbol:tradeMode"
+     */
+    private String sessionKey(Long userId, ExchangeType exchangeType, String symbol, TradeMode tradeMode) {
+        return userId + ":" + exchangeType.name() + ":" + symbol + ":" + tradeMode.name();
     }
 
     private String now() {
