@@ -81,6 +81,13 @@ public class PatternQueueService {
         } else {
             queue.setTradeMode(TradeMode.MAIN);
         }
+        // 거래소 타입 설정 (프론트에서 전달, 없으면 BYBIT)
+        try {
+            queue.setExchangeType(com.coin.webcointrader.common.enums.ExchangeType.valueOf(
+                    request.getExchangeType() != null ? request.getExchangeType().toUpperCase() : "BYBIT"));
+        } catch (IllegalArgumentException e) {
+            queue.setExchangeType(com.coin.webcointrader.common.enums.ExchangeType.BYBIT);
+        }
 
         // 단계 → 패턴 → 블록 계층 구조 생성
         buildSteps(queue, request.getSteps());
