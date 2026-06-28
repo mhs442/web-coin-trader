@@ -7,16 +7,20 @@ import com.coin.webcointrader.autotrade.dto.TradePhase;
 import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
+import com.coin.webcointrader.common.exchange.ExchangeAdapter;
+import com.coin.webcointrader.common.exchange.ExchangeAdapterRegistry;
 import com.coin.webcointrader.market.service.MarketService;
+import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
+import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import com.coin.webcointrader.trade.service.TradeFacade;
 import com.coin.webcointrader.trade.service.TradeService;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -25,6 +29,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -40,6 +47,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AutoTradeServiceTest {
 
     @InjectMocks
@@ -55,6 +63,12 @@ class AutoTradeServiceTest {
     private InvestmentHistoryRepository investmentHistoryRepository;
 
     @Mock
+    private SimTradeHistoryRepository simTradeHistoryRepository;
+
+    @Mock
+    private SimInvestmentHistoryRepository simInvestmentHistoryRepository;
+
+    @Mock
     private TradeFacade tradeFacade;
 
     @Mock
@@ -64,20 +78,31 @@ class AutoTradeServiceTest {
     private MarketService marketService;
 
     @Mock
-    private BybitWebSocketClient bybitWebSocketClient;
+    private ExchangeAdapterRegistry adapterRegistry;
+
+    @Mock
+    private ExchangeAdapter bybitAdapter;
 
     @Mock
     private SimpMessagingTemplate messagingTemplate;
+
+    @BeforeEach
+    void setUpAdapterRegistry() {
+        // 모든 테스트에서 adapterRegistry 기본 동작 설정 (lenient: 일부 테스트에서 미사용 가능)
+        given(adapterRegistry.getAll()).willReturn(List.of(bybitAdapter));
+        given(bybitAdapter.getExchangeType()).willReturn(ExchangeType.BYBIT);
+    }
 
     // ─────────────────────────────────────────────
     // init (가격 리스너 등록)
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("init: 시작 시 MarketService에 가격 리스너를 등록한다")
+    @DisplayName("init: 시작 시 어댑터에 가격/봉마감 콜백을 등록한다")
     void init_registersPriceListener() {
         autoTradeService.init();
-        then(marketService).should(times(1)).addPriceListener(any());
+        then(bybitAdapter).should(times(1)).registerPriceCallback(any());
+        then(bybitAdapter).should(times(1)).registerKlineCallback(any());
     }
 
     // ─────────────────────────────────────────────
@@ -90,8 +115,8 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q));
 
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
@@ -109,14 +134,14 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q1 = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q1));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q1));
 
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
         PatternQueue q2 = makePatternQueue(2L, userId, symbol, Side.SHORT);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q1, q2));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q1, q2));
 
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
@@ -131,12 +156,12 @@ class AutoTradeServiceTest {
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
 
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q));
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of());
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of());
 
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
         assertThat(autoTradeService.isActive(userId, symbol, TradeMode.MAIN)).isFalse();
@@ -148,13 +173,13 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q));
 
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
         ArgumentCaptor<Set<String>> captor = ArgumentCaptor.forClass(Set.class);
-        then(bybitWebSocketClient).should(atLeastOnce()).syncSubscriptions(captor.capture());
+        then(bybitAdapter).should(atLeastOnce()).syncSubscriptions(captor.capture());
         assertThat(captor.getValue()).contains("BTCUSDT");
     }
 
@@ -191,8 +216,8 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q));
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
         given(marketService.isWsActive()).willReturn(true);
 
@@ -207,8 +232,8 @@ class AutoTradeServiceTest {
         Long userId = 1L;
         String symbol = "BTCUSDT";
         PatternQueue q = makePatternQueue(1L, userId, symbol, Side.LONG);
-        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(q));
+        given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(q));
         autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
         given(marketService.getTickers()).willReturn(null);
 
@@ -935,8 +960,8 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             // 큐 상태에 기준가/시각 설정 (30초 전)
@@ -967,8 +992,8 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             // POSITION_HOLDING 상태로 설정 (활성 패턴 + 진입가 + TP/SL)
@@ -1005,8 +1030,8 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             var state = autoTradeService.getSession(userId, symbol, TradeMode.MAIN).getQueueStates().get(1L);
@@ -1030,8 +1055,8 @@ class AutoTradeServiceTest {
             Long userId = 1L;
             String symbol = "BTCUSDT";
             PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeOrderByCreatedAtAsc(
-                    userId, symbol, true, TradeMode.MAIN)).willReturn(List.of(queue));
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(queue));
             autoTradeService.syncSession(userId, symbol, TradeMode.MAIN);
 
             // WebSocket 가격 없음

@@ -2,6 +2,9 @@ package com.coin.webcointrader.trade.controller;
 
 import com.coin.webcointrader.common.dto.UserDTO;
 import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.repository.LoginRepository;
 import com.github.tomakehurst.wiremock.client.WireMock;
@@ -36,6 +39,9 @@ class TradeControllerTest {
     private LoginRepository loginRepository;
 
     @Autowired
+    private UserExchangeKeyRepository userExchangeKeyRepository;
+
+    @Autowired
     private AesEncryptor aesEncryptor;
 
     private Long savedUserId;
@@ -55,16 +61,21 @@ class TradeControllerTest {
                         .withHeader("Content-Type", "application/json")
                         .withBodyFile("TradeClient_createOrder.json")));
 
-        // 테스트 유저 저장 (AES로 실제 암호화하여 TradeService가 복호화할 수 있도록 함)
+        // 테스트 유저 저장 후 user_exchange_key에 API Key 저장 (TradeService가 복호화할 수 있도록 AES 암호화)
         User user = new User();
         user.setUsername("trader");
         user.setPhoneNumber("01099998888");
         user.setEmail("trader@test.com");
         user.setPassword("encodedPw");
-        user.setApiKey(aesEncryptor.encrypt("testApiKey"));
-        user.setApiSecret(aesEncryptor.encrypt("testApiSecret"));
         User saved = loginRepository.save(user);
         savedUserId = saved.getId();
+
+        UserExchangeKey exchangeKey = new UserExchangeKey();
+        exchangeKey.setUserId(savedUserId);
+        exchangeKey.setExchangeType(ExchangeType.BYBIT);
+        exchangeKey.setApiKey(aesEncryptor.encrypt("testApiKey"));
+        exchangeKey.setApiSecret(aesEncryptor.encrypt("testApiSecret"));
+        userExchangeKeyRepository.save(exchangeKey);
 
         UserDTO userDTO = UserDTO.builder()
                 .id(savedUserId)
@@ -78,6 +89,7 @@ class TradeControllerTest {
 
     @AfterEach
     void tearDown() {
+        userExchangeKeyRepository.deleteAll();
         loginRepository.deleteAll();
         WireMock.reset();
     }

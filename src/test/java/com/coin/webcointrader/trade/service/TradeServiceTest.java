@@ -4,12 +4,13 @@ import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
 import com.coin.webcointrader.common.client.trade.TradeClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
-import com.coin.webcointrader.login.repository.LoginRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,7 @@ class TradeServiceTest {
     private TradeHistoryRepository tradeHistoryRepository;
 
     @Mock
-    private LoginRepository loginRepository;
+    private UserExchangeKeyRepository userExchangeKeyRepository;
 
     @Mock
     private AesEncryptor aesEncryptor;
@@ -63,12 +64,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        User user = makeUser(userId, "encKey", "encSecret");
+        UserExchangeKey key = makeUserExchangeKey(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(loginRepository.findById(userId)).willReturn(Optional.of(user));
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
         given(aesEncryptor.decrypt("encKey")).willReturn("rawApiKey");
         given(aesEncryptor.decrypt("encSecret")).willReturn("rawApiSecret");
         given(tradeClient.createOrder(request)).willReturn(ResponseEntity.ok(response));
@@ -93,12 +94,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();  // category 없음
 
-        User user = makeUser(userId, "encKey", "encSecret");
+        UserExchangeKey key = makeUserExchangeKey(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(loginRepository.findById(userId)).willReturn(Optional.of(user));
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(tradeClient.createOrder(any(CreateOrderRequest.class))).willReturn(ResponseEntity.ok(response));
 
@@ -110,8 +111,8 @@ class TradeServiceTest {
     }
 
     @Test
-    @DisplayName("placeOrder: 사용자를 찾을 수 없으면 CustomException(USER_NOT_FOUND) 발생")
-    void placeOrder_userNotFound() {
+    @DisplayName("placeOrder: API Key를 찾을 수 없으면 CustomException(API_KEY_NOT_FOUND) 발생")
+    void placeOrder_apiKeyNotFound() {
         // given
         Long userId = 99L;
         CreateOrderRequest request = CreateOrderRequest.builder()
@@ -122,12 +123,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        given(loginRepository.findById(userId)).willReturn(Optional.empty());
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.empty());
 
         // when & then
         assertThatThrownBy(() -> tradeService.placeOrder(request, userId))
                 .isInstanceOf(CustomException.class)
-                .hasMessageContaining(ExceptionMessage.USER_NOT_FOUND.getMessage());
+                .hasMessageContaining(ExceptionMessage.API_KEY_NOT_FOUND.getMessage());
     }
 
     @Test
@@ -143,8 +144,8 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        User user = makeUser(userId, "encKey", "encSecret");
-        given(loginRepository.findById(userId)).willReturn(Optional.of(user));
+        UserExchangeKey key = makeUserExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(tradeClient.createOrder(any())).willThrow(new RuntimeException("API 오류"));
 
@@ -161,15 +162,12 @@ class TradeServiceTest {
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private User makeUser(Long id, String encApiKey, String encApiSecret) {
-        User user = new User();
-        user.setId(id);
-        user.setPhoneNumber("01012345678");
-        user.setUsername("tester");
-        user.setEmail("test@test.com");
-        user.setPassword("encodedPw");
-        user.setApiKey(encApiKey);
-        user.setApiSecret(encApiSecret);
-        return user;
+    private UserExchangeKey makeUserExchangeKey(Long userId, String encApiKey, String encApiSecret) {
+        UserExchangeKey key = new UserExchangeKey();
+        key.setUserId(userId);
+        key.setExchangeType(ExchangeType.BYBIT);
+        key.setApiKey(encApiKey);
+        key.setApiSecret(encApiSecret);
+        return key;
     }
 }

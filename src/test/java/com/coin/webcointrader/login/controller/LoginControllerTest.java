@@ -108,8 +108,6 @@ class LoginControllerTest {
         existing.setPhoneNumber("01022223333");
         existing.setEmail("existing@test.com");
         existing.setPassword("encodedPw");
-        existing.setApiKey("encKey");
-        existing.setApiSecret("encSecret");
         loginRepository.save(existing);
 
         // when & then - 중복 전화번호 → DB 조회 후 CustomException 발생 (API 호출 없음)

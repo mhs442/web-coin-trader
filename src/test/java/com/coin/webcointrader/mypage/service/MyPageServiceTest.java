@@ -175,9 +175,11 @@ class MyPageServiceTest {
         Long userId = 1L;
         InvestmentHistory eth = makeInvestmentHistory(2L, userId, "ETHUSDT");
         Page<InvestmentHistory> page = new PageImpl<>(List.of(eth));
+        // 심볼 필터 시 DB LIKE 쿼리 사용
         given(investmentHistoryRepository.findByUserIdAndSymbolContainingIgnoreCaseAndCreatedAtBetween(
                 eq(userId), eq("ETH"), any(), any(), any(Pageable.class)))
                 .willReturn(page);
+        // 심볼 필터 합산 쿼리 모킹
         given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
                 eq(userId), any(), any(), eq("ETH")))
                 .willReturn(summaryResult(new BigDecimal("200"), BigDecimal.ZERO));

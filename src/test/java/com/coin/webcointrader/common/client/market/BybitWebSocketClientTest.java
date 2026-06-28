@@ -54,7 +54,7 @@ class BybitWebSocketClientTest {
     void handleTextMessage_parsesSnapshotAndCallsCallback() throws Exception {
         // given
         AtomicReference<WebSocketTickerDTO> received = new AtomicReference<>();
-        client.setTickerCallback(received::set);
+        client.addTickerCallback(received::set);
 
         // 세션 설정 (메시지 수신에 필요)
         String snapshotJson = """
@@ -86,7 +86,7 @@ class BybitWebSocketClientTest {
     void handleTextMessage_parsesDeltaAndCallsCallback() throws Exception {
         // given
         AtomicReference<WebSocketTickerDTO> received = new AtomicReference<>();
-        client.setTickerCallback(received::set);
+        client.addTickerCallback(received::set);
 
         String deltaJson = """
                 {
@@ -114,7 +114,7 @@ class BybitWebSocketClientTest {
     void handleTextMessage_ignoresOpMessages() throws Exception {
         // given
         AtomicReference<WebSocketTickerDTO> received = new AtomicReference<>();
-        client.setTickerCallback(received::set);
+        client.addTickerCallback(received::set);
 
         String pongJson = """
                 { "op": "pong", "success": true }

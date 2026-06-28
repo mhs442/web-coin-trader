@@ -5,6 +5,7 @@ import com.coin.webcointrader.common.entity.SimWallet;
 import com.coin.webcointrader.common.entity.User;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
@@ -41,6 +42,9 @@ class LoginServiceTest {
     private AesEncryptor aesEncryptor;
 
     @Mock
+    private UserExchangeKeyRepository userExchangeKeyRepository;
+
+    @Mock
     private SimWalletRepository simWalletRepository;
 
     @Test
@@ -53,8 +57,6 @@ class LoginServiceTest {
         user.setUsername("테스터");
         user.setPassword("encodedPassword");
         user.setEmail("test@test.com");
-        user.setApiKey("encryptedKey");
-        user.setApiSecret("encryptedSecret");
 
         given(loginRepository.findByPhoneNumber("01012345678"))
                 .willReturn(Optional.of(user));
