@@ -28,10 +28,5 @@ public class User {
 
     @Column(nullable = false, length = 200)
     private String password;            // BCrypt 해싱된 비밀번호
-
-    @Column(nullable = false, length = 500)
-    private String apiKey;              // AES-256 암호화된 Bybit API Key
-
-    @Column(nullable = false, length = 500)
-    private String apiSecret;           // AES-256 암호화된 Bybit API Secret
+    // apiKey/apiSecret은 user_exchange_key 테이블로 분리됨 (UserExchangeKey 엔티티 참고)
 }

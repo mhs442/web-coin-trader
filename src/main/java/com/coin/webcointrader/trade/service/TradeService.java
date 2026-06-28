@@ -12,14 +12,15 @@ import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
 import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
 import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
 import com.coin.webcointrader.common.entity.TradeHistory;
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.Category;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
-import com.coin.webcointrader.login.repository.LoginRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +37,7 @@ public class TradeService {
     private final TradeClient tradeClient;
     private final PositionClient positionClient;
     private final TradeHistoryRepository tradeHistoryRepository;
-    private final LoginRepository loginRepository;
+    private final UserExchangeKeyRepository userExchangeKeyRepository;
     private final AesEncryptor aesEncryptor;
 
     /**
@@ -181,17 +182,18 @@ public class TradeService {
     }
 
     /**
-     * 사용자 API Key/Secret을 복호화하여 ThreadLocal 컨텍스트에 설정한다.
+     * 사용자의 Bybit API Key/Secret을 복호화하여 ThreadLocal 컨텍스트에 설정한다.
      *
      * @param userId 사용자 ID
      */
     private void setApiKeyContext(Long userId) {
-        User user = loginRepository.findById(userId)
-                .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
+        UserExchangeKey key = userExchangeKeyRepository
+                .findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)
+                .orElseThrow(() -> new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
 
         UserApiKeyContext.set(
-                aesEncryptor.decrypt(user.getApiKey()),
-                aesEncryptor.decrypt(user.getApiSecret())
+                aesEncryptor.decrypt(key.getApiKey()),
+                aesEncryptor.decrypt(key.getApiSecret())
         );
     }
 }

@@ -1,10 +1,13 @@
 package com.coin.webcointrader.login.service;
 
 import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.User;
-import com.coin.webcointrader.common.enums.ExceptionMessage;
-import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.entity.SimWallet;
+import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
@@ -26,6 +29,7 @@ public class LoginService implements UserDetailsService {
     private final BCryptPasswordEncoder bCryptPasswordEncoder;
     private final BybitApiKeyValidator bybitApiKeyValidator;
     private final LoginRepository loginRepository;
+    private final UserExchangeKeyRepository userExchangeKeyRepository;
     private final SimWalletRepository simWalletRepository;
 
     /**
@@ -76,16 +80,22 @@ public class LoginService implements UserDetailsService {
             throw new CustomException(ExceptionMessage.INVALID_API_KEY);
         }
 
-        // 4. User 저장 (비밀번호 BCrypt 해싱, API Key/Secret AES 암호화)
+        // 4. User 저장 (비밀번호 BCrypt 해싱)
         User user = new User();
         user.setUsername(request.getUsername());
         user.setPhoneNumber(request.getPhoneNumber());
         user.setPassword(bCryptPasswordEncoder.encode(request.getPassword()));
         user.setEmail(request.getEmail());
-        user.setApiKey(aesEncryptor.encrypt(request.getApiKey()));
-        user.setApiSecret(aesEncryptor.encrypt(request.getApiSecret()));
 
         loginRepository.save(user);
+
+        // 4-1. Bybit API Key/Secret을 user_exchange_key 테이블에 저장 (AES 암호화)
+        UserExchangeKey exchangeKey = new UserExchangeKey();
+        exchangeKey.setUserId(user.getId());
+        exchangeKey.setExchangeType(ExchangeType.BYBIT);
+        exchangeKey.setApiKey(aesEncryptor.encrypt(request.getApiKey()));
+        exchangeKey.setApiSecret(aesEncryptor.encrypt(request.getApiSecret()));
+        userExchangeKeyRepository.save(exchangeKey);
 
         // 5. 모의투자 가상 지갑 생성 (기본 잔고 10,000 USDT)
         SimWallet simWallet = new SimWallet();
