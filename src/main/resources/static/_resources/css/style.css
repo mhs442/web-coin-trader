@@ -1450,17 +1450,19 @@ body {
    My Page (마이페이지)
    ========================================= */
 .mypage-container {
-    padding: 24px 32px;
+    padding: 0 32px 24px;          /* padding-top 제거 — sticky thead top:0 기준이 container border edge여야 함 */
     width: 100%;
     box-sizing: border-box;
     flex: 1;                       /* 헤더 아래 남은 공간 모두 사용 */
     display: flex;
     flex-direction: column;
-    overflow-y: auto;              /* 마이페이지 내부 스크롤 */
+    overflow-y: auto;              /* 마이페이지 내부 스크롤 (thead sticky 기준 컨테이너) */
+    overflow-x: auto;              /* 테이블 가로 스크롤 (mypage-table-wrapper overflow 제거에 따라 여기서 처리) */
     min-height: 0;                 /* flex 자식 overflow 허용 */
 }
 
 .mypage-header {
+    padding-top: 24px;             /* container padding-top 대신 여기서 상단 여백 처리 */
     margin-bottom: 24px;
 }
 
@@ -1536,7 +1538,7 @@ body {
 
 .mypage-table-wrapper {
     width: 100%;
-    overflow-x: auto;
+    /* overflow-x는 mypage-container(overflow-y:auto)가 담당 — 여기서 overflow 지정 시 sticky top이 깨짐 */
     background: #fff;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);

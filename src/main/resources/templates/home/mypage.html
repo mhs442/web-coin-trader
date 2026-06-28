@@ -323,7 +323,6 @@
                                     '<th>진입가</th>' +
                                     '<th>청산가</th>' +
                                     '<th>순손익</th>' +
-                                    '<th>상세</th>' +
                                 '</tr></thead>' +
                                 '<tbody id="investment-tbody"></tbody>' +
                             '</table>' +
@@ -359,10 +358,9 @@
                             '<td class="mono-cell">' + inv.entryPrice + '</td>' +
                             '<td class="mono-cell">' + inv.exitPrice + '</td>' +
                             '<td class="mono-cell ' + profitClass + '">' + profitPrefix + inv.profitLoss + ' USDT</td>' +
-                            '<td><span class="trade-detail-icon" id="trade-detail-icon-' + inv.id + '">▼</span></td>' +
                         '</tr>' +
                         '<tr class="trade-detail-row" id="trade-detail-' + inv.id + '" style="display:none;">' +
-                            '<td colspan="10"><div class="trade-detail-inner">' +
+                            '<td colspan="9"><div class="trade-detail-inner">' +
                                 '<div class="trade-detail-body" id="trade-detail-body-' + inv.id + '">' +
                                     '<div class="trade-detail-loading">로딩 중...</div>' +
                                 '</div>' +
