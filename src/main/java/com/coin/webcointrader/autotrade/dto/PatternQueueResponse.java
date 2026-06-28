@@ -15,6 +15,7 @@ import java.util.List;
 public class PatternQueueResponse {
     private Long id;                        // 큐 ID
     private String symbol;                  // 코인 심볼
+    private String exchangeType;            // 거래소 타입 (예: "BYBIT")
     private boolean active;                  // 활성화 여부
     private boolean cycle;                  // 단계 소진 후 1단계 재시작 여부
     private BigDecimal triggerRate;         // 트리거 기준 비율 (%)

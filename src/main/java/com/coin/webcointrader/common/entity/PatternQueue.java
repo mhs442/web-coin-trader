@@ -6,6 +6,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.BatchSize;
 
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
 
 import java.math.BigDecimal;
@@ -28,6 +29,10 @@ public class PatternQueue extends BaseEntity {
 
     @Column(nullable = false, length = 100)
     private String symbol;                  // 코인 심볼 (예: BTCUSDT)
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private ExchangeType exchangeType = ExchangeType.BYBIT;  // 거래소 타입 (기본값: BYBIT)
 
     @Column(nullable = false)
     private boolean isActive = false;             // 활성화 여부 (Y: 활성, N: 비활성)
