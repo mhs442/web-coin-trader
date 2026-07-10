@@ -5,6 +5,7 @@ import com.coin.webcointrader.autotrade.dto.UpdatePatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
 import lombok.RequiredArgsConstructor;
@@ -81,6 +82,9 @@ public class PatternQueueService {
         } else {
             queue.setTradeMode(TradeMode.MAIN);
         }
+
+        // 거래소 타입 설정 (현재 BYBIT 고정, 추후 다중 거래소 지원 시 request에서 수신)
+        queue.setExchangeType(ExchangeType.BYBIT);
 
         // 단계 → 패턴 → 블록 계층 구조 생성
         buildSteps(queue, request.getSteps());
@@ -176,6 +180,7 @@ public class PatternQueueService {
         newQueue.setTriggerRate(origin.getTriggerRate());
         newQueue.setActive(false);
         newQueue.setTradeMode(tradeMode);
+        newQueue.setExchangeType(origin.getExchangeType()); // 원본 거래소 타입 복사
 
         // 원본 단계 → 패턴 → 블록 딥 카피
         for (PatternStep originStep : origin.getSteps()) {

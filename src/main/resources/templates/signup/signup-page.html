@@ -5,6 +5,7 @@
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>회원가입</title>
     <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
 </head>
 <body>
 <div class="auth-container">
@@ -42,13 +43,19 @@
                        placeholder="이메일" required>
             </div>
             <div class="auth-field">
-                <label for="apiKey">Bybit API Key</label>
+                <label for="exchangeType">거래소</label>
+                <select id="exchangeType" name="exchangeType">
+                    <option value="BYBIT" th:selected="${request?.exchangeType == 'BYBIT' or request?.exchangeType == null}">Bybit</option>
+                </select>
+            </div>
+            <div class="auth-field">
+                <label for="apiKey"><span id="apiKeyLabel">Bybit</span> API Key</label>
                 <input type="text" id="apiKey" name="apiKey"
                        placeholder="Bybit API Key" required
                        th:value="${request?.apiKey}">
             </div>
             <div class="auth-field">
-                <label for="apiSecret">Bybit API Secret</label>
+                <label for="apiSecret"><span id="apiSecretLabel">Bybit</span> API Secret</label>
                 <input type="password" id="apiSecret" name="apiSecret"
                        placeholder="Bybit API Secret" required>
             </div>
@@ -59,5 +66,16 @@
         </form>
     </div>
 </div>
+<script>
+    // 거래소 선택 시 API Key/Secret 라벨 및 플레이스홀더 동적 변경
+    const EXCHANGE_LABELS = { BYBIT: 'Bybit' };
+
+    $('#exchangeType').on('change', function () {
+        const label = EXCHANGE_LABELS[$(this).val()] || $(this).val();
+        $('#apiKeyLabel, #apiSecretLabel').text(label);
+        $('#apiKey').attr('placeholder', label + ' API Key');
+        $('#apiSecret').attr('placeholder', label + ' API Secret');
+    });
+</script>
 </body>
 </html>

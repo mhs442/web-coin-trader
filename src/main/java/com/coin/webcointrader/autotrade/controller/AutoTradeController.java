@@ -170,6 +170,7 @@ public class AutoTradeController {
         return PatternQueueResponse.builder()
                 .id(queue.getId())
                 .symbol(queue.getSymbol())
+                .exchangeType(queue.getExchangeType().name())
                 .active(queue.isActive())
                 .cycle(queue.isCycle())
                 .triggerRate(queue.getTriggerRate())

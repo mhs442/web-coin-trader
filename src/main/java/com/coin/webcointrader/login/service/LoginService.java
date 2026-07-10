@@ -1,10 +1,13 @@
 package com.coin.webcointrader.login.service;
 
 import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.User;
-import com.coin.webcointrader.common.enums.ExceptionMessage;
-import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.entity.SimWallet;
+import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
@@ -27,6 +30,7 @@ public class LoginService implements UserDetailsService {
     private final BybitApiKeyValidator bybitApiKeyValidator;
     private final LoginRepository loginRepository;
     private final SimWalletRepository simWalletRepository;
+    private final UserExchangeKeyRepository userExchangeKeyRepository;
 
     /**
      * Spring Security 인증 진입점.
@@ -52,9 +56,11 @@ public class LoginService implements UserDetailsService {
     /**
      * 회원가입을 처리한다.
      * 비밀번호 일치 확인 → 전화번호 중복 확인 → Bybit API Key 유효성 검증 → 사용자 저장 순서로 진행된다.
-     * 비밀번호는 BCrypt로 해싱하고, API Key/Secret은 AES-256으로 암호화하여 저장한다.
+     * 비밀번호는 BCrypt로 해싱하고, API Key/Secret은 AES-256으로 암호화하여 User 테이블과
+     * UserExchangeKey 테이블에 동시 저장한다.
      *
-     * @param request 회원가입 요청 (username, phoneNumber, password, passwordConfirm, apiKey, apiSecret 포함)
+     * @param request 회원가입 요청 (username, phoneNumber, password, passwordConfirm,
+     *                apiKey, apiSecret, exchangeType 포함; exchangeType 미입력 시 BYBIT 기본값)
      * @throws CustomException 비밀번호 불일치(PASSWORD_MISMATCH), 전화번호 중복(DUPLICATE_PHONE_NUMBER),
      *                         API Key 무효(INVALID_API_KEY) 시 예외 발생
      */
@@ -77,17 +83,33 @@ public class LoginService implements UserDetailsService {
         }
 
         // 4. User 저장 (비밀번호 BCrypt 해싱, API Key/Secret AES 암호화)
+        String encApiKey    = aesEncryptor.encrypt(request.getApiKey());
+        String encApiSecret = aesEncryptor.encrypt(request.getApiSecret());
+
         User user = new User();
         user.setUsername(request.getUsername());
         user.setPhoneNumber(request.getPhoneNumber());
         user.setPassword(bCryptPasswordEncoder.encode(request.getPassword()));
         user.setEmail(request.getEmail());
-        user.setApiKey(aesEncryptor.encrypt(request.getApiKey()));
-        user.setApiSecret(aesEncryptor.encrypt(request.getApiSecret()));
+        user.setApiKey(encApiKey);
+        user.setApiSecret(encApiSecret);
 
         loginRepository.save(user);
 
-        // 5. 모의투자 가상 지갑 생성 (기본 잔고 10,000 USDT)
+        // 5. 거래소별 API Key 저장 (UserExchangeKey 테이블)
+        // 미입력 시 BYBIT 기본값 사용
+        ExchangeType exchangeType = (request.getExchangeType() != null && !request.getExchangeType().isBlank())
+                ? ExchangeType.valueOf(request.getExchangeType())
+                : ExchangeType.BYBIT;
+
+        UserExchangeKey exchangeKey = new UserExchangeKey();
+        exchangeKey.setUserId(user.getId());
+        exchangeKey.setExchangeType(exchangeType);
+        exchangeKey.setApiKey(encApiKey);
+        exchangeKey.setApiSecret(encApiSecret);
+        userExchangeKeyRepository.save(exchangeKey);
+
+        // 6. 모의투자 가상 지갑 생성 (기본 잔고 10,000 USDT)
         SimWallet simWallet = new SimWallet();
         simWallet.setUser(user);
         simWalletRepository.save(simWallet);

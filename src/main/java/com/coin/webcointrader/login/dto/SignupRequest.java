@@ -13,4 +13,5 @@ public class SignupRequest {
     private String email;           // 이메일
     private String apiKey;          // Bybit API Key
     private String apiSecret;       // Bybit API Secret
+    private String exchangeType;    // 선택한 거래소 타입 (예: BYBIT), 미입력 시 BYBIT 기본값
 }

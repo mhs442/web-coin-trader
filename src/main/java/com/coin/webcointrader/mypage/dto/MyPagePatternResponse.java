@@ -15,6 +15,7 @@ import java.util.List;
 public class MyPagePatternResponse {
     private Long id;                        // 큐 PK
     private String symbol;                  // 종목 심볼
+    private String exchangeType;            // 거래소 타입 (예: BYBIT)
     private boolean active;                 // 활성화 여부
     private BigDecimal triggerRate;         // 트리거 기준 비율 (%)
     private String createdAt;               // 등록 일시 (yyyy-MM-dd HH:mm:ss)

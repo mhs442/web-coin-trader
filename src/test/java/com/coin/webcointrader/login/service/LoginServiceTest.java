@@ -3,8 +3,11 @@ package com.coin.webcointrader.login.service;
 import com.coin.webcointrader.common.dto.UserDTO;
 import com.coin.webcointrader.common.entity.SimWallet;
 import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
@@ -42,6 +45,9 @@ class LoginServiceTest {
 
     @Mock
     private SimWalletRepository simWalletRepository;
+
+    @Mock
+    private UserExchangeKeyRepository userExchangeKeyRepository;
 
     @Test
     @DisplayName("loadUserByUsername: 전화번호로 사용자를 찾으면 UserDTO를 반환한다")
@@ -95,12 +101,14 @@ class LoginServiceTest {
         given(aesEncryptor.encrypt("apiSecret")).willReturn("encApiSecret");
         given(loginRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
         given(simWalletRepository.save(any(SimWallet.class))).willAnswer(inv -> inv.getArgument(0));
+        given(userExchangeKeyRepository.save(any(UserExchangeKey.class))).willAnswer(inv -> inv.getArgument(0));
 
         // when & then
         assertThatCode(() -> loginService.signup(request))
                 .doesNotThrowAnyException();
 
         then(loginRepository).should().save(any(User.class));
+        then(userExchangeKeyRepository).should().save(argThat(k -> k.getExchangeType() == ExchangeType.BYBIT));
     }
 
     @Test
@@ -133,6 +141,33 @@ class LoginServiceTest {
     }
 
     @Test
+    @DisplayName("signup: exchangeType=BYBIT 으로 UserExchangeKey가 저장된다")
+    void signup_UserExchangeKey_BYBIT으로_저장() {
+        // given
+        SignupRequest request = makeRequest("tester", "01012345678",
+                "password1!", "password1!", "apiKey", "apiSecret", "BYBIT");
+
+        given(loginRepository.findByPhoneNumber("01012345678")).willReturn(Optional.empty());
+        given(bybitApiKeyValidator.validate("apiKey", "apiSecret")).willReturn(true);
+        given(passwordEncoder.encode("password1!")).willReturn("encodedPassword");
+        given(aesEncryptor.encrypt("apiKey")).willReturn("encApiKey");
+        given(aesEncryptor.encrypt("apiSecret")).willReturn("encApiSecret");
+        given(loginRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+        given(simWalletRepository.save(any(SimWallet.class))).willAnswer(inv -> inv.getArgument(0));
+        given(userExchangeKeyRepository.save(any(UserExchangeKey.class))).willAnswer(inv -> inv.getArgument(0));
+
+        // when
+        loginService.signup(request);
+
+        // then — 저장된 UserExchangeKey 검증
+        then(userExchangeKeyRepository).should().save(argThat(k ->
+                k.getExchangeType() == ExchangeType.BYBIT
+                && "encApiKey".equals(k.getApiKey())
+                && "encApiSecret".equals(k.getApiSecret())
+        ));
+    }
+
+    @Test
     @DisplayName("signup: Bybit API Key가 유효하지 않으면 CustomException(INVALID_API_KEY) 발생")
     void signup_invalidApiKey() {
         // given
@@ -155,6 +190,12 @@ class LoginServiceTest {
     private SignupRequest makeRequest(String username, String phoneNumber,
                                       String password, String passwordConfirm,
                                       String apiKey, String apiSecret) {
+        return makeRequest(username, phoneNumber, password, passwordConfirm, apiKey, apiSecret, "BYBIT");
+    }
+
+    private SignupRequest makeRequest(String username, String phoneNumber,
+                                      String password, String passwordConfirm,
+                                      String apiKey, String apiSecret, String exchangeType) {
         SignupRequest req = new SignupRequest();
         req.setUsername(username);
         req.setPhoneNumber(phoneNumber);
@@ -162,6 +203,7 @@ class LoginServiceTest {
         req.setPasswordConfirm(passwordConfirm);
         req.setApiKey(apiKey);
         req.setApiSecret(apiSecret);
+        req.setExchangeType(exchangeType);
         return req;
     }
 }
