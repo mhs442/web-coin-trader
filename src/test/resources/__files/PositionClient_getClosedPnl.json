@@ -1,0 +1,22 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "list": [
+      {
+        "symbol": "BTCUSDT",
+        "orderId": "test-order-id-456",
+        "side": "Buy",
+        "qty": "0.002",
+        "closedPnl": "12.5000",
+        "avgEntryPrice": "50000.00",
+        "avgExitPrice": "50100.50",
+        "openFee": "0.0550",
+        "closeFee": "0.0551",
+        "fundingFee": "-0.0125",
+        "createdTime": "1700000001000"
+      }
+    ],
+    "nextPageCursor": ""
+  }
+}

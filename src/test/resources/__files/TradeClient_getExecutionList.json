@@ -1,0 +1,18 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "list": [
+      {
+        "symbol": "BTCUSDT",
+        "orderId": "test-order-id-123",
+        "side": "Buy",
+        "execPrice": "50100.50",
+        "execQty": "0.002",
+        "execFee": "0.0551",
+        "execTime": "1700000000000"
+      }
+    ],
+    "nextPageCursor": ""
+  }
+}

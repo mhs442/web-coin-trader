@@ -12,7 +12,10 @@ import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
 import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
 import com.coin.webcointrader.common.dto.response.FindTickerResponse;
+import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
 import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.LogMessage;
@@ -867,12 +870,27 @@ public class AutoTradeService {
         state.setEntryPrice(currentPrice);
 
         try {
-            tradeFacade.placeOrder(orderRequest, session.getUserId(), history, session.getTradeMode());
+            CreateOrderResponse orderResponse = tradeFacade.placeOrder(orderRequest, session.getUserId(), history, session.getTradeMode());
 
-            history.setExecutedPrice(new BigDecimal(currentPrice));
+            // 실체결 데이터 조회 (MAIN 모드만, SIM은 null 반환)
+            String orderId = orderResponse != null && orderResponse.getResult() != null
+                    ? orderResponse.getResult().getOrderId() : null;
+            GetExecutionListResponse.ExecutionInfo exec = orderId != null
+                    ? tradeFacade.getExecution(orderId, session.getSymbol(), session.getUserId(), session.getTradeMode())
+                    : null;
+
+            // 실체결가 / 실수수료 적용 (조회 실패 시 currentPrice / 추정 수수료 fallback)
+            String actualEntryPrice = exec != null ? exec.getExecPrice() : currentPrice;
+            BigDecimal actualEntryFee = exec != null ? new BigDecimal(exec.getExecFee()) : entryFee;
+
+            history.setExecutedPrice(new BigDecimal(actualEntryPrice));
+            history.setFee(actualEntryFee);
             history.setOrderResult(OrderResult.SUCCESS);
             saveTradeHistory(history, session.getTradeMode());
 
+            // 실체결가 / 실수수료를 state에 저장 (TP/SL 기준 및 InvestmentHistory 저장에 사용)
+            state.setEntryPrice(actualEntryPrice);
+            state.setEntryFee(actualEntryFee);
             state.setEntryQty(qty);
             state.setEntryMargin(pattern.getAmount());
             state.setCloseSkipCount(0);
@@ -880,8 +898,8 @@ public class AutoTradeService {
             // handleSellSuccess 1단계 재진입 등)이 실제 포지션 방향 기준으로 동작하도록 정합성 보장
             state.setDirection(entryDirection);
 
-            // 익절/손절 가격 계산 — rate는 가격 변동 기준 (%), 미설정 시 default = 8% 가격 변동
-            BigDecimal entry = new BigDecimal(currentPrice);
+            // 익절/손절 가격 계산 — 실체결가 기준, rate는 가격 변동 기준 (%), 미설정 시 default = 8%
+            BigDecimal entry = new BigDecimal(actualEntryPrice);
             BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 8%
             BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
             BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
@@ -1007,12 +1025,12 @@ public class AutoTradeService {
             history.setOrderType(TradeOrderType.SELL.getTradeOrderType());
             history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
 
-            // 매도 수수료 계산: closeQty × 체결가 × taker 요율
-            BigDecimal exitFee = new BigDecimal(closeQty)
+            // 추정 수수료: 주문 실패 시 TradeService가 이 값으로 이력을 저장하므로 fallback용으로 먼저 세팅
+            BigDecimal estimatedExitFee = new BigDecimal(closeQty)
                     .multiply(new BigDecimal(currentPrice))
                     .multiply(TAKER_FEE_RATE)
                     .setScale(4, RoundingMode.HALF_UP);
-            history.setFee(exitFee);
+            history.setFee(estimatedExitFee);
 
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
                     .category(Category.LINEAR.getCategory())
@@ -1024,30 +1042,51 @@ public class AutoTradeService {
                     .build();
 
             // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
-            tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
+            CreateOrderResponse orderResponse = tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
 
-            // 주문 성공: 이력 저장 (모드에 따라 테이블 분기)
-            history.setExecutedPrice(new BigDecimal(currentPrice));
+            // 실체결 데이터 조회 (MAIN 모드만, SIM은 null 반환)
+            String orderId = orderResponse != null && orderResponse.getResult() != null
+                    ? orderResponse.getResult().getOrderId() : null;
+            GetExecutionListResponse.ExecutionInfo exec = orderId != null
+                    ? tradeFacade.getExecution(orderId, session.getSymbol(), session.getUserId(), session.getTradeMode())
+                    : null;
+
+            String actualExitPrice = exec != null ? exec.getExecPrice() : currentPrice;
+            BigDecimal actualExitFee = exec != null ? new BigDecimal(exec.getExecFee()) : estimatedExitFee;
+
+            // 주문 성공: 실체결가 / 실수수료로 이력 저장
+            history.setExecutedPrice(new BigDecimal(actualExitPrice));
+            history.setFee(actualExitFee);
             history.setOrderResult(OrderResult.SUCCESS);
             saveTradeHistory(history, session.getTradeMode());
 
-            // 투자 히스토리 저장 (마진 + 패턴 정보 기준으로 손익 및 예상가 계산)
+            // 투자 히스토리 저장
             if (state.getEntryMargin() == null) {
                 // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
                 log.warn("투자 히스토리 저장 건너뜀: entryMargin null, queueId={}", queue.getId());
                 session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
             } else {
-                // 진입 수수료 재계산 (state에서 entryQty, entryPrice 참조)
-                BigDecimal entryFee = new BigDecimal(state.getEntryQty())
-                        .multiply(new BigDecimal(state.getEntryPrice()))
-                        .multiply(TAKER_FEE_RATE)
-                        .setScale(4, RoundingMode.HALF_UP);
+                // state.entryFee: 진입 시 저장된 실수수료, null이면 추정값으로 재계산
+                BigDecimal actualEntryFee = state.getEntryFee() != null
+                        ? state.getEntryFee()
+                        : new BigDecimal(state.getEntryQty())
+                                .multiply(new BigDecimal(state.getEntryPrice()))
+                                .multiply(TAKER_FEE_RATE)
+                                .setScale(4, RoundingMode.HALF_UP);
+
+                // 실손익 + 펀딩비 조회 (MAIN 모드만, SIM은 null → 계산식 fallback)
+                GetClosedPnlResponse.ClosedPnlInfo pnlInfo = tradeFacade.getClosedPnl(
+                        session.getSymbol(), session.getUserId(), session.getTradeMode());
+                BigDecimal actualPnl = parseSafeBD(pnlInfo != null ? pnlInfo.getClosedPnl() : null);
+                BigDecimal actualFundingFee = parseSafeBD(pnlInfo != null ? pnlInfo.getFundingFee() : null);
+
                 saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
                         session.getSymbol(), state.getDirection(),
-                        state.getEntryPrice(), currentPrice, state.getEntryMargin(), pattern, entryFee, exitFee, session.getTradeMode());
+                        state.getEntryPrice(), actualExitPrice, state.getEntryMargin(), pattern,
+                        actualEntryFee, actualExitFee, actualPnl, actualFundingFee, session.getTradeMode());
             }
 
-            BigDecimal closeValue = new BigDecimal(closeQty).multiply(new BigDecimal(currentPrice))
+            BigDecimal closeValue = new BigDecimal(closeQty).multiply(new BigDecimal(actualExitPrice))
                     .setScale(2, RoundingMode.HALF_UP);
             session.addLog(now() + " [매도 성공] " + closeSide + " "
                     + closeValue.stripTrailingZeros().toPlainString() + "$ "
@@ -1076,6 +1115,7 @@ public class AutoTradeService {
             state.setEntryPrice(null);
             state.setEntryQty(null);
             state.setEntryMargin(null);
+            state.setEntryFee(null);
             state.setTpPrice(null);
             state.setSlPrice(null);
             state.setBlockBaseTime(null);
@@ -1134,12 +1174,12 @@ public class AutoTradeService {
             history.setOrderType(TradeOrderType.LIQUIDATION.getTradeOrderType());
             history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
 
-            // 청산 수수료 계산: closeQty × 체결가 × taker 요율
-            BigDecimal exitFee = new BigDecimal(closeQty)
+            // 추정 수수료: 주문 실패 시 TradeService가 이 값으로 이력을 저장하므로 fallback용으로 먼저 세팅
+            BigDecimal estimatedExitFee = new BigDecimal(closeQty)
                     .multiply(new BigDecimal(currentPrice))
                     .multiply(TAKER_FEE_RATE)
                     .setScale(4, RoundingMode.HALF_UP);
-            history.setFee(exitFee);
+            history.setFee(estimatedExitFee);
 
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
                     .category(Category.LINEAR.getCategory())
@@ -1150,31 +1190,52 @@ public class AutoTradeService {
                     .reduceOnly(true) // 포지션 청산 전용
                     .build();
 
-            tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
+            CreateOrderResponse orderResponse = tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
 
-            // 청산 주문 성공: 이력 저장 (모드에 따라 테이블 분기)
-            history.setExecutedPrice(new BigDecimal(currentPrice));
+            // 실체결 데이터 조회 (MAIN 모드만, SIM은 null 반환)
+            String orderId = orderResponse != null && orderResponse.getResult() != null
+                    ? orderResponse.getResult().getOrderId() : null;
+            GetExecutionListResponse.ExecutionInfo exec = orderId != null
+                    ? tradeFacade.getExecution(orderId, session.getSymbol(), session.getUserId(), session.getTradeMode())
+                    : null;
+
+            String actualExitPrice = exec != null ? exec.getExecPrice() : currentPrice;
+            BigDecimal actualExitFee = exec != null ? new BigDecimal(exec.getExecFee()) : estimatedExitFee;
+
+            // 청산 주문 성공: 실체결가 / 실수수료로 이력 저장
+            history.setExecutedPrice(new BigDecimal(actualExitPrice));
+            history.setFee(actualExitFee);
             history.setOrderResult(OrderResult.SUCCESS);
             saveTradeHistory(history, session.getTradeMode());
 
-            // 투자 히스토리 저장 (마진 + 패턴 정보 기준으로 손익 및 예상가 계산)
+            // 투자 히스토리 저장
             if (state.getEntryMargin() == null) {
                 // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
                 log.warn("투자 히스토리 저장 건너뜀: entryMargin null, queueId={}", queue.getId());
                 session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
             } else {
-                // 진입 수수료 재계산 (state에서 entryQty, entryPrice 참조)
-                BigDecimal entryFee = new BigDecimal(state.getEntryQty())
-                        .multiply(new BigDecimal(state.getEntryPrice()))
-                        .multiply(TAKER_FEE_RATE)
-                        .setScale(4, RoundingMode.HALF_UP);
+                // state.entryFee: 진입 시 저장된 실수수료, null이면 추정값으로 재계산
+                BigDecimal actualEntryFee = state.getEntryFee() != null
+                        ? state.getEntryFee()
+                        : new BigDecimal(state.getEntryQty())
+                                .multiply(new BigDecimal(state.getEntryPrice()))
+                                .multiply(TAKER_FEE_RATE)
+                                .setScale(4, RoundingMode.HALF_UP);
+
+                // 실손익 + 펀딩비 조회 (MAIN 모드만, SIM은 null → 계산식 fallback)
+                GetClosedPnlResponse.ClosedPnlInfo pnlInfo = tradeFacade.getClosedPnl(
+                        session.getSymbol(), session.getUserId(), session.getTradeMode());
+                BigDecimal actualPnl = parseSafeBD(pnlInfo != null ? pnlInfo.getClosedPnl() : null);
+                BigDecimal actualFundingFee = parseSafeBD(pnlInfo != null ? pnlInfo.getFundingFee() : null);
+
                 saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
                         session.getSymbol(), state.getDirection(),
-                        state.getEntryPrice(), currentPrice, state.getEntryMargin(), currentPattern, entryFee, exitFee, session.getTradeMode());
+                        state.getEntryPrice(), actualExitPrice, state.getEntryMargin(), currentPattern,
+                        actualEntryFee, actualExitFee, actualPnl, actualFundingFee, session.getTradeMode());
             }
             state.setEntryMargin(null); // 포지션 리셋 시 초기화
 
-            BigDecimal closeValue = new BigDecimal(closeQty).multiply(new BigDecimal(currentPrice))
+            BigDecimal closeValue = new BigDecimal(closeQty).multiply(new BigDecimal(actualExitPrice))
                     .setScale(2, RoundingMode.HALF_UP);
             session.addLog(now() + " [청산 완료] " + closeSide + " "
                     + closeValue.stripTrailingZeros().toPlainString() + "$ "
@@ -1218,6 +1279,7 @@ public class AutoTradeService {
         state.setCurrentBlockOrder(2);
         state.setEntryPrice(null);
         state.setEntryQty(null);
+        state.setEntryFee(null);
         state.setTpPrice(null);
         state.setSlPrice(null);
         state.setBlockBaseTime(null);
@@ -1281,52 +1343,73 @@ public class AutoTradeService {
     }
 
     /**
+     * Bybit 응답 문자열을 안전하게 BigDecimal로 변환한다.
+     * null·빈 문자열이거나 파싱 실패 시 null을 반환한다.
+     */
+    private BigDecimal parseSafeBD(String value) {
+        if (value == null || value.isEmpty()) return null;
+        try { return new BigDecimal(value); } catch (NumberFormatException ignored) { return null; }
+    }
+
+    /**
      * 투자 히스토리를 저장한다. (포지션 진입 → 매도/청산 사이클 완료 기록)
-     * 손익금 계산: LONG  → (exitPrice - entryPrice) / entryPrice × margin × leverage
-     *             SHORT → (entryPrice - exitPrice) / entryPrice × margin × leverage
+     *
+     * <p>손익 결정 우선순위:
+     * <ol>
+     *   <li>actualPnl != null (MAIN 모드 정상): Bybit 실손익 직접 사용 (펀딩비 포함)</li>
+     *   <li>actualPnl == null (SIM 모드 또는 Bybit 조회 실패): 계산식 fallback</li>
+     * </ol>
      *
      * @param userId        사용자 ID
      * @param patternStepId 패턴 단계 ID
      * @param symbol        코인 심볼
      * @param side          투자 방향
-     * @param entryPrice    진입가 문자열
-     * @param exitPrice     청산가 문자열
+     * @param entryPrice    진입가 문자열 (MAIN: 실체결가, SIM: WebSocket 현재가)
+     * @param exitPrice     청산가 문자열 (MAIN: 실체결가, SIM: WebSocket 현재가)
      * @param margin        마진 (실제 투자금, 레버리지 미포함)
      * @param pattern       패턴 (레버리지, 익절/손절 비율 참조)
-     * @param entryFee      진입 수수료 (DB 순손익 계산용 — 진입 시 SIM 지갑에서 이미 차감됨)
-     * @param exitFee       청산 수수료 (DB 순손익 계산 + SIM 지갑 반영용)
+     * @param entryFee      진입 수수료 (MAIN: 실수수료, SIM/fallback: 추정값)
+     * @param exitFee       청산 수수료 (MAIN: 실수수료, SIM/fallback: 추정값)
+     * @param actualPnl     Bybit 실손익 (MAIN 성공 시 펀딩비 포함, 조회 실패 또는 SIM이면 null)
+     * @param fundingFee    Bybit 펀딩비 (MAIN 성공 시, 양수: 지급, 음수: 수취, 조회 실패 또는 SIM이면 null)
      * @param tradeMode     거래 모드 (MAIN: investment_history, SIM: sim_investment_history)
      */
     private void saveInvestmentHistory(Long userId, Long patternStepId, String symbol,
                                        Side side, String entryPrice, String exitPrice,
-                                       BigDecimal margin, Pattern pattern, BigDecimal entryFee, BigDecimal exitFee, TradeMode tradeMode) {
+                                       BigDecimal margin, Pattern pattern,
+                                       BigDecimal entryFee, BigDecimal exitFee,
+                                       BigDecimal actualPnl, BigDecimal fundingFee, TradeMode tradeMode) {
         BigDecimal entry = new BigDecimal(entryPrice);
         BigDecimal exit = new BigDecimal(exitPrice);
         int leverage = pattern.getLeverage();
         BigDecimal leverageBd = BigDecimal.valueOf(leverage);
 
-        // 총손익 계산: 마진 × 레버리지 기준 (레버리지 반영)
-        BigDecimal grossProfitLoss;
-        if (side == Side.LONG) {
-            // LONG: (청산가 - 진입가) / 진입가 × 마진 × 레버리지
-            grossProfitLoss = exit.subtract(entry)
-                    .divide(entry, 6, RoundingMode.HALF_UP)
-                    .multiply(margin).multiply(leverageBd)
-                    .setScale(4, RoundingMode.HALF_UP);
+        // 손익 결정: MAIN 정상 → 실손익, SIM or fallback → 계산식
+        BigDecimal grossProfitLoss = null; // SIM 지갑 반영용 (SIM에서만 사용)
+        BigDecimal profitLoss;
+        if (actualPnl != null) {
+            // MAIN 모드: Bybit 실손익 직접 사용 (펀딩비 포함)
+            profitLoss = actualPnl;
         } else {
-            // SHORT: (진입가 - 청산가) / 진입가 × 마진 × 레버리지
-            grossProfitLoss = entry.subtract(exit)
-                    .divide(entry, 6, RoundingMode.HALF_UP)
-                    .multiply(margin).multiply(leverageBd)
-                    .setScale(4, RoundingMode.HALF_UP);
+            // SIM 모드 또는 Bybit 조회 실패 fallback: 계산식으로 산출
+            if (side == Side.LONG) {
+                // LONG: (청산가 - 진입가) / 진입가 × 마진 × 레버리지
+                grossProfitLoss = exit.subtract(entry)
+                        .divide(entry, 6, RoundingMode.HALF_UP)
+                        .multiply(margin).multiply(leverageBd)
+                        .setScale(4, RoundingMode.HALF_UP);
+            } else {
+                // SHORT: (진입가 - 청산가) / 진입가 × 마진 × 레버리지
+                grossProfitLoss = entry.subtract(exit)
+                        .divide(entry, 6, RoundingMode.HALF_UP)
+                        .multiply(margin).multiply(leverageBd)
+                        .setScale(4, RoundingMode.HALF_UP);
+            }
+            profitLoss = grossProfitLoss.subtract(entryFee.add(exitFee));
         }
-        // 순손익 = 총손익 - (진입 수수료 + 청산 수수료) — DB 기록용
-        BigDecimal totalFee = entryFee.add(exitFee);
-        BigDecimal profitLoss = grossProfitLoss.subtract(totalFee);
 
-        // 익절/손절 가격 계산 — openPosition과 동일한 공식 (가격 변동 기준 %)
-        // 미설정 시 default = 8% 가격 변동
-        BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 8%
+        // 익절/손절 예상가 계산 — 진입가 기준, 가격 변동률(%), 미설정 시 default = 8%
+        BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR);
         BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
         BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
         BigDecimal hundred = BigDecimal.valueOf(100);
@@ -1341,7 +1424,7 @@ public class AutoTradeService {
         }
 
         if (tradeMode == TradeMode.SIM) {
-            // SimInvestmentHistory로 sim_investment_history 테이블에 저장
+            // SIM: actualPnl은 항상 null → grossProfitLoss가 반드시 계산됨
             SimInvestmentHistory simHistory = new SimInvestmentHistory();
             simHistory.setUserId(userId);
             simHistory.setPatternStepId(patternStepId);
@@ -1356,8 +1439,7 @@ public class AutoTradeService {
             simHistory.setProfitLoss(profitLoss);
             simInvestmentHistoryRepository.save(simHistory);
 
-            // 모의투자 가상 지갑에 손익 반영
-            // 진입 수수료는 진입 시 placeOrder에서 이미 차감됐으므로 청산 수수료만 반영
+            // 모의 지갑 반영: 진입 수수료는 placeOrder 시 이미 차감 → 청산 수수료만 반영
             BigDecimal walletProfitLoss = grossProfitLoss.subtract(exitFee);
             tradeFacade.applyProfitLoss(userId, margin, walletProfitLoss, tradeMode);
         } else {
@@ -1373,6 +1455,7 @@ public class AutoTradeService {
             investmentHistory.setTpPrice(tpPrice);
             investmentHistory.setSlPrice(slPrice);
             investmentHistory.setProfitLoss(profitLoss);
+            investmentHistory.setFundingFee(fundingFee); // MAIN: 실펀딩비, SIM/fallback: null
             investmentHistoryRepository.save(investmentHistory);
         }
 

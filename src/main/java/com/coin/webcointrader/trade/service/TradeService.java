@@ -8,19 +8,23 @@ import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
 import com.coin.webcointrader.common.dto.request.SetMarginModeRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
 import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
 import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
 import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
 import com.coin.webcointrader.common.entity.TradeHistory;
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
-import com.coin.webcointrader.login.repository.LoginRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -31,12 +35,13 @@ import java.math.BigDecimal;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class TradeService {
 
     private final TradeClient tradeClient;
     private final PositionClient positionClient;
     private final TradeHistoryRepository tradeHistoryRepository;
-    private final LoginRepository loginRepository;
+    private final UserExchangeKeyRepository userExchangeKeyRepository;
     private final AesEncryptor aesEncryptor;
 
     /**
@@ -181,17 +186,89 @@ public class TradeService {
     }
 
     /**
-     * 사용자 API Key/Secret을 복호화하여 ThreadLocal 컨텍스트에 설정한다.
+     * Bybit에서 주문의 실체결 정보를 조회한다.
+     * 주문 직후 체결 내역이 미반영될 수 있으므로 최대 2회 재시도한다.
+     * 조회 실패 시 null을 반환하며, 호출부에서 추정값으로 fallback 처리해야 한다.
+     *
+     * @param orderId 조회할 Bybit 주문 ID
+     * @param symbol  심볼 (예: "BTCUSDT")
+     * @param userId  API Key를 조회할 사용자 ID
+     * @return 실체결 정보 (execPrice, execFee 포함), 조회 실패 시 null
+     */
+    public GetExecutionListResponse.ExecutionInfo getExecution(String orderId, String symbol, Long userId) {
+        setApiKeyContext(userId);
+        try {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                if (attempt > 0) {
+                    try { Thread.sleep(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                }
+                GetExecutionListResponse body = tradeClient
+                        .getExecutionList(Category.LINEAR.getCategory(), symbol, orderId, 1)
+                        .getBody();
+                if (body != null && "0".equals(body.getRetCode())
+                        && body.getResult() != null
+                        && body.getResult().getList() != null
+                        && !body.getResult().getList().isEmpty()) {
+                    return body.getResult().getList().get(0);
+                }
+            }
+            log.warn("[체결 조회 실패] orderId={}, symbol={} — 추정값 fallback 사용", orderId, symbol);
+            return null;
+        } finally {
+            UserApiKeyContext.clear();
+        }
+    }
+
+    /**
+     * Bybit에서 가장 최근 청산된 포지션의 손익 정보를 조회한다. (closedPnl + fundingFee 포함)
+     * 청산 직후 반영 지연 가능성을 고려해 최대 2회 재시도하며,
+     * 30초 이내 청산 건만 조회해 이전 포지션 기록과 혼동을 방지한다.
+     *
+     * @param symbol 심볼 (예: "BTCUSDT")
+     * @param userId API Key를 조회할 사용자 ID
+     * @return 청산 손익 정보 (closedPnl, fundingFee 포함), 조회 실패 시 null
+     */
+    public GetClosedPnlResponse.ClosedPnlInfo getClosedPnl(String symbol, Long userId) {
+        setApiKeyContext(userId);
+        try {
+            // 최근 30초 이내 청산 건만 조회 (이전 포지션 기록 혼입 방지)
+            long startTime = System.currentTimeMillis() - 30_000;
+            for (int attempt = 0; attempt < 2; attempt++) {
+                if (attempt > 0) {
+                    try { Thread.sleep(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                }
+                GetClosedPnlResponse body = positionClient
+                        .getClosedPnl(Category.LINEAR.getCategory(), symbol, 1, startTime)
+                        .getBody();
+                if (body != null && "0".equals(body.getRetCode())
+                        && body.getResult() != null
+                        && body.getResult().getList() != null
+                        && !body.getResult().getList().isEmpty()) {
+                    return body.getResult().getList().get(0);
+                }
+            }
+            log.warn("[손익 조회 실패] symbol={} — 계산식 fallback 사용", symbol);
+            return null;
+        } finally {
+            UserApiKeyContext.clear();
+        }
+    }
+
+    /**
+     * 사용자 거래소 API Key/Secret을 복호화하여 ThreadLocal 컨텍스트에 설정한다.
+     * 현재 BYBIT 단일 거래소만 지원한다.
      *
      * @param userId 사용자 ID
+     * @throws CustomException 거래소 API 키를 찾을 수 없는 경우 (API_KEY_NOT_FOUND)
      */
     private void setApiKeyContext(Long userId) {
-        User user = loginRepository.findById(userId)
-                .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
+        UserExchangeKey key = userExchangeKeyRepository
+                .findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)
+                .orElseThrow(() -> new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
 
         UserApiKeyContext.set(
-                aesEncryptor.decrypt(user.getApiKey()),
-                aesEncryptor.decrypt(user.getApiSecret())
+                aesEncryptor.decrypt(key.getApiKey()),
+                aesEncryptor.decrypt(key.getApiSecret())
         );
     }
 }

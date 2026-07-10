@@ -3,6 +3,8 @@ package com.coin.webcointrader.trade.service;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
 import com.coin.webcointrader.common.dto.response.GetWalletBalanceResponse;
 import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
 import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
@@ -104,6 +106,36 @@ public class TradeFacade {
             return simWalletService.getWalletBalance(userId);
         }
         return walletService.getWalletBalance(userId);
+    }
+
+    /**
+     * MAIN 모드에서 주문의 실체결 정보를 Bybit에서 조회한다.
+     * SIM 모드는 실체결이 없으므로 null을 반환한다.
+     *
+     * @param orderId   Bybit 주문 ID
+     * @param symbol    심볼
+     * @param userId    사용자 ID
+     * @param tradeMode 거래 모드
+     * @return 실체결 정보, SIM 모드이거나 조회 실패 시 null
+     */
+    public GetExecutionListResponse.ExecutionInfo getExecution(
+            String orderId, String symbol, Long userId, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return null;
+        return tradeService.getExecution(orderId, symbol, userId);
+    }
+
+    /**
+     * MAIN 모드에서 가장 최근 청산된 포지션의 손익 정보를 Bybit에서 조회한다. (closedPnl + fundingFee 포함)
+     * SIM 모드는 실체결이 없으므로 null을 반환한다.
+     *
+     * @param symbol    심볼
+     * @param userId    사용자 ID
+     * @param tradeMode 거래 모드
+     * @return 청산 손익 정보, SIM 모드이거나 조회 실패 시 null
+     */
+    public GetClosedPnlResponse.ClosedPnlInfo getClosedPnl(String symbol, Long userId, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return null;
+        return tradeService.getClosedPnl(symbol, userId);
     }
 
     /**

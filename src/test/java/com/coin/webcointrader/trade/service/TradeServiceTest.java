@@ -1,15 +1,19 @@
 package com.coin.webcointrader.trade.service;
 
 import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
+import com.coin.webcointrader.common.client.position.PositionClient;
 import com.coin.webcointrader.common.client.trade.TradeClient;
 import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
-import com.coin.webcointrader.login.repository.LoginRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +23,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
+import java.math.BigDecimal;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,10 +44,13 @@ class TradeServiceTest {
     private TradeClient tradeClient;
 
     @Mock
+    private PositionClient positionClient;
+
+    @Mock
     private TradeHistoryRepository tradeHistoryRepository;
 
     @Mock
-    private LoginRepository loginRepository;
+    private UserExchangeKeyRepository userExchangeKeyRepository;
 
     @Mock
     private AesEncryptor aesEncryptor;
@@ -63,12 +73,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        User user = makeUser(userId, "encKey", "encSecret");
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(loginRepository.findById(userId)).willReturn(Optional.of(user));
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
         given(aesEncryptor.decrypt("encKey")).willReturn("rawApiKey");
         given(aesEncryptor.decrypt("encSecret")).willReturn("rawApiSecret");
         given(tradeClient.createOrder(request)).willReturn(ResponseEntity.ok(response));
@@ -93,12 +103,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();  // category 없음
 
-        User user = makeUser(userId, "encKey", "encSecret");
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(loginRepository.findById(userId)).willReturn(Optional.of(user));
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(tradeClient.createOrder(any(CreateOrderRequest.class))).willReturn(ResponseEntity.ok(response));
 
@@ -110,8 +120,8 @@ class TradeServiceTest {
     }
 
     @Test
-    @DisplayName("placeOrder: 사용자를 찾을 수 없으면 CustomException(USER_NOT_FOUND) 발생")
-    void placeOrder_userNotFound() {
+    @DisplayName("placeOrder: 거래소 API 키를 찾을 수 없으면 CustomException(API_KEY_NOT_FOUND) 발생")
+    void placeOrder_apiKeyNotFound() {
         // given
         Long userId = 99L;
         CreateOrderRequest request = CreateOrderRequest.builder()
@@ -122,12 +132,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        given(loginRepository.findById(userId)).willReturn(Optional.empty());
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.empty());
 
         // when & then
         assertThatThrownBy(() -> tradeService.placeOrder(request, userId))
                 .isInstanceOf(CustomException.class)
-                .hasMessageContaining(ExceptionMessage.USER_NOT_FOUND.getMessage());
+                .hasMessageContaining(ExceptionMessage.API_KEY_NOT_FOUND.getMessage());
     }
 
     @Test
@@ -143,8 +153,8 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        User user = makeUser(userId, "encKey", "encSecret");
-        given(loginRepository.findById(userId)).willReturn(Optional.of(user));
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(tradeClient.createOrder(any())).willThrow(new RuntimeException("API 오류"));
 
@@ -158,18 +168,188 @@ class TradeServiceTest {
     }
 
     // ─────────────────────────────────────────────
+    // getExecution 테스트
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getExecution: 정상 응답이면 실체결 정보를 반환한다")
+    void getExecution_성공_실체결데이터반환() {
+        // given
+        Long userId = 1L;
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(aesEncryptor.decrypt(anyString())).willReturn("raw");
+
+        GetExecutionListResponse response = makeExecutionListResponse("50100.50", "0.0551");
+        given(tradeClient.getExecutionList(anyString(), anyString(), anyString(), anyInt()))
+                .willReturn(ResponseEntity.ok(response));
+
+        // when
+        GetExecutionListResponse.ExecutionInfo result =
+                tradeService.getExecution("order-123", "BTCUSDT", userId);
+
+        // then
+        assertThat(result).isNotNull();
+        assertThat(result.getExecPrice()).isEqualTo("50100.50");
+        assertThat(result.getExecFee()).isEqualTo("0.0551");
+    }
+
+    @Test
+    @DisplayName("getExecution: 1차 빈 응답 후 2차 성공 시 실체결 정보를 반환한다")
+    void getExecution_1차빈응답_2차성공시반환() {
+        // given
+        Long userId = 1L;
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(aesEncryptor.decrypt(anyString())).willReturn("raw");
+
+        GetExecutionListResponse empty = makeEmptyExecutionListResponse();
+        GetExecutionListResponse success = makeExecutionListResponse("50200.00", "0.0552");
+        given(tradeClient.getExecutionList(anyString(), anyString(), anyString(), anyInt()))
+                .willReturn(ResponseEntity.ok(empty))
+                .willReturn(ResponseEntity.ok(success));
+
+        // when
+        GetExecutionListResponse.ExecutionInfo result =
+                tradeService.getExecution("order-123", "BTCUSDT", userId);
+
+        // then
+        assertThat(result).isNotNull();
+        assertThat(result.getExecPrice()).isEqualTo("50200.00");
+    }
+
+    @Test
+    @DisplayName("getExecution: 2회 모두 빈 응답이면 null을 반환한다")
+    void getExecution_2회빈응답_null반환() {
+        // given
+        Long userId = 1L;
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(aesEncryptor.decrypt(anyString())).willReturn("raw");
+
+        GetExecutionListResponse empty = makeEmptyExecutionListResponse();
+        given(tradeClient.getExecutionList(anyString(), anyString(), anyString(), anyInt()))
+                .willReturn(ResponseEntity.ok(empty));
+
+        // when
+        GetExecutionListResponse.ExecutionInfo result =
+                tradeService.getExecution("order-123", "BTCUSDT", userId);
+
+        // then
+        assertThat(result).isNull();
+    }
+
+    // ─────────────────────────────────────────────
+    // getClosedPnl 테스트
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getClosedPnl: 정상 응답이면 ClosedPnlInfo(closedPnl + fundingFee)를 반환한다")
+    void getClosedPnl_성공_실손익반환() {
+        // given
+        Long userId = 1L;
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(aesEncryptor.decrypt(anyString())).willReturn("raw");
+
+        GetClosedPnlResponse response = makeClosedPnlResponse("12.5000", "-0.0125");
+        given(positionClient.getClosedPnl(anyString(), anyString(), anyInt(), anyLong()))
+                .willReturn(ResponseEntity.ok(response));
+
+        // when
+        GetClosedPnlResponse.ClosedPnlInfo result = tradeService.getClosedPnl("BTCUSDT", userId);
+
+        // then
+        assertThat(result).isNotNull();
+        assertThat(new BigDecimal(result.getClosedPnl())).isEqualByComparingTo(new BigDecimal("12.5000"));
+        assertThat(new BigDecimal(result.getFundingFee())).isEqualByComparingTo(new BigDecimal("-0.0125"));
+    }
+
+    @Test
+    @DisplayName("getClosedPnl: 2회 모두 빈 응답이면 null을 반환한다")
+    void getClosedPnl_빈응답_null반환() {
+        // given
+        Long userId = 1L;
+        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(aesEncryptor.decrypt(anyString())).willReturn("raw");
+
+        GetClosedPnlResponse empty = makeEmptyClosedPnlResponse();
+        given(positionClient.getClosedPnl(anyString(), anyString(), anyInt(), anyLong()))
+                .willReturn(ResponseEntity.ok(empty));
+
+        // when
+        GetClosedPnlResponse.ClosedPnlInfo result = tradeService.getClosedPnl("BTCUSDT", userId);
+
+        // then
+        assertThat(result).isNull();
+    }
+
+    // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private User makeUser(Long id, String encApiKey, String encApiSecret) {
-        User user = new User();
-        user.setId(id);
-        user.setPhoneNumber("01012345678");
-        user.setUsername("tester");
-        user.setEmail("test@test.com");
-        user.setPassword("encodedPw");
-        user.setApiKey(encApiKey);
-        user.setApiSecret(encApiSecret);
-        return user;
+    private GetExecutionListResponse makeExecutionListResponse(String execPrice, String execFee) {
+        GetExecutionListResponse.ExecutionInfo info = new GetExecutionListResponse.ExecutionInfo();
+        info.setExecPrice(execPrice);
+        info.setExecFee(execFee);
+        info.setSymbol("BTCUSDT");
+        info.setOrderId("order-123");
+
+        GetExecutionListResponse.Result result = new GetExecutionListResponse.Result();
+        result.setList(List.of(info));
+
+        GetExecutionListResponse response = new GetExecutionListResponse();
+        response.setRetCode("0");
+        response.setRetMsg("OK");
+        response.setResult(result);
+        return response;
+    }
+
+    private GetExecutionListResponse makeEmptyExecutionListResponse() {
+        GetExecutionListResponse.Result result = new GetExecutionListResponse.Result();
+        result.setList(Collections.emptyList());
+
+        GetExecutionListResponse response = new GetExecutionListResponse();
+        response.setRetCode("0");
+        response.setRetMsg("OK");
+        response.setResult(result);
+        return response;
+    }
+
+    private GetClosedPnlResponse makeClosedPnlResponse(String closedPnl, String fundingFee) {
+        GetClosedPnlResponse.ClosedPnlInfo info = new GetClosedPnlResponse.ClosedPnlInfo();
+        info.setClosedPnl(closedPnl);
+        info.setFundingFee(fundingFee);
+        info.setSymbol("BTCUSDT");
+
+        GetClosedPnlResponse.Result result = new GetClosedPnlResponse.Result();
+        result.setList(List.of(info));
+
+        GetClosedPnlResponse response = new GetClosedPnlResponse();
+        response.setRetCode("0");
+        response.setRetMsg("OK");
+        response.setResult(result);
+        return response;
+    }
+
+    private GetClosedPnlResponse makeEmptyClosedPnlResponse() {
+        GetClosedPnlResponse.Result result = new GetClosedPnlResponse.Result();
+        result.setList(Collections.emptyList());
+
+        GetClosedPnlResponse response = new GetClosedPnlResponse();
+        response.setRetCode("0");
+        response.setRetMsg("OK");
+        response.setResult(result);
+        return response;
+    }
+
+    private UserExchangeKey makeExchangeKey(Long userId, String encApiKey, String encApiSecret) {
+        UserExchangeKey key = new UserExchangeKey();
+        key.setUserId(userId);
+        key.setExchangeType(ExchangeType.BYBIT);
+        key.setApiKey(encApiKey);
+        key.setApiSecret(encApiSecret);
+        return key;
     }
 }

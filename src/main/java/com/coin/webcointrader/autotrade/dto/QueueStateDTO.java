@@ -34,9 +34,10 @@ public class QueueStateDTO {
     private String blockBasePrice;         // 현재 블록 기준가 (60초 후 비교 대상)
 
     // 포지션 상태
-    private String entryPrice;         // 포지션 진입가
+    private String entryPrice;         // 포지션 진입가 (MAIN: 실체결가, SIM: WebSocket 현재가)
     private String entryQty;           // 진입 시 코인 수량 (매도/청산 시 포지션 전량 청산에 재사용)
     private BigDecimal entryMargin;    // 진입 시 마진 (pattern.amount, applyProfitLoss 원금 기준)
+    private BigDecimal entryFee;       // 진입 시 수수료 (MAIN: 실수수료, SIM/fallback: 추정값)
     private int closeSkipCount;        // 청산 수량 오류 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
     private int entrySkipCount;        // 진입 시 최소 주문 단위 미달(qty=0) 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
     private BigDecimal tpPrice;        // 익절가 (POSITION_HOLDING 매도 트리거 기준, 진입 시점 계산)
@@ -95,6 +96,7 @@ public class QueueStateDTO {
         entryPrice = null;
         entryQty = null;
         entryMargin = null;
+        entryFee = null;
         closeSkipCount = 0;
         entrySkipCount = 0;
         tpPrice = null;

@@ -2,6 +2,9 @@ package com.coin.webcointrader.trade.controller;
 
 import com.coin.webcointrader.common.dto.UserDTO;
 import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.repository.LoginRepository;
 import com.github.tomakehurst.wiremock.client.WireMock;
@@ -36,6 +39,9 @@ class TradeControllerTest {
     private LoginRepository loginRepository;
 
     @Autowired
+    private UserExchangeKeyRepository userExchangeKeyRepository;
+
+    @Autowired
     private AesEncryptor aesEncryptor;
 
     private Long savedUserId;
@@ -66,6 +72,14 @@ class TradeControllerTest {
         User saved = loginRepository.save(user);
         savedUserId = saved.getId();
 
+        // TradeService가 UserExchangeKeyRepository로 조회하므로 함께 저장
+        UserExchangeKey exchangeKey = new UserExchangeKey();
+        exchangeKey.setUserId(savedUserId);
+        exchangeKey.setExchangeType(ExchangeType.BYBIT);
+        exchangeKey.setApiKey(aesEncryptor.encrypt("testApiKey"));
+        exchangeKey.setApiSecret(aesEncryptor.encrypt("testApiSecret"));
+        userExchangeKeyRepository.save(exchangeKey);
+
         UserDTO userDTO = UserDTO.builder()
                 .id(savedUserId)
                 .phoneNumber("01099998888")
@@ -78,6 +92,7 @@ class TradeControllerTest {
 
     @AfterEach
     void tearDown() {
+        userExchangeKeyRepository.deleteAll();
         loginRepository.deleteAll();
         WireMock.reset();
     }

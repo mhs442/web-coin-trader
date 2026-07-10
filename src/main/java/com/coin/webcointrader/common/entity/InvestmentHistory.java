@@ -56,4 +56,7 @@ public class InvestmentHistory extends BaseEntity {
 
     @Column(precision = 20, scale = 8)
     private BigDecimal slPrice;         // 손절 예상가
+
+    @Column(precision = 20, scale = 8)
+    private BigDecimal fundingFee;      // 펀딩비 (MAIN 모드에서만 채워짐, 양수: 지급, 음수: 수취)
 }

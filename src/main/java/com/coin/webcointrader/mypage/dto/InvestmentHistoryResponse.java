@@ -17,5 +17,6 @@ public class InvestmentHistoryResponse {
     private String tpPrice;         // 익절 예상가
     private String slPrice;         // 손절 예상가
     private String profitLoss;      // 손익금
+    private String fundingFee;      // 펀딩비 (MAIN에서만, null이면 미표시)
     private String createdAt;       // 거래 일시 (yyyy-MM-dd HH:mm:ss)
 }

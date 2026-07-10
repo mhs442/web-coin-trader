@@ -3,6 +3,7 @@ package com.coin.webcointrader.common.client.position;
 import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
 import com.coin.webcointrader.common.dto.request.SetMarginModeRequest;
 import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
+import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
 import com.coin.webcointrader.common.dto.response.GetPositionListResponse;
 import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
 import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
@@ -65,4 +66,22 @@ public interface PositionClient {
      */
     @PostMapping("/v5/position/trading-stop")
     ResponseEntity<SetTradingStopResponse> setTradingStop(@RequestBody SetTradingStopRequest request);
+
+    /**
+     * Bybit GET /v5/position/closed-pnl
+     * 청산된 포지션의 실손익을 조회한다. (매매 손익 ± 펀딩비 - 수수료 포함)
+     *
+     * @param category  상품 유형 (예: "linear")
+     * @param symbol    심볼 (예: "BTCUSDT")
+     * @param limit     조회 건수 (최대 100)
+     * @param startTime 조회 시작 타임스탬프 (ms, 오래된 청산 건 제외용)
+     * @return 청산 손익 목록 (closedPnl, avgEntryPrice, avgExitPrice 포함)
+     */
+    @GetMapping("/v5/position/closed-pnl")
+    ResponseEntity<GetClosedPnlResponse> getClosedPnl(
+            @RequestParam("category") String category,
+            @RequestParam("symbol") String symbol,
+            @RequestParam("limit") int limit,
+            @RequestParam("startTime") long startTime
+    );
 }
