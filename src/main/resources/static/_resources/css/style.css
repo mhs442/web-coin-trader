@@ -794,6 +794,16 @@ body {
     font-weight: 600;
 }
 
+.exchange-badge {
+    font-size: 0.75rem;
+    color: #6f42c1;
+    background-color: #f3ecfc;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-left: 6px;
+}
+
 /* 단계 카드 */
 .step-card {
     border: 2px solid #dee2e6;
@@ -2379,6 +2389,24 @@ body {
 
 .trade-detail-table tbody tr:last-child td {
     border-bottom: none;
+}
+
+.funding-fee-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    margin-top: 8px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    color: #495057;
+}
+
+.funding-fee-label {
+    font-size: 0.75rem;
+    color: #adb5bd;
 }
 
 /* 주문 타입 뱃지 */

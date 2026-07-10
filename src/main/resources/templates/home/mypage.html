@@ -348,6 +348,7 @@
                             ' data-entry="' + (inv.entryPrice || '') + '"' +
                             ' data-tp="' + (inv.tpPrice || '') + '"' +
                             ' data-sl="' + (inv.slPrice || '') + '"' +
+                            ' data-funding-fee="' + (inv.fundingFee || '') + '"' +
                             ' onclick="toggleTradeDetail(event)" style="cursor:pointer;">' +
                             '<td onclick="event.stopPropagation()"><input type="checkbox" class="inv-check" value="' + inv.id + '"></td>' +
                             '<td>' + inv.createdAt + '</td>' +
@@ -396,6 +397,8 @@
         const entryPrice    = parseFloat($row.data('entry')) || 0;
         const tpPrice       = parseFloat($row.data('tp'))    || 0;
         const slPrice       = parseFloat($row.data('sl'))    || 0;
+        const fundingFeeRaw = $row.data('funding-fee');
+        const fundingFeeNum = fundingFeeRaw !== '' ? parseFloat(fundingFeeRaw) : null;
         const $icon         = $('#trade-detail-icon-' + invId);
 
         // 투자금 기준 손/익절율 계산
@@ -434,7 +437,8 @@
                         // 전체 수수료 합산 → 총손익(순수익) = 실세 손익금 + 총수수료
                         const totalFee = trades.reduce(function(s, t) { return s + (parseFloat(t.fee) || 0); }, 0);
                         const netPL = parseFloat(netProfitLoss) || 0;
-                        const grossPL = netPL + totalFee;
+                        // grossPL: 수수료·펀딩비 차감 전 순수 매매 차익 (closedPnl + taker_fees + fundingFee)
+                        const grossPL = netPL + totalFee + (fundingFeeNum !== null && !isNaN(fundingFeeNum) ? fundingFeeNum : 0);
 
                         // 손/익절율 요약 바
                         let tpSlBar = '';
@@ -497,6 +501,22 @@
                         });
 
                         html += '</tbody></table>';
+
+                        // 펀딩비 별도 표시 (MAIN 모드에서만 채워짐)
+                        // Bybit fundingFee: 양수=지급(비용), 음수=수취(이익) → pnlImpact = -fundingFee
+                        if (fundingFeeNum !== null && !isNaN(fundingFeeNum) && fundingFeeNum !== 0) {
+                            const pnlImpact = -fundingFeeNum;
+                            const feeClass = pnlImpact >= 0 ? 'status-active' : 'status-failed';
+                            const feeLabel = pnlImpact >= 0 ? '수취' : '지급';
+                            html +=
+                                '<div class="funding-fee-bar">' +
+                                    '펀딩비 <span class="' + feeClass + '">' +
+                                        (pnlImpact >= 0 ? '+' : '') + pnlImpact.toFixed(4) + ' USDT' +
+                                    '</span>' +
+                                    ' <span class="funding-fee-label">(' + feeLabel + ')</span>' +
+                                '</div>';
+                        }
+
                         $body.html(html);
                     }
                     $body.data('loaded', true);
@@ -781,7 +801,7 @@
                         section.setAttribute('data-symbol', sym);
                         section.innerHTML = `
                             <div class="mypage-section-header">
-                                <h3 class="mypage-section-title">${sym}</h3>
+                                <h3 class="mypage-section-title">${sym} <span class="exchange-badge">${items[0].exchangeType || 'BYBIT'}</span></h3>
                                 <a href="/chart?symbol=${sym}" class="chart-link-btn">차트로 이동 →</a>
                             </div>
                             <div class="mypage-table-wrapper">

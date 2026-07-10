@@ -475,6 +475,7 @@ public class MyPageService {
         return MyPagePatternResponse.builder()
                 .id(queue.getId())
                 .symbol(queue.getSymbol())
+                .exchangeType(queue.getExchangeType().name())
                 .active(queue.isActive())
                 .triggerRate(queue.getTriggerRate())
                 .createdAt(queue.getCreatedAt().format(DT_FMT))
@@ -525,6 +526,7 @@ public class MyPageService {
                 .tpPrice(h.getTpPrice() != null ? h.getTpPrice().stripTrailingZeros().toPlainString() : null)
                 .slPrice(h.getSlPrice() != null ? h.getSlPrice().stripTrailingZeros().toPlainString() : null)
                 .profitLoss(h.getProfitLoss().stripTrailingZeros().toPlainString())
+                .fundingFee(h.getFundingFee() != null ? h.getFundingFee().stripTrailingZeros().toPlainString() : null)
                 .patternStepId(h.getPatternStepId())
                 .createdAt(h.getCreatedAt().format(DT_FMT))
                 .build();
