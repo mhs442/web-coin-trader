@@ -2,12 +2,13 @@ package com.coin.webcointrader.wallet.service;
 
 import com.coin.webcointrader.common.client.account.AccountClient;
 import com.coin.webcointrader.common.dto.response.GetWalletBalanceResponse;
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
-import com.coin.webcointrader.login.repository.LoginRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -20,7 +21,7 @@ import org.springframework.stereotype.Service;
 public class WalletService {
 
     private final AccountClient accountClient;
-    private final LoginRepository loginRepository;
+    private final UserExchangeKeyRepository userExchangeKeyRepository;
     private final AesEncryptor aesEncryptor;
 
     /**
@@ -34,12 +35,13 @@ public class WalletService {
      * @throws CustomException 사용자를 찾을 수 없거나(USER_NOT_FOUND), API 호출 실패 시(GET_WALLET_BALANCE_FAILED)
      */
     public GetWalletBalanceResponse getWalletBalance(Long userId) {
-        User user = loginRepository.findById(userId)
-                .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
+        UserExchangeKey key = userExchangeKeyRepository
+                .findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)
+                .orElseThrow(() -> new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
 
         UserApiKeyContext.set(
-                aesEncryptor.decrypt(user.getApiKey()),
-                aesEncryptor.decrypt(user.getApiSecret())
+                aesEncryptor.decrypt(key.getApiKey()),
+                aesEncryptor.decrypt(key.getApiSecret())
         );
 
         try {

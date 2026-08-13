@@ -10,7 +10,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -25,6 +24,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
@@ -65,13 +65,11 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
     // 현재 kline.1 구독 중인 심볼 목록 (1분봉 봉 마감 알림용)
     private final Set<String> subscribedKlineSymbols = ConcurrentHashMap.newKeySet();
 
-    // 티커 데이터 수신 콜백
-    @Setter
-    private Consumer<WebSocketTickerDTO> tickerCallback;    // WebSocketTickerDTO를 처리할 콜백 함수
+    // 티커 데이터 수신 콜백 목록 (여러 구독자 지원)
+    private final List<Consumer<WebSocketTickerDTO>> tickerCallbacks = new CopyOnWriteArrayList<>();
 
-    // Kline(봉) 데이터 수신 콜백 (confirm=true 메시지 포함, 콜백 측에서 필터링)
-    @Setter
-    private Consumer<WebSocketKlineDTO> klineCallback;
+    // Kline(봉) 데이터 수신 콜백 목록 (여러 구독자 지원)
+    private final List<Consumer<WebSocketKlineDTO>> klineCallbacks = new CopyOnWriteArrayList<>();
 
     // heartbeat 스케줄러
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
@@ -116,6 +114,24 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 log.warn(LogMessage.WS_SESSION_CLOSE_ERROR.getMessage(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * 티커 데이터 수신 콜백을 추가한다.
+     *
+     * @param callback WebSocketTickerDTO를 처리할 콜백
+     */
+    public void addTickerCallback(Consumer<WebSocketTickerDTO> callback) {
+        tickerCallbacks.add(callback);
+    }
+
+    /**
+     * Kline 데이터 수신 콜백을 추가한다.
+     *
+     * @param callback WebSocketKlineDTO를 처리할 콜백
+     */
+    public void addKlineCallback(Consumer<WebSocketKlineDTO> callback) {
+        klineCallbacks.add(callback);
     }
 
     /**
@@ -267,13 +283,13 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 String topic = node.get("topic").asText();
                 if (topic.startsWith("tickers.")) {
                     WebSocketTickerDTO dto = objectMapper.readValue(payload, WebSocketTickerDTO.class);
-                    if (tickerCallback != null) {
-                        tickerCallback.accept(dto);
+                    for (Consumer<WebSocketTickerDTO> cb : tickerCallbacks) {
+                        cb.accept(dto);
                     }
                 } else if (topic.startsWith("kline.")) {
                     WebSocketKlineDTO dto = objectMapper.readValue(payload, WebSocketKlineDTO.class);
-                    if (klineCallback != null) {
-                        klineCallback.accept(dto);
+                    for (Consumer<WebSocketKlineDTO> cb : klineCallbacks) {
+                        cb.accept(dto);
                     }
                 }
             }

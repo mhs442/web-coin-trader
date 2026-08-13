@@ -32,7 +32,7 @@ public class PatternQueue extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
-    private ExchangeType exchangeType = ExchangeType.BYBIT;   // 거래소 타입 (기본: BYBIT)
+    private ExchangeType exchangeType = ExchangeType.BYBIT;  // 거래소 타입 (기본값: BYBIT)
 
     @Column(nullable = false)
     private boolean isActive = false;             // 활성화 여부 (Y: 활성, N: 비활성)

@@ -16,6 +16,7 @@ import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
 import com.coin.webcointrader.common.entity.TradeHistory;
 import com.coin.webcointrader.common.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.Category;
+import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.OrderResult;

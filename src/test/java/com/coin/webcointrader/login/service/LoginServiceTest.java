@@ -44,10 +44,10 @@ class LoginServiceTest {
     private AesEncryptor aesEncryptor;
 
     @Mock
-    private SimWalletRepository simWalletRepository;
+    private UserExchangeKeyRepository userExchangeKeyRepository;
 
     @Mock
-    private UserExchangeKeyRepository userExchangeKeyRepository;
+    private SimWalletRepository simWalletRepository;
 
     @Test
     @DisplayName("loadUserByUsername: 전화번호로 사용자를 찾으면 UserDTO를 반환한다")
@@ -59,8 +59,6 @@ class LoginServiceTest {
         user.setUsername("테스터");
         user.setPassword("encodedPassword");
         user.setEmail("test@test.com");
-        user.setApiKey("encryptedKey");
-        user.setApiSecret("encryptedSecret");
 
         given(loginRepository.findByPhoneNumber("01012345678"))
                 .willReturn(Optional.of(user));

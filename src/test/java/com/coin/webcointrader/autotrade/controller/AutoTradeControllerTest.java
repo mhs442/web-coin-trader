@@ -113,6 +113,8 @@ class AutoTradeControllerTest {
                                             {
                                                 "amount": 10,
                                                 "leverage": 5,
+                                                "stopLossRate": 1.0,
+                                                "takeProfitRate": 5.0,
                                                 "conditionBlocks": [{"side": "SHORT", "blockOrder": 1, "isLeaf": false}],
                                                 "leafBlock": {"side": "SHORT", "blockOrder": 2, "isLeaf": true}
                                             }

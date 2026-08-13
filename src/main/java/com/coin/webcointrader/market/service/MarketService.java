@@ -21,9 +21,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 
 /**
  * Bybit 시세 데이터 서비스.
@@ -40,12 +38,12 @@ public class MarketService {
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
 
     /**
-     * 애플리케이션 시작 시 WebSocket 티커/Kline 콜백을 등록한다.
+     * 애플리케이션 시작 시 WebSocket 티커 콜백을 등록한다.
+     * Kline 콜백은 BybitExchangeAdapter에서 등록 및 처리한다.
      */
     @PostConstruct
     public void init() {
-        bybitWebSocketClient.setTickerCallback(this::onTickerUpdate);
-        bybitWebSocketClient.setKlineCallback(this::onKlineUpdate);
+        bybitWebSocketClient.addTickerCallback(this::onTickerUpdate);
         log.info(LogMessage.WS_TICKER_CALLBACK_REGISTERED.getMessage());
         refreshQtyStepCache();
     }
@@ -55,12 +53,6 @@ public class MarketService {
 
     // WebSocket 실시간 데이터 저장 (심볼 → 티커 정보)
     private final ConcurrentHashMap<String, FindTickerResponse.TickerInfo> wsTickerMap = new ConcurrentHashMap<>();
-
-    // 가격 변동 리스너 목록 (BiConsumer<심볼, 현재가>)
-    private final List<BiConsumer<String, String>> priceListeners = new CopyOnWriteArrayList<>();
-
-    // 봉 마감 리스너 목록 (BiConsumer<심볼, KlineData> — confirm=true일 때만 호출됨)
-    private final List<BiConsumer<String, WebSocketKlineDTO.KlineData>> klineConfirmedListeners = new CopyOnWriteArrayList<>();
 
     // 종목별 qtyStep 캐시 (심볼 → qtyStep, 예: "BTCUSDT" → "0.001")
     private final ConcurrentHashMap<String, String> qtyStepCache = new ConcurrentHashMap<>();
@@ -137,11 +129,6 @@ public class MarketService {
             });
         }
 
-        // 가격 변동 리스너 알림 (AutoTradeService 등)
-        if (data.getLastPrice() != null) {
-            notifyPriceListeners(symbol, data.getLastPrice());
-        }
-
         // STOMP를 통해 브라우저 구독자에게 실시간 가격 push
         // /topic/price.{symbol}을 구독 중인 브라우저에 WebSocket 티커 데이터를 전달한다
         FindTickerResponse.TickerInfo wsInfo = wsTickerMap.get(symbol);
@@ -158,53 +145,6 @@ public class MarketService {
      */
     public boolean isWsActive() {
         return System.currentTimeMillis() - lastWsTickMs < 5_000;
-    }
-
-    /**
-     * 가격 변동 리스너를 등록한다.
-     * WebSocket에서 가격이 수신될 때마다 콜백이 호출된다.
-     *
-     * @param listener BiConsumer(심볼, 현재가) 콜백
-     */
-    public void addPriceListener(BiConsumer<String, String> listener) {
-        priceListeners.add(listener);
-    }
-
-    /**
-     * 봉 마감(1분봉 confirm=true) 리스너를 등록한다.
-     * 거래소가 봉 마감을 명시한 시점에 콜백이 호출된다 (= 시계 동기화 무관).
-     *
-     * @param listener BiConsumer(심볼, 마감된 KlineData) 콜백
-     */
-    public void addKlineConfirmedListener(BiConsumer<String, WebSocketKlineDTO.KlineData> listener) {
-        klineConfirmedListeners.add(listener);
-    }
-
-    /**
-     * WebSocket에서 수신한 Kline 메시지를 처리한다.
-     * confirm=true(봉 마감)인 경우에만 등록된 리스너에 알린다.
-     *
-     * @param dto WebSocket Kline 메시지 DTO
-     */
-    public void onKlineUpdate(WebSocketKlineDTO dto) {
-        if (dto == null || dto.getData() == null || dto.getTopic() == null) {
-            return;
-        }
-
-        // 토픽에서 심볼 추출 (예: "kline.1.BTCUSDT" → "BTCUSDT")
-        String topic = dto.getTopic();
-        int lastDot = topic.lastIndexOf('.');
-        if (lastDot < 0 || lastDot == topic.length() - 1) {
-            return;
-        }
-        String symbol = topic.substring(lastDot + 1);
-
-        for (WebSocketKlineDTO.KlineData kline : dto.getData()) {
-            // confirm=true인 봉만 처리 (마감된 봉 = 종가/시가가 확정된 상태)
-            if (Boolean.TRUE.equals(kline.getConfirm())) {
-                notifyKlineConfirmedListeners(symbol, kline);
-            }
-        }
     }
 
     /**
@@ -379,29 +319,4 @@ public class MarketService {
         }
     }
 
-    /**
-     * 등록된 가격 리스너에 가격 변동을 알린다.
-     */
-    private void notifyPriceListeners(String symbol, String price) {
-        for (BiConsumer<String, String> listener : priceListeners) {
-            try {
-                listener.accept(symbol, price);
-            } catch (Exception e) {
-                log.error(LogMessage.PRICE_LISTENER_ERROR.getMessage(), symbol, e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * 등록된 봉 마감 리스너에 마감된 1분봉을 알린다.
-     */
-    private void notifyKlineConfirmedListeners(String symbol, WebSocketKlineDTO.KlineData kline) {
-        for (BiConsumer<String, WebSocketKlineDTO.KlineData> listener : klineConfirmedListeners) {
-            try {
-                listener.accept(symbol, kline);
-            } catch (Exception e) {
-                log.error("[KlineListener 오류] symbol={}, error={}", symbol, e.getMessage());
-            }
-        }
-    }
 }

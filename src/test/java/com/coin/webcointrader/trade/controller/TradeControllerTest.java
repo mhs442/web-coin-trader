@@ -61,14 +61,12 @@ class TradeControllerTest {
                         .withHeader("Content-Type", "application/json")
                         .withBodyFile("TradeClient_createOrder.json")));
 
-        // 테스트 유저 저장 (AES로 실제 암호화하여 TradeService가 복호화할 수 있도록 함)
+        // 테스트 유저 저장 후 user_exchange_key에 API Key 저장 (TradeService가 복호화할 수 있도록 AES 암호화)
         User user = new User();
         user.setUsername("trader");
         user.setPhoneNumber("01099998888");
         user.setEmail("trader@test.com");
         user.setPassword("encodedPw");
-        user.setApiKey(aesEncryptor.encrypt("testApiKey"));
-        user.setApiSecret(aesEncryptor.encrypt("testApiSecret"));
         User saved = loginRepository.save(user);
         savedUserId = saved.getId();
 

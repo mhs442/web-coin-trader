@@ -201,55 +201,6 @@ class MarketServiceTest {
         assertThatCode(() -> marketService.onTickerUpdate(emptyDto)).doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────
-    // 가격 리스너
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("onTickerUpdate: 가격 변동 시 등록된 리스너에 알림한다")
-    void onTickerUpdate_notifiesPriceListeners() {
-        // given
-        AtomicReference<String> receivedSymbol = new AtomicReference<>();
-        AtomicReference<String> receivedPrice = new AtomicReference<>();
-        marketService.addPriceListener((symbol, price) -> {
-            receivedSymbol.set(symbol);
-            receivedPrice.set(price);
-        });
-
-        WebSocketTickerDTO dto = makeWsTickerDTO("snapshot", "BTCUSDT", "50000.00", "10000.0");
-
-        // when
-        marketService.onTickerUpdate(dto);
-
-        // then
-        assertThat(receivedSymbol.get()).isEqualTo("BTCUSDT");
-        assertThat(receivedPrice.get()).isEqualTo("50000.00");
-    }
-
-    @Test
-    @DisplayName("onTickerUpdate: 리스너에서 예외가 발생해도 다른 리스너는 정상 호출된다")
-    void onTickerUpdate_listenerExceptionDoesNotAffectOthers() {
-        // given
-        AtomicReference<String> secondListenerPrice = new AtomicReference<>();
-
-        // 첫 번째 리스너: 예외 발생
-        marketService.addPriceListener((symbol, price) -> {
-            throw new RuntimeException("테스트 예외");
-        });
-        // 두 번째 리스너: 정상 처리
-        marketService.addPriceListener((symbol, price) -> {
-            secondListenerPrice.set(price);
-        });
-
-        WebSocketTickerDTO dto = makeWsTickerDTO("snapshot", "BTCUSDT", "50000.00", "10000.0");
-
-        // when
-        marketService.onTickerUpdate(dto);
-
-        // then - 두 번째 리스너 정상 호출
-        assertThat(secondListenerPrice.get()).isEqualTo("50000.00");
-    }
-
     @Test
     @DisplayName("onTickerUpdate: 가격 변동 시 STOMP로 /topic/price.{symbol}에 push한다")
     void onTickerUpdate_pushesToStompPrice() {

@@ -73,6 +73,7 @@ public class AutoTradeController {
                                              @AuthenticationPrincipal UserDTO user) {
         TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
         patternQueueService.deleteQueue(user.getId(), id);
+        // 삭제 후 syncSession — exchangeType은 현재 BYBIT 단일이므로 기본값 사용
         autoTradeService.syncSession(user.getId(), symbol, tradeMode);
         return Map.of("status", "ok");
     }
@@ -88,7 +89,7 @@ public class AutoTradeController {
     public PatternQueueResponse togglePattern(@PathVariable Long id,
                                               @AuthenticationPrincipal UserDTO user) {
         PatternQueue toggled = patternQueueService.toggleActive(user.getId(), id);
-        autoTradeService.syncSession(user.getId(), toggled.getSymbol(), toggled.getTradeMode());
+        autoTradeService.syncSession(user.getId(), toggled.getExchangeType(), toggled.getSymbol(), toggled.getTradeMode());
         return toResponse(toggled);
     }
 
@@ -121,7 +122,7 @@ public class AutoTradeController {
                                               @RequestBody UpdatePatternRequest request,
                                               @AuthenticationPrincipal UserDTO user) {
         PatternQueue updated = patternQueueService.updateQueue(user.getId(), id, request);
-        autoTradeService.syncSession(user.getId(), updated.getSymbol(), updated.getTradeMode());
+        autoTradeService.syncSession(user.getId(), updated.getExchangeType(), updated.getSymbol(), updated.getTradeMode());
         return toResponse(updated);
     }
 
@@ -170,7 +171,8 @@ public class AutoTradeController {
         return PatternQueueResponse.builder()
                 .id(queue.getId())
                 .symbol(queue.getSymbol())
-                .exchangeType(queue.getExchangeType().name())
+                // exchangeType 미설정(레거시 데이터) 시 BYBIT 기본값으로 응답
+                .exchangeType(queue.getExchangeType() != null ? queue.getExchangeType().name() : "BYBIT")
                 .active(queue.isActive())
                 .cycle(queue.isCycle())
                 .triggerRate(queue.getTriggerRate())

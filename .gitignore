@@ -48,6 +48,7 @@ application-local.yml
 .claude/
 *.db
 CLAUDE.local.md
+.DS_Store
 
 ## log
 /logs

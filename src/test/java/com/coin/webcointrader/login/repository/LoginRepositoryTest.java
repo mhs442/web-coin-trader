@@ -65,8 +65,6 @@ class LoginRepositoryTest {
         user.setPhoneNumber(phoneNumber);
         user.setEmail(email);
         user.setPassword("encodedPassword");
-        user.setApiKey("encApiKey");
-        user.setApiSecret("encApiSecret");
         return user;
     }
 }
