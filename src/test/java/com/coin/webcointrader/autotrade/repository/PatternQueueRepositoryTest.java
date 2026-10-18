@@ -1,11 +1,11 @@
 package com.coin.webcointrader.autotrade.repository;
 
 import com.coin.webcointrader.common.config.JpaConfig;
-import com.coin.webcointrader.common.entity.Pattern;
-import com.coin.webcointrader.common.entity.PatternBlock;
-import com.coin.webcointrader.common.entity.PatternQueue;
-import com.coin.webcointrader.common.entity.PatternStep;
-import com.coin.webcointrader.common.entity.Side;
+import com.coin.webcointrader.autotrade.entity.Pattern;
+import com.coin.webcointrader.autotrade.entity.PatternBlock;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
+import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.common.enums.TradeMode;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;

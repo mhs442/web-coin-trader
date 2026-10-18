@@ -1,17 +1,16 @@
 package com.coin.webcointrader.trade.service;
 
-import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.common.client.position.PositionClient;
-import com.coin.webcointrader.common.client.trade.TradeClient;
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
-import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
-import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.bybit.client.position.PositionClient;
+import com.coin.webcointrader.bybit.client.trade.TradeClient;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.bybit.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.bybit.dto.response.GetExecutionListResponse;
+import com.coin.webcointrader.login.dto.ExchangeKeyDTO;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
-import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.login.service.ExchangeKeyService;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import org.junit.jupiter.api.AfterEach;
@@ -26,7 +25,6 @@ import org.springframework.http.ResponseEntity;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -47,10 +45,10 @@ class TradeServiceTest {
     private PositionClient positionClient;
 
     @Mock
-    private TradeHistoryRepository tradeHistoryRepository;
+    private TradeHistoryService tradeHistoryService;
 
     @Mock
-    private UserExchangeKeyRepository userExchangeKeyRepository;
+    private ExchangeKeyService exchangeKeyService;
 
     @Mock
     private AesEncryptor aesEncryptor;
@@ -73,12 +71,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt("encKey")).willReturn("rawApiKey");
         given(aesEncryptor.decrypt("encSecret")).willReturn("rawApiSecret");
         given(tradeClient.createOrder(request)).willReturn(ResponseEntity.ok(response));
@@ -103,12 +101,12 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();  // category 없음
 
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(tradeClient.createOrder(any(CreateOrderRequest.class))).willReturn(ResponseEntity.ok(response));
 
@@ -132,7 +130,8 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.empty());
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT))
+                .willThrow(new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
 
         // when & then
         assertThatThrownBy(() -> tradeService.placeOrder(request, userId))
@@ -153,8 +152,8 @@ class TradeServiceTest {
                 .qty("0.01")
                 .build();
 
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(tradeClient.createOrder(any())).willThrow(new RuntimeException("API 오류"));
 
@@ -176,8 +175,8 @@ class TradeServiceTest {
     void getExecution_성공_실체결데이터반환() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
 
         GetExecutionListResponse response = makeExecutionListResponse("50100.50", "0.0551");
@@ -199,8 +198,8 @@ class TradeServiceTest {
     void getExecution_1차빈응답_2차성공시반환() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
 
         GetExecutionListResponse empty = makeEmptyExecutionListResponse();
@@ -223,8 +222,8 @@ class TradeServiceTest {
     void getExecution_2회빈응답_null반환() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
 
         GetExecutionListResponse empty = makeEmptyExecutionListResponse();
@@ -248,8 +247,8 @@ class TradeServiceTest {
     void getClosedPnl_성공_실손익반환() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
 
         GetClosedPnlResponse response = makeClosedPnlResponse("12.5000", "-0.0125");
@@ -270,8 +269,8 @@ class TradeServiceTest {
     void getClosedPnl_빈응답_null반환() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeExchangeKey(userId, "encKey", "encSecret");
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)).willReturn(Optional.of(key));
+        ExchangeKeyDTO key = makeExchangeKey(userId, "encKey", "encSecret");
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
 
         GetClosedPnlResponse empty = makeEmptyClosedPnlResponse();
@@ -344,12 +343,8 @@ class TradeServiceTest {
         return response;
     }
 
-    private UserExchangeKey makeExchangeKey(Long userId, String encApiKey, String encApiSecret) {
-        UserExchangeKey key = new UserExchangeKey();
-        key.setUserId(userId);
-        key.setExchangeType(ExchangeType.BYBIT);
-        key.setApiKey(encApiKey);
-        key.setApiSecret(encApiSecret);
-        return key;
+    private ExchangeKeyDTO makeExchangeKey(Long userId, String encApiKey, String encApiSecret) {
+        return ExchangeKeyDTO.builder().userId(userId).exchangeType(ExchangeType.BYBIT)
+                .apiKey(encApiKey).apiSecret(encApiSecret).build();
     }
 }

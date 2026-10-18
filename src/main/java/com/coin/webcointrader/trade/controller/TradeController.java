@@ -1,8 +1,8 @@
 package com.coin.webcointrader.trade.controller;
 
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.login.dto.UserDTO;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
 import com.coin.webcointrader.trade.service.TradeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;

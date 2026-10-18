@@ -1,17 +1,21 @@
 package com.coin.webcointrader.mypage.service;
 
-import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
-import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
+import com.coin.webcointrader.autotrade.dto.PatternQueueDTO;
+import com.coin.webcointrader.autotrade.service.PatternQueueService;
+import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.common.dto.response.PageResponse;
-import com.coin.webcointrader.common.entity.*;
-import com.coin.webcointrader.common.entity.Pattern;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeMode;
-import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.mypage.dto.*;
-import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
-import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
+import com.coin.webcointrader.trade.dto.DailyProfitLossDTO;
+import com.coin.webcointrader.trade.dto.InvestmentHistoryDTO;
+import com.coin.webcointrader.trade.dto.ProfitLossSummaryDTO;
+import com.coin.webcointrader.trade.dto.SymbolProfitLossDTO;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
+import com.coin.webcointrader.trade.dto.WinLossCountDTO;
+import com.coin.webcointrader.trade.service.HistoryService;
+import com.coin.webcointrader.trade.service.TradeFacade;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,12 +25,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,58 +42,61 @@ class MyPageServiceTest {
     private MyPageService myPageService;
 
     @Mock
-    private PatternQueueRepository patternQueueRepository;
+    private PatternQueueService patternQueueService;
 
     @Mock
-    private TradeHistoryRepository tradeHistoryRepository;
+    private TradeFacade tradeFacade;
 
     @Mock
-    private InvestmentHistoryRepository investmentHistoryRepository;
+    private HistoryService mainHistory; // MAIN 히스토리 서비스
 
     @Mock
-    private SimTradeHistoryRepository simTradeHistoryRepository;
+    private HistoryService simHistory;  // SIM 히스토리 서비스
 
-    @Mock
-    private SimInvestmentHistoryRepository simInvestmentHistoryRepository;
+    @BeforeEach
+    void setUpHistoryServices() {
+        // 모드별 HistoryService 선택은 TradeFacade 책임 — 테스트에서는 mode 로 mock 을 구분한다
+        // (getPatterns 테스트 등 히스토리를 쓰지 않는 테스트를 위해 lenient)
+        lenient().when(tradeFacade.historyService(TradeMode.MAIN)).thenReturn(mainHistory);
+        lenient().when(tradeFacade.historyService(TradeMode.SIM)).thenReturn(simHistory);
+    }
 
     // ─────────────────────────────────────────────
     // getPatterns
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("getPatterns: 기본 검색조건으로 패턴 큐를 페이징 조회한다")
+    @DisplayName("getPatterns: 검색조건을 autotrade 서비스에 전달하고 DTO를 응답으로 변환한다")
     void getPatterns_defaultRequest() {
         // given
         Long userId = 1L;
-        PatternQueue q = makePatternQueue(1L, userId, "BTCUSDT");
-        Page<PatternQueue> page = new PageImpl<>(List.of(q));
-        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
-                eq(userId), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
-                .willReturn(page);
-
-        MyPagePatternRequest request = new MyPagePatternRequest();
+        given(patternQueueService.findQueuePage(
+                eq(userId), isNull(), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of(makeQueueDto(1L, "BTCUSDT", false))));
 
         // when
-        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, request);
+        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, new MyPagePatternRequest());
 
         // then
         assertThat(result.getContent()).hasSize(1);
-        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
+        MyPagePatternResponse r = result.getContent().get(0);
+        assertThat(r.getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(r.getExchangeType()).isEqualTo("BYBIT");
+        assertThat(r.getCreatedAt()).isEqualTo("2026-01-10 12:00:00");
     }
 
     @Test
-    @DisplayName("getPatterns: symbol 키워드가 있으면 DB LEVEL LIKE 필터로 페이징한다")
+    @DisplayName("getPatterns: symbol 키워드와 SIM 모드가 그대로 전달된다")
     void getPatterns_withSymbolFilter() {
         // given
         Long userId = 1L;
-        PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
-        Page<PatternQueue> page = new PageImpl<>(List.of(btc));
-        given(patternQueueRepository.findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
-                eq(userId), eq("BTC"), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
-                .willReturn(page);
+        given(patternQueueService.findQueuePage(
+                eq(userId), eq("BTC"), eq(TradeMode.SIM), any(), any(), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of(makeQueueDto(1L, "BTCUSDT", false))));
 
         MyPagePatternRequest request = new MyPagePatternRequest();
         request.setSymbol("BTC");
+        request.setMode("sim");
 
         // when
         PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, request);
@@ -105,28 +111,22 @@ class MyPageServiceTest {
     void getPatterns_includesHierarchy() {
         // given
         Long userId = 1L;
-        PatternQueue q = makePatternQueueWithSteps(1L, userId, "BTCUSDT");
-        Page<PatternQueue> page = new PageImpl<>(List.of(q));
-        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
-                eq(userId), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
-                .willReturn(page);
-
-        MyPagePatternRequest request = new MyPagePatternRequest();
+        given(patternQueueService.findQueuePage(
+                eq(userId), isNull(), eq(TradeMode.MAIN), any(), any(), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of(makeQueueDto(1L, "BTCUSDT", true))));
 
         // when
-        PageResponse<MyPagePatternResponse> result = myPageService.getPatterns(userId, request);
+        MyPagePatternResponse response = myPageService.getPatterns(userId, new MyPagePatternRequest())
+                .getContent().get(0);
 
         // then
-        MyPagePatternResponse response = result.getContent().get(0);
-        // 단계 검증
         assertThat(response.getSteps()).hasSize(1);
         assertThat(response.getSteps().get(0).getStepLevel()).isEqualTo(1);
-        // 패턴 검증
         assertThat(response.getSteps().get(0).getPatterns()).hasSize(1);
         assertThat(response.getSteps().get(0).getPatterns().get(0).getAmount())
                 .isEqualByComparingTo(new BigDecimal("10"));
-        // 블록 검증
         assertThat(response.getSteps().get(0).getPatterns().get(0).getBlocks()).hasSize(2);
+        assertThat(response.getSteps().get(0).getPatterns().get(0).getBlocks().get(0).getSide()).isEqualTo("LONG");
     }
 
     // ─────────────────────────────────────────────
@@ -138,20 +138,15 @@ class MyPageServiceTest {
     void getInvestmentHistories_defaultRequest() {
         // given
         Long userId = 1L;
-        InvestmentHistory history = makeInvestmentHistory(1L, userId, "BTCUSDT");
-        Page<InvestmentHistory> page = new PageImpl<>(List.of(history));
-        given(investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class)))
-                .willReturn(page);
-        // 합산 쿼리 모킹: 이익 500, 손해 -300
-        given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any()))
-                .willReturn(summaryResult(new BigDecimal("500"), new BigDecimal("-300")));
-
-        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+        Page<InvestmentHistoryDTO> page = new PageImpl<>(List.of(makeInvestmentHistory(1L, userId, "BTCUSDT")));
+        given(mainHistory.findInvestments(eq(userId), isNull(), any(), any(), any(Pageable.class))).willReturn(page);
+        // 합산 모킹: 이익 500, 손해 -300
+        given(mainHistory.sumProfitLoss(eq(userId), isNull(), any(), any()))
+                .willReturn(new ProfitLossSummaryDTO(new BigDecimal("500"), new BigDecimal("-300")));
+        given(mainHistory.countWinLoss(eq(userId), any(), any())).willReturn(new WinLossCountDTO(3, 1, 4));
 
         // when
-        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
+        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, new InvestmentHistoryRequest());
 
         // then - 페이징 데이터 검증
         assertThat(result.getPage().getContent()).hasSize(1);
@@ -162,29 +157,23 @@ class MyPageServiceTest {
         assertThat(response.getExitPrice()).isEqualTo("51000");
         assertThat(response.getProfitLoss()).isEqualTo("200");
 
-        // then - 합산 통계 검증
+        // then - 합산 통계 검증 (승률 3/4 = 75.0%)
         assertThat(result.getSummary().getTotalProfit()).isEqualTo("500");
         assertThat(result.getSummary().getTotalLoss()).isEqualTo("-300");
         assertThat(result.getSummary().getNetTotal()).isEqualTo("200");
+        assertThat(result.getSummary().getWinRate()).isEqualTo("75.0");
     }
 
     @Test
-    @DisplayName("getInvestmentHistories: symbol 키워드가 있으면 DB LIKE 필터로 페이징 + 심볼별 합산한다")
+    @DisplayName("getInvestmentHistories: symbol 키워드를 서비스에 전달해 심볼 필터 페이징 + 심볼별 합산한다")
     void getInvestmentHistories_withSymbolFilter() {
         // given
         Long userId = 1L;
-        InvestmentHistory eth = makeInvestmentHistory(2L, userId, "ETHUSDT");
-        Page<InvestmentHistory> page = new PageImpl<>(List.of(eth));
-        // 심볼 필터 시 DB LIKE 쿼리 사용
-        given(investmentHistoryRepository.findByUserIdAndSymbolContainingIgnoreCaseAndCreatedAtBetween(
-                eq(userId), eq("ETH"), any(), any(), any(Pageable.class)))
-                .willReturn(page);
-        // 심볼 필터 합산 쿼리 모킹
-        given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
-                eq(userId), any(), any(), eq("ETH")))
-                .willReturn(summaryResult(new BigDecimal("200"), BigDecimal.ZERO));
-        given(investmentHistoryRepository.countWinLoss(eq(userId), any(), any()))
-                .willReturn(List.of());
+        Page<InvestmentHistoryDTO> page = new PageImpl<>(List.of(makeInvestmentHistory(2L, userId, "ETHUSDT")));
+        given(mainHistory.findInvestments(eq(userId), eq("ETH"), any(), any(), any(Pageable.class))).willReturn(page);
+        given(mainHistory.sumProfitLoss(eq(userId), eq("ETH"), any(), any()))
+                .willReturn(new ProfitLossSummaryDTO(new BigDecimal("200"), BigDecimal.ZERO));
+        given(mainHistory.countWinLoss(eq(userId), any(), any())).willReturn(new WinLossCountDTO(0, 0, 0));
 
         InvestmentHistoryRequest request = new InvestmentHistoryRequest();
         request.setSymbol("ETH");
@@ -192,14 +181,13 @@ class MyPageServiceTest {
         // when
         InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
 
-        // then - 페이징 데이터 검증
-        assertThat(result.getPage().getContent()).hasSize(1);
+        // then
         assertThat(result.getPage().getContent().get(0).getSymbol()).isEqualTo("ETHUSDT");
-
-        // then - 합산 통계 검증
         assertThat(result.getSummary().getTotalProfit()).isEqualTo("200");
         assertThat(result.getSummary().getTotalLoss()).isEqualTo("0");
         assertThat(result.getSummary().getNetTotal()).isEqualTo("200");
+        // 기존 동작 유지: 승패 카운트는 심볼 필터 없는 countWinLoss 사용
+        then(mainHistory).should(never()).countWinLossBySymbol(any(), any(), any(), any());
     }
 
     @Test
@@ -207,132 +195,181 @@ class MyPageServiceTest {
     void getInvestmentHistories_emptyReturnsZeroSummary() {
         // given
         Long userId = 1L;
-        Page<InvestmentHistory> emptyPage = new PageImpl<>(List.of());
-        given(investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any(), any(Pageable.class)))
-                .willReturn(emptyPage);
-        given(investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
-                eq(userId), any(), any()))
-                .willReturn(summaryResult(BigDecimal.ZERO, BigDecimal.ZERO));
-
-        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+        given(mainHistory.findInvestments(eq(userId), any(), any(), any(), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of()));
+        given(mainHistory.sumProfitLoss(eq(userId), any(), any(), any()))
+                .willReturn(new ProfitLossSummaryDTO(BigDecimal.ZERO, BigDecimal.ZERO));
+        given(mainHistory.countWinLoss(eq(userId), any(), any())).willReturn(new WinLossCountDTO(0, 0, 0));
 
         // when
-        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
+        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, new InvestmentHistoryRequest());
 
         // then
         assertThat(result.getPage().getContent()).isEmpty();
         assertThat(result.getSummary().getTotalProfit()).isEqualTo("0");
         assertThat(result.getSummary().getTotalLoss()).isEqualTo("0");
         assertThat(result.getSummary().getNetTotal()).isEqualTo("0");
-    }
-
-    // ─────────────────────────────────────────────
-    // deleteTradeHistories (선택 삭제)
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("deleteTradeHistories: MAIN 모드 — 선택한 ID 목록을 삭제한다")
-    void deleteTradeHistories_main_success() {
-        Long userId = 1L;
-        List<Long> ids = List.of(1L, 2L);
-
-        myPageService.deleteTradeHistories(userId, ids, "main");
-
-        then(tradeHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
-        then(simTradeHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+        assertThat(result.getSummary().getWinRate()).isEqualTo("0.0");
     }
 
     @Test
-    @DisplayName("deleteTradeHistories: SIM 모드 — 선택한 ID 목록을 모의 리포지토리에서 삭제한다")
-    void deleteTradeHistories_sim_success() {
+    @DisplayName("getInvestmentHistories: SIM 모드는 SIM 히스토리 서비스를 사용한다")
+    void getInvestmentHistories_simMode_usesSimService() {
+        // given
         Long userId = 1L;
-        List<Long> ids = List.of(3L);
+        given(simHistory.findInvestments(eq(userId), any(), any(), any(), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of(makeInvestmentHistory(9L, userId, "BTCUSDT"))));
+        given(simHistory.sumProfitLoss(eq(userId), any(), any(), any()))
+                .willReturn(new ProfitLossSummaryDTO(BigDecimal.TEN, BigDecimal.ZERO));
+        given(simHistory.countWinLoss(eq(userId), any(), any())).willReturn(new WinLossCountDTO(1, 0, 1));
 
-        myPageService.deleteTradeHistories(userId, ids, "sim");
+        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+        request.setMode("sim");
 
-        then(simTradeHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
-        then(tradeHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+        // when
+        InvestmentHistoryPageResponse result = myPageService.getInvestmentHistories(userId, request);
+
+        // then
+        assertThat(result.getPage().getContent()).hasSize(1);
+        assertThat(result.getSummary().getWinRate()).isEqualTo("100.0");
+        then(mainHistory).shouldHaveNoInteractions();
     }
 
     // ─────────────────────────────────────────────
-    // deleteAllTradeHistories (전체 삭제)
+    // getInvestmentTradeDetails
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("deleteAllTradeHistories: MAIN 모드 — 사용자의 전체 거래 히스토리를 삭제한다")
-    void deleteAllTradeHistories_main_success() {
+    @DisplayName("getInvestmentTradeDetails: 최신순 거래에서 EXIT 1건 + 직전 ENTRY 1건만 ENTRY→EXIT 순으로 반환한다")
+    void getInvestmentTradeDetails_extractsLatestCycle() {
+        // given: DESC 순 — [SELL(현재 사이클), ENTRY(현재 사이클), LIQUIDATION(이전), ENTRY(이전)]
         Long userId = 1L;
+        InvestmentHistoryDTO inv = makeInvestmentHistory(5L, userId, "BTCUSDT");
+        given(mainHistory.findInvestment(5L, userId)).willReturn(Optional.of(inv));
+        given(mainHistory.findTradesUpTo(1L, userId, inv.getCreatedAt())).willReturn(List.of(
+                makeTrade(4L, "SELL"), makeTrade(3L, "ENTRY"), makeTrade(2L, "LIQUIDATION"), makeTrade(1L, "ENTRY")));
 
-        myPageService.deleteAllTradeHistories(userId, "main");
+        // when
+        List<InvestmentTradeDetailResponse> result = myPageService.getInvestmentTradeDetails(userId, 5L, "main");
 
-        then(tradeHistoryRepository).should().deleteAllByUserId(userId);
-        then(simTradeHistoryRepository).should(never()).deleteAllByUserId(any());
+        // then
+        assertThat(result).extracting(InvestmentTradeDetailResponse::getId).containsExactly(3L, 4L);
+        assertThat(result).extracting(InvestmentTradeDetailResponse::getOrderType).containsExactly("ENTRY", "SELL");
     }
 
     @Test
-    @DisplayName("deleteAllTradeHistories: SIM 모드 — 사용자의 전체 모의 거래 히스토리를 삭제한다")
-    void deleteAllTradeHistories_sim_success() {
+    @DisplayName("getInvestmentTradeDetails: 투자 히스토리가 없거나 EXIT 거래가 없으면 빈 목록이다")
+    void getInvestmentTradeDetails_emptyCases() {
+        // given
         Long userId = 1L;
+        given(mainHistory.findInvestment(7L, userId)).willReturn(Optional.empty());
+        InvestmentHistoryDTO inv = makeInvestmentHistory(8L, userId, "BTCUSDT");
+        given(simHistory.findInvestment(8L, userId)).willReturn(Optional.of(inv));
+        given(simHistory.findTradesUpTo(1L, userId, inv.getCreatedAt())).willReturn(List.of(makeTrade(1L, "ENTRY")));
 
-        myPageService.deleteAllTradeHistories(userId, "sim");
-
-        then(simTradeHistoryRepository).should().deleteAllByUserId(userId);
-        then(tradeHistoryRepository).should(never()).deleteAllByUserId(any());
-    }
-
-    // ─────────────────────────────────────────────
-    // deleteInvestmentHistories (선택 삭제)
-    // ─────────────────────────────────────────────
-
-    @Test
-    @DisplayName("deleteInvestmentHistories: MAIN 모드 — 선택한 ID 목록을 삭제한다")
-    void deleteInvestmentHistories_main_success() {
-        Long userId = 1L;
-        List<Long> ids = List.of(10L, 20L);
-
-        myPageService.deleteInvestmentHistories(userId, ids, "main");
-
-        then(investmentHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
-        then(simInvestmentHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
-    }
-
-    @Test
-    @DisplayName("deleteInvestmentHistories: SIM 모드 — 선택한 ID 목록을 모의 리포지토리에서 삭제한다")
-    void deleteInvestmentHistories_sim_success() {
-        Long userId = 1L;
-        List<Long> ids = List.of(30L);
-
-        myPageService.deleteInvestmentHistories(userId, ids, "sim");
-
-        then(simInvestmentHistoryRepository).should().deleteAllByIdInAndUserId(ids, userId);
-        then(investmentHistoryRepository).should(never()).deleteAllByIdInAndUserId(any(), any());
+        // when & then
+        assertThat(myPageService.getInvestmentTradeDetails(userId, 7L, "main")).isEmpty();
+        assertThat(myPageService.getInvestmentTradeDetails(userId, 8L, "sim")).isEmpty();
     }
 
     // ─────────────────────────────────────────────
-    // deleteAllInvestmentHistories (전체 삭제)
+    // getHistoryChart
     // ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("deleteAllInvestmentHistories: MAIN 모드 — 사용자의 전체 투자 히스토리를 삭제한다")
-    void deleteAllInvestmentHistories_main_success() {
+    @DisplayName("getHistoryChart: 심볼이 없으면 전체 승패 카운트를 사용하고 값을 문자열로 변환한다")
+    void getHistoryChart_withoutSymbol() {
+        // given
         Long userId = 1L;
+        given(mainHistory.findDailyProfitLoss(eq(userId), isNull(), any(), any()))
+                .willReturn(List.of(new DailyProfitLossDTO("2026-01-02", new BigDecimal("7.500"))));
+        given(mainHistory.findProfitLossBySymbol(eq(userId), isNull(), any(), any()))
+                .willReturn(List.of(new SymbolProfitLossDTO("BTCUSDT", new BigDecimal("7.5"))));
+        given(mainHistory.countWinLoss(eq(userId), any(), any())).willReturn(new WinLossCountDTO(2, 1, 3));
 
-        myPageService.deleteAllInvestmentHistories(userId, "main");
+        // when
+        HistoryChartResponse result = myPageService.getHistoryChart(userId, new InvestmentHistoryRequest());
 
-        then(investmentHistoryRepository).should().deleteAllByUserId(userId);
-        then(simInvestmentHistoryRepository).should(never()).deleteAllByUserId(any());
+        // then
+        assertThat(result.getDailyData().get(0).getDate()).isEqualTo("2026-01-02");
+        assertThat(result.getDailyData().get(0).getProfitLoss()).isEqualTo("7.5");
+        assertThat(result.getSymbolData().get(0).getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(result.getWinCount()).isEqualTo(2);
+        assertThat(result.getLossCount()).isEqualTo(1);
+        assertThat(result.getTotalCount()).isEqualTo(3);
     }
 
     @Test
-    @DisplayName("deleteAllInvestmentHistories: SIM 모드 — 사용자의 전체 모의 투자 히스토리를 삭제한다")
-    void deleteAllInvestmentHistories_sim_success() {
+    @DisplayName("getHistoryChart: 심볼이 있으면 심볼 기준 승패 카운트를 사용한다 (SIM 모드)")
+    void getHistoryChart_withSymbol_sim() {
+        // given
+        Long userId = 1L;
+        given(simHistory.findDailyProfitLoss(eq(userId), eq("ETH"), any(), any())).willReturn(List.of());
+        given(simHistory.findProfitLossBySymbol(eq(userId), eq("ETH"), any(), any())).willReturn(List.of());
+        given(simHistory.countWinLossBySymbol(eq(userId), eq("ETH"), any(), any())).willReturn(new WinLossCountDTO(1, 1, 2));
+
+        InvestmentHistoryRequest request = new InvestmentHistoryRequest();
+        request.setSymbol("ETH");
+        request.setMode("sim");
+
+        // when
+        HistoryChartResponse result = myPageService.getHistoryChart(userId, request);
+
+        // then
+        assertThat(result.getTotalCount()).isEqualTo(2);
+        then(simHistory).should(never()).countWinLoss(any(), any(), any());
+    }
+
+    // ─────────────────────────────────────────────
+    // 삭제 — mode 에 맞는 HistoryService 로 위임
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("deleteTradeHistories: MAIN/SIM 모드에 맞는 히스토리 서비스로 선택 삭제를 위임한다")
+    void deleteTradeHistories_delegatesByMode() {
         Long userId = 1L;
 
-        myPageService.deleteAllInvestmentHistories(userId, "sim");
+        myPageService.deleteTradeHistories(userId, List.of(1L, 2L), "main");
+        myPageService.deleteTradeHistories(userId, List.of(3L), "sim");
 
-        then(simInvestmentHistoryRepository).should().deleteAllByUserId(userId);
-        then(investmentHistoryRepository).should(never()).deleteAllByUserId(any());
+        then(mainHistory).should().deleteTrades(List.of(1L, 2L), userId);
+        then(simHistory).should().deleteTrades(List.of(3L), userId);
+        then(mainHistory).should(never()).deleteTrades(eq(List.of(3L)), any());
+    }
+
+    @Test
+    @DisplayName("deleteAllTradeHistories: MAIN/SIM 모드에 맞는 히스토리 서비스로 전체 삭제를 위임한다")
+    void deleteAllTradeHistories_delegatesByMode() {
+        myPageService.deleteAllTradeHistories(1L, "main");
+        myPageService.deleteAllTradeHistories(2L, "sim");
+
+        then(mainHistory).should().deleteAllTrades(1L);
+        then(simHistory).should().deleteAllTrades(2L);
+        then(mainHistory).should(never()).deleteAllTrades(2L);
+    }
+
+    @Test
+    @DisplayName("deleteInvestmentHistories: MAIN/SIM 모드에 맞는 히스토리 서비스로 선택 삭제를 위임한다")
+    void deleteInvestmentHistories_delegatesByMode() {
+        Long userId = 1L;
+
+        myPageService.deleteInvestmentHistories(userId, List.of(10L, 20L), "main");
+        myPageService.deleteInvestmentHistories(userId, List.of(30L), "sim");
+
+        then(mainHistory).should().deleteInvestments(List.of(10L, 20L), userId);
+        then(simHistory).should().deleteInvestments(List.of(30L), userId);
+        then(mainHistory).should(never()).deleteInvestments(eq(List.of(30L)), any());
+    }
+
+    @Test
+    @DisplayName("deleteAllInvestmentHistories: MAIN/SIM 모드에 맞는 히스토리 서비스로 전체 삭제를 위임한다")
+    void deleteAllInvestmentHistories_delegatesByMode() {
+        myPageService.deleteAllInvestmentHistories(1L, "main");
+        myPageService.deleteAllInvestmentHistories(2L, "sim");
+
+        then(mainHistory).should().deleteAllInvestments(1L);
+        then(simHistory).should().deleteAllInvestments(2L);
+        then(mainHistory).should(never()).deleteAllInvestments(2L);
     }
 
     // ─────────────────────────────────────────────
@@ -340,93 +377,41 @@ class MyPageServiceTest {
     // ─────────────────────────────────────────────
 
     /**
-     * 기본 PatternQueue 생성 (하위 엔티티 없음)
+     * PatternQueueDTO 생성 (withSteps=true 이면 1단계 1패턴 2블록 포함)
      */
-    private PatternQueue makePatternQueue(Long id, Long userId, String symbol) {
-        PatternQueue q = new PatternQueue();
-        q.setId(id);
-        q.setUserId(userId);
-        q.setSymbol(symbol);
-        q.setActive(false);
-        q.setTriggerRate(new BigDecimal("1.0"));
-        q.setFull(false);
-        ReflectionTestUtils.setField(q, "createdAt", LocalDateTime.now());
-        return q;
+    private PatternQueueDTO makeQueueDto(Long id, String symbol, boolean withSteps) {
+        List<PatternQueueDTO.StepDTO> steps = withSteps ? List.of(PatternQueueDTO.StepDTO.builder()
+                .stepLevel(1)
+                .patterns(List.of(PatternQueueDTO.PatternDTO.builder()
+                        .patternOrder(1).amount(new BigDecimal("10")).leverage(5)
+                        .stopLossRate(new BigDecimal("1.0")).takeProfitRate(new BigDecimal("5.0"))
+                        .blocks(List.of(
+                                PatternQueueDTO.BlockDTO.builder().side(Side.LONG).blockOrder(1).leaf(false).build(),
+                                PatternQueueDTO.BlockDTO.builder().side(Side.LONG).blockOrder(2).leaf(true).build()))
+                        .build()))
+                .build()) : List.of();
+        return PatternQueueDTO.builder()
+                .id(id).symbol(symbol).exchangeType("BYBIT").active(false)
+                .triggerRate(new BigDecimal("1.0"))
+                .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))
+                .steps(steps).build();
     }
 
-    /**
-     * 계층 구조 포함 PatternQueue 생성 (1단계, 1패턴, 2블록)
-     */
-    private PatternQueue makePatternQueueWithSteps(Long id, Long userId, String symbol) {
-        PatternQueue q = makePatternQueue(id, userId, symbol);
-
-        // 블록 생성
-        PatternBlock condBlock = new PatternBlock();
-        condBlock.setSide(Side.LONG);
-        condBlock.setBlockOrder(1);
-        condBlock.setLeaf(false);
-
-        PatternBlock leafBlock = new PatternBlock();
-        leafBlock.setSide(Side.LONG);
-        leafBlock.setBlockOrder(2);
-        leafBlock.setLeaf(true);
-
-        // 패턴 생성
-        Pattern pattern = new Pattern();
-        pattern.setPatternOrder(1);
-        pattern.setAmount(new BigDecimal("10"));
-        pattern.setLeverage(5);
-        pattern.setStopLossRate(new BigDecimal("1.0"));
-        pattern.setTakeProfitRate(new BigDecimal("5.0"));
-        pattern.getBlocks().add(condBlock);
-        pattern.getBlocks().add(leafBlock);
-
-        // 단계 생성
-        PatternStep step = new PatternStep();
-        step.setStepLevel(1);
-        step.setFull(false);
-        step.getPatterns().add(pattern);
-
-        q.getSteps().add(step);
-        return q;
+    private InvestmentHistoryDTO makeInvestmentHistory(Long id, Long userId, String symbol) {
+        return InvestmentHistoryDTO.builder()
+                .id(id).userId(userId).patternStepId(1L).symbol(symbol).side(Side.LONG)
+                .entryPrice(new BigDecimal("50000")).exitPrice(new BigDecimal("51000"))
+                .amount(new BigDecimal("10000")).profitLoss(new BigDecimal("200"))
+                .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))
+                .build();
     }
 
-    /**
-     * SUM 쿼리 결과 모킹용 헬퍼: List<Object[]> 형태로 반환
-     */
-    private List<Object[]> summaryResult(BigDecimal profit, BigDecimal loss) {
-        List<Object[]> result = new ArrayList<>();
-        result.add(new Object[]{profit, loss});
-        return result;
-    }
-
-    private InvestmentHistory makeInvestmentHistory(Long id, Long userId, String symbol) {
-        InvestmentHistory h = new InvestmentHistory();
-        h.setId(id);
-        h.setUserId(userId);
-        h.setPatternStepId(1L);
-        h.setSymbol(symbol);
-        h.setSide(Side.LONG);
-        h.setEntryPrice(new BigDecimal("50000"));
-        h.setExitPrice(new BigDecimal("51000"));
-        h.setAmount(new BigDecimal("10000"));
-        h.setProfitLoss(new BigDecimal("200"));
-        ReflectionTestUtils.setField(h, "createdAt", LocalDateTime.now());
-        return h;
-    }
-
-    private TradeHistory makeTradeHistory(Long id, Long userId, String symbol) {
-        TradeHistory h = new TradeHistory();
-        h.setId(id);
-        h.setUserId(userId);
-        h.setSymbol(symbol);
-        h.setSide(Side.LONG);
-        h.setAmount(new BigDecimal("100"));
-        h.setExecutedPrice(new BigDecimal("50000"));
-        h.setOrderType(TradeOrderType.ENTRY.getTradeOrderType());
-        h.setOrderResult(OrderResult.SUCCESS);
-        h.setQueueStepId(1L);
-        ReflectionTestUtils.setField(h, "createdAt", LocalDateTime.now());
-        return h;
+    private TradeHistoryDTO makeTrade(Long id, String orderType) {
+        return TradeHistoryDTO.builder()
+                .id(id).queueStepId(1L).userId(1L).symbol("BTCUSDT").side(Side.LONG)
+                .amount(new BigDecimal("100")).executedPrice(new BigDecimal("50000"))
+                .orderType(orderType).orderResult(OrderResult.SUCCESS)
+                .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))
+                .build();
     }
 }

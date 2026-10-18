@@ -1,13 +1,12 @@
 package com.coin.webcointrader.market.service;
 
-import com.coin.webcointrader.common.client.market.BybitWebSocketClient;
-import com.coin.webcointrader.common.client.market.MarketClient;
-import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
-import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
-import com.coin.webcointrader.common.dto.response.FindTickerResponse;
-import com.coin.webcointrader.common.dto.response.GetInstrumentsInfoResponse;
-import com.coin.webcointrader.common.dto.response.GetKlineResponse;
-import com.coin.webcointrader.common.dto.response.OrderBookResponse;
+import com.coin.webcointrader.bybit.client.market.BybitWebSocketClient;
+import com.coin.webcointrader.bybit.client.market.MarketClient;
+import com.coin.webcointrader.bybit.client.market.dto.WebSocketTickerDTO;
+import com.coin.webcointrader.bybit.dto.response.FindTickerResponse;
+import com.coin.webcointrader.bybit.dto.response.GetInstrumentsInfoResponse;
+import com.coin.webcointrader.bybit.dto.response.GetKlineResponse;
+import com.coin.webcointrader.bybit.dto.response.OrderBookResponse;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.LogMessage;
 import jakarta.annotation.PostConstruct;
@@ -19,7 +18,6 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,7 +37,7 @@ public class MarketService {
 
     /**
      * 애플리케이션 시작 시 WebSocket 티커 콜백을 등록한다.
-     * Kline 콜백은 BybitExchangeAdapter에서 등록 및 처리한다.
+     * Kline 콜백은 BybitExchangeClient에서 등록 및 처리한다.
      */
     @PostConstruct
     public void init() {

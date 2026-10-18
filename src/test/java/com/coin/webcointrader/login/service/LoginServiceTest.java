@@ -1,17 +1,16 @@
 package com.coin.webcointrader.login.service;
 
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.SimWallet;
-import com.coin.webcointrader.common.entity.User;
-import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.login.dto.UserDTO;
+import com.coin.webcointrader.login.entity.User;
+import com.coin.webcointrader.login.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
-import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.login.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
-import com.coin.webcointrader.sim.repository.SimWalletRepository;
+import com.coin.webcointrader.sim.service.SimWalletService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -47,7 +46,7 @@ class LoginServiceTest {
     private UserExchangeKeyRepository userExchangeKeyRepository;
 
     @Mock
-    private SimWalletRepository simWalletRepository;
+    private SimWalletService simWalletService;
 
     @Test
     @DisplayName("loadUserByUsername: 전화번호로 사용자를 찾으면 UserDTO를 반환한다")
@@ -97,8 +96,11 @@ class LoginServiceTest {
         given(passwordEncoder.encode("password1!")).willReturn("encodedPassword");
         given(aesEncryptor.encrypt("apiKey")).willReturn("encApiKey");
         given(aesEncryptor.encrypt("apiSecret")).willReturn("encApiSecret");
-        given(loginRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
-        given(simWalletRepository.save(any(SimWallet.class))).willAnswer(inv -> inv.getArgument(0));
+        given(loginRepository.save(any(User.class))).willAnswer(inv -> {
+            User saved = inv.getArgument(0);
+            saved.setId(1L);
+            return saved;
+        });
         given(userExchangeKeyRepository.save(any(UserExchangeKey.class))).willAnswer(inv -> inv.getArgument(0));
 
         // when & then
@@ -106,6 +108,8 @@ class LoginServiceTest {
                 .doesNotThrowAnyException();
 
         then(loginRepository).should().save(any(User.class));
+        // 가입 시 모의 지갑 생성은 sim 도메인 서비스에 위임
+        then(simWalletService).should().createWallet(1L);
         then(userExchangeKeyRepository).should().save(argThat(k -> k.getExchangeType() == ExchangeType.BYBIT));
     }
 
@@ -150,8 +154,11 @@ class LoginServiceTest {
         given(passwordEncoder.encode("password1!")).willReturn("encodedPassword");
         given(aesEncryptor.encrypt("apiKey")).willReturn("encApiKey");
         given(aesEncryptor.encrypt("apiSecret")).willReturn("encApiSecret");
-        given(loginRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
-        given(simWalletRepository.save(any(SimWallet.class))).willAnswer(inv -> inv.getArgument(0));
+        given(loginRepository.save(any(User.class))).willAnswer(inv -> {
+            User saved = inv.getArgument(0);
+            saved.setId(1L);
+            return saved;
+        });
         given(userExchangeKeyRepository.save(any(UserExchangeKey.class))).willAnswer(inv -> inv.getArgument(0));
 
         // when

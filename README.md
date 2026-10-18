@@ -27,15 +27,18 @@ Bybit API 기반 암호화폐 자동매매 웹 애플리케이션
 
 ```
 src/main/java/com/coin/webcointrader/
-├── autotrade/          # 자동매매 (큐, 패턴, 단계 관리)
-├── client/             # Bybit API 클라이언트 (Market, Trade, Account, Position)
-├── common/             # 공통 (Entity, DTO, Enum, Util)
-├── config/             # 설정 (Security, Feign, JPA, WebSocket)
-├── login/              # 로그인
+├── autotrade/          # 자동매매 (큐, 패턴, 단계 관리 + 엔티티/리포지토리)
+├── trade/              # 거래 실행 Facade, 실전 거래·투자 히스토리
+├── sim/                # 모의투자 (가상 지갑, 모의 히스토리)
+├── login/              # 로그인/회원가입, 거래소 API Key
+├── mypage/             # 마이페이지 (타 도메인 Service/DTO 로만 접근)
 ├── market/             # 시장 데이터 (시세, 호가)
-├── mypage/             # 마이페이지
-├── signup/             # 회원가입
-└── trade/              # 거래 실행
+├── wallet/             # 실전 지갑 잔고
+├── bybit/              # Bybit 연동 (Feign 클라이언트, WebSocket, 요청/응답 DTO)
+└── common/             # 공통 (BaseEntity, Enum, 거래소 추상화, 설정, 유틸)
+
+※ 각 도메인은 controller / service / repository / entity / dto 를 보유하며,
+  다른 도메인의 Repository·Entity 를 직접 호출하지 않고 Service 와 DTO 를 통해 접근한다.
 
 src/main/resources/
 ├── templates/          # Thymeleaf 템플릿 (대시보드, 차트, 마이페이지 등)

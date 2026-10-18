@@ -1,6 +1,6 @@
 package com.coin.webcointrader.sim.repository;
 
-import com.coin.webcointrader.common.entity.SimWallet;
+import com.coin.webcointrader.sim.entity.SimWallet;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 

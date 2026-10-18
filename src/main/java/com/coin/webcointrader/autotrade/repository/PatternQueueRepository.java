@@ -1,6 +1,6 @@
 package com.coin.webcointrader.autotrade.repository;
 
-import com.coin.webcointrader.common.entity.PatternQueue;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
 import org.springframework.data.domain.Page;

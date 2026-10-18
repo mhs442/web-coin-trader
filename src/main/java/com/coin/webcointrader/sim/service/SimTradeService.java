@@ -1,18 +1,16 @@
 package com.coin.webcointrader.sim.service;
 
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
-import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
-import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
-import com.coin.webcointrader.common.entity.SimTradeHistory;
-import com.coin.webcointrader.common.entity.TradeHistory;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.bybit.dto.response.SetLeverageResponse;
+import com.coin.webcointrader.bybit.dto.response.SetMarginModeResponse;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
 import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeOrderType;
-import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import com.coin.webcointrader.sim.repository.SimWalletRepository;
-import com.coin.webcointrader.common.entity.SimWallet;
+import com.coin.webcointrader.sim.entity.SimWallet;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.exception.CustomException;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +30,7 @@ import java.math.BigDecimal;
 @Slf4j
 public class SimTradeService {
 
-    private final SimTradeHistoryRepository simTradeHistoryRepository;
+    private final SimHistoryService simHistoryService;
     private final SimWalletRepository simWalletRepository;
 
     /**
@@ -53,11 +51,11 @@ public class SimTradeService {
      *
      * @param request 주문 요청 (symbol, side, qty 등)
      * @param userId  사용자 ID
-     * @param history 거래 이력 엔티티 (자동매매 시 전달, null 가능)
+     * @param history 거래 이력 DTO (자동매매 시 전달, null 가능)
      * @return 가상 주문 응답
      */
     @Transactional
-    public CreateOrderResponse placeOrder(CreateOrderRequest request, Long userId, TradeHistory history) {
+    public CreateOrderResponse placeOrder(CreateOrderRequest request, Long userId, TradeHistoryDTO history) {
         // 가상 지갑 조회
         SimWallet wallet = simWalletRepository.findByUserId(userId)
                 .orElseThrow(() -> new CustomException(ExceptionMessage.USER_NOT_FOUND));
@@ -71,12 +69,11 @@ public class SimTradeService {
 
             // 잔고 부족 시 실패 처리
             if (wallet.getBalance().compareTo(orderAmount) < 0) {
-                // SimTradeHistory로 변환하여 실패 기록 저장
-                SimTradeHistory simHistory = toSimTradeHistory(history);
-                simHistory.setExecutedPrice(BigDecimal.ZERO);
-                simHistory.setOrderResult(OrderResult.FAILED);
-                simHistory.setErrorMessage("모의투자 잔고 부족");
-                simTradeHistoryRepository.save(simHistory);
+                // 실패 기록 저장 (SIM 히스토리 테이블)
+                history.setExecutedPrice(BigDecimal.ZERO);
+                history.setOrderResult(OrderResult.FAILED);
+                history.setErrorMessage("모의투자 잔고 부족");
+                simHistoryService.saveTrade(history);
                 throw new CustomException(ExceptionMessage.ORDER_FAILED, "모의투자 잔고 부족");
             }
 
@@ -146,27 +143,5 @@ public class SimTradeService {
 
         log.info(LogMessage.SIM_PROFIT_LOSS_APPLIED.getMessage(),
                 userId, amount, profitLoss, wallet.getBalance());
-    }
-
-    /**
-     * TradeHistory → SimTradeHistory 변환.
-     * 부모 필드를 복사하여 SimTradeHistory 객체를 생성한다.
-     *
-     * @param history 원본 TradeHistory
-     * @return SimTradeHistory 객체
-     */
-    private SimTradeHistory toSimTradeHistory(TradeHistory history) {
-        SimTradeHistory sim = new SimTradeHistory();
-        sim.setQueueStepId(history.getQueueStepId());
-        sim.setUserId(history.getUserId());
-        sim.setSymbol(history.getSymbol());
-        sim.setSide(history.getSide());
-        sim.setAmount(history.getAmount());
-        sim.setExecutedPrice(history.getExecutedPrice());
-        sim.setOrderType(history.getOrderType());
-        sim.setOrderResult(history.getOrderResult());
-        sim.setFee(history.getFee());
-        sim.setErrorMessage(history.getErrorMessage());
-        return sim;
     }
 }

@@ -1,8 +1,8 @@
 package com.coin.webcointrader.market.controller;
 
-import com.coin.webcointrader.common.dto.response.FindTickerResponse;
-import com.coin.webcointrader.common.dto.response.GetKlineResponse;
-import com.coin.webcointrader.common.dto.response.OrderBookResponse;
+import com.coin.webcointrader.bybit.dto.response.FindTickerResponse;
+import com.coin.webcointrader.bybit.dto.response.GetKlineResponse;
+import com.coin.webcointrader.bybit.dto.response.OrderBookResponse;
 import com.coin.webcointrader.market.service.MarketService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;

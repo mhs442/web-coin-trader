@@ -1,6 +1,6 @@
 package com.coin.webcointrader.mypage.controller;
 
-import com.coin.webcointrader.common.dto.UserDTO;
+import com.coin.webcointrader.login.dto.UserDTO;
 import com.coin.webcointrader.common.dto.response.PageResponse;
 import com.coin.webcointrader.mypage.dto.*;
 import com.coin.webcointrader.mypage.service.MyPageService;

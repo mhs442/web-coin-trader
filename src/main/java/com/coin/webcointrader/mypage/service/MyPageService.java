@@ -1,14 +1,18 @@
 package com.coin.webcointrader.mypage.service;
 
-import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
-import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
+import com.coin.webcointrader.autotrade.dto.PatternQueueDTO;
+import com.coin.webcointrader.autotrade.service.PatternQueueService;
 import com.coin.webcointrader.common.dto.response.PageResponse;
-import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.mypage.dto.*;
-import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
-import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
+import com.coin.webcointrader.trade.dto.DailyProfitLossDTO;
+import com.coin.webcointrader.trade.dto.InvestmentHistoryDTO;
+import com.coin.webcointrader.trade.dto.ProfitLossSummaryDTO;
+import com.coin.webcointrader.trade.dto.SymbolProfitLossDTO;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
+import com.coin.webcointrader.trade.dto.WinLossCountDTO;
+import com.coin.webcointrader.trade.service.HistoryService;
+import com.coin.webcointrader.trade.service.TradeFacade;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -29,11 +33,8 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class MyPageService {
-    private final PatternQueueRepository patternQueueRepository;
-    private final TradeHistoryRepository tradeHistoryRepository;
-    private final InvestmentHistoryRepository investmentHistoryRepository;
-    private final SimTradeHistoryRepository simTradeHistoryRepository;
-    private final SimInvestmentHistoryRepository simInvestmentHistoryRepository;
+    private final PatternQueueService patternQueueService;
+    private final TradeFacade tradeFacade; // 모드별 HistoryService 선택 (MAIN/SIM)
 
     private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -50,16 +51,9 @@ public class MyPageService {
         TradeMode tradeMode = resolveMode(request.getMode());
         Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
 
-        Page<PatternQueue> queuePage;
-        if (hasValue(request.getSymbol())) {
-            // 심볼 키워드 있으면 DB 레벨 LIKE 필터로 페이징
-            queuePage = patternQueueRepository.findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
-                    userId, request.getSymbol(), tradeMode, request.getStartDate(), request.getEndDate(), pageable);
-        } else {
-            // 심볼 키워드 없으면 날짜 범위만으로 DB 페이징
-            queuePage = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
-                    userId, tradeMode, request.getStartDate(), request.getEndDate(), pageable);
-        }
+        // 심볼 필터/날짜 범위 분기와 엔티티→DTO 변환은 autotrade 도메인 서비스가 담당
+        Page<PatternQueueDTO> queuePage = patternQueueService.findQueuePage(
+                userId, request.getSymbol(), tradeMode, request.getStartDate(), request.getEndDate(), pageable);
 
         return PageResponse.from(queuePage, this::toPatternResponse);
     }
@@ -74,42 +68,18 @@ public class MyPageService {
      */
     public InvestmentHistoryPageResponse getInvestmentHistories(Long userId, InvestmentHistoryRequest request) {
         Sort dbSort = buildSort("createdAt", request.getSort());
-        boolean isSim = resolveMode(request.getMode()) == TradeMode.SIM;
+        HistoryService history = historyService(request.getMode());
+        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
 
-        // 모드에 따라 리포지토리 분기
-        if (isSim) {
-            return getSimInvestmentHistories(userId, request, dbSort);
-        }
+        // 심볼 키워드가 있으면 DB 레벨 LIKE 필터, 없으면 날짜 범위만으로 페이징 (분기는 HistoryService 내부)
+        Page<InvestmentHistoryDTO> historyPage = history.findInvestments(
+                userId, request.getSymbol(), request.getStartDate(), request.getEndDate(), pageable);
+        PageResponse<InvestmentHistoryResponse> pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
 
-        PageResponse<InvestmentHistoryResponse> pageResponse;
-        InvestmentSummaryResponse summary;
-
-        if (hasValue(request.getSymbol())) {
-            // 심볼 키워드 있으면 DB 레벨 LIKE 필터로 페이징
-            Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-            Page<InvestmentHistory> historyPage = investmentHistoryRepository
-                    .findByUserIdAndSymbolContainingIgnoreCaseAndCreatedAtBetween(
-                            userId, request.getSymbol(), request.getStartDate(), request.getEndDate(), pageable);
-
-            pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
-
-            summary = buildSummaryWithStats(
-                    investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
-                            userId, request.getStartDate(), request.getEndDate(), request.getSymbol()),
-                    investmentHistoryRepository.countWinLoss(userId, request.getStartDate(), request.getEndDate()));
-        } else {
-            // 심볼 키워드 없으면 날짜 범위만으로 DB 페이징
-            Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-            Page<InvestmentHistory> historyPage = investmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                    userId, request.getStartDate(), request.getEndDate(), pageable);
-
-            pageResponse = PageResponse.from(historyPage, this::toInvestmentResponse);
-
-            summary = buildSummaryWithStats(
-                    investmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
-                            userId, request.getStartDate(), request.getEndDate()),
-                    investmentHistoryRepository.countWinLoss(userId, request.getStartDate(), request.getEndDate()));
-        }
+        // 합산: 심볼 필터 반영. 승패 카운트는 기존 동작대로 심볼 필터 없이 집계
+        InvestmentSummaryResponse summary = buildSummaryWithStats(
+                history.sumProfitLoss(userId, request.getSymbol(), request.getStartDate(), request.getEndDate()),
+                history.countWinLoss(userId, request.getStartDate(), request.getEndDate()));
 
         return InvestmentHistoryPageResponse.builder()
                 .page(pageResponse)
@@ -131,29 +101,12 @@ public class MyPageService {
      * @return 거래 내역 목록 (체결 일시 오름차순, 해당 사이클 거래만)
      */
     public List<InvestmentTradeDetailResponse> getInvestmentTradeDetails(Long userId, Long investmentId, String mode) {
-        if ("sim".equalsIgnoreCase(mode)) {
-            SimInvestmentHistory inv = simInvestmentHistoryRepository
-                    .findByIdAndUserId(investmentId, userId)
-                    .orElse(null);
-            if (inv == null) return List.of();
+        HistoryService history = historyService(mode);
 
-            List<com.coin.webcointrader.common.entity.SimTradeHistory> trades =
-                    simTradeHistoryRepository.findByQueueStepIdAndUserIdAndCreatedAtLessThanEqualOrderByCreatedAtDesc(
-                            inv.getPatternStepId(), userId, inv.getCreatedAt());
-
-            return extractCycleTrades(trades).stream()
-                    .map(this::toSimTradeDetailResponse)
-                    .toList();
-        }
-
-        InvestmentHistory inv = investmentHistoryRepository
-                .findByIdAndUserId(investmentId, userId)
-                .orElse(null);
+        InvestmentHistoryDTO inv = history.findInvestment(investmentId, userId).orElse(null);
         if (inv == null) return List.of();
 
-        List<com.coin.webcointrader.common.entity.TradeHistory> trades =
-                tradeHistoryRepository.findByQueueStepIdAndUserIdAndCreatedAtLessThanEqualOrderByCreatedAtDesc(
-                        inv.getPatternStepId(), userId, inv.getCreatedAt());
+        List<TradeHistoryDTO> trades = history.findTradesUpTo(inv.getPatternStepId(), userId, inv.getCreatedAt());
 
         return extractCycleTrades(trades).stream()
                 .map(this::toTradeDetailResponse)
@@ -167,15 +120,14 @@ public class MyPageService {
      * @param trades 최신순 거래 목록 (createdAt DESC)
      * @return 해당 사이클 거래 목록 (createdAt ASC)
      */
-    @SuppressWarnings("unchecked")
-    private <T> List<T> extractCycleTrades(List<T> trades) {
+    private List<TradeHistoryDTO> extractCycleTrades(List<TradeHistoryDTO> trades) {
         if (trades.isEmpty()) return List.of();
 
         // EXIT(sell/liquidation) 찾기 — 최신순이므로 첫 번째가 해당 사이클 EXIT
-        T exitTrade = null;
+        TradeHistoryDTO exitTrade = null;
         int exitIdx = -1;
         for (int i = 0; i < trades.size(); i++) {
-            String orderType = getOrderType(trades.get(i));
+            String orderType = trades.get(i).getOrderType();
             if ("sell".equalsIgnoreCase(orderType) || "liquidation".equalsIgnoreCase(orderType)) {
                 exitTrade = trades.get(i);
                 exitIdx = i;
@@ -185,9 +137,9 @@ public class MyPageService {
         if (exitTrade == null) return List.of();
 
         // EXIT 직후(DESC 기준)가 해당 사이클의 ENTRY
-        List<T> result = new java.util.ArrayList<>();
+        List<TradeHistoryDTO> result = new java.util.ArrayList<>();
         for (int i = exitIdx + 1; i < trades.size(); i++) {
-            if ("entry".equalsIgnoreCase(getOrderType(trades.get(i)))) {
+            if ("entry".equalsIgnoreCase(trades.get(i).getOrderType())) {
                 result.add(trades.get(i)); // ENTRY
                 break;
             }
@@ -195,13 +147,6 @@ public class MyPageService {
         result.add(exitTrade); // EXIT
         // ASC 순서로 반환 (ENTRY → EXIT)
         return result;
-    }
-
-    /** 거래 엔티티에서 orderType 문자열을 추출한다. */
-    private String getOrderType(Object trade) {
-        if (trade instanceof com.coin.webcointrader.common.entity.TradeHistory t) return t.getOrderType();
-        if (trade instanceof com.coin.webcointrader.common.entity.SimTradeHistory t) return t.getOrderType();
-        return "";
     }
 
     /**
@@ -213,68 +158,40 @@ public class MyPageService {
      * @return 차트 데이터 응답
      */
     public HistoryChartResponse getHistoryChart(Long userId, InvestmentHistoryRequest request) {
-        boolean isSim = resolveMode(request.getMode()) == TradeMode.SIM;
-        boolean hasSymbol = request.getSymbol() != null && !request.getSymbol().isBlank();
-
+        HistoryService history = historyService(request.getMode());
         LocalDateTime start = request.getStartDate();
         LocalDateTime end = request.getEndDate();
         String symbol = request.getSymbol();
 
-        List<Object[]> dailyRaw;
-        List<Object[]> symbolRaw;
-        List<Object[]> winLossRaw;
-
-        // 모드 + 심볼 필터 여부에 따라 리포지토리 분기
-        if (isSim) {
-            if (hasSymbol) {
-                dailyRaw  = simInvestmentHistoryRepository.findDailyProfitLossBySymbol(userId, start, end, symbol);
-                symbolRaw = simInvestmentHistoryRepository.findProfitLossBySymbolFiltered(userId, start, end, symbol);
-                winLossRaw = simInvestmentHistoryRepository.countWinLossBySymbol(userId, start, end, symbol);
-            } else {
-                dailyRaw  = simInvestmentHistoryRepository.findDailyProfitLoss(userId, start, end);
-                symbolRaw = simInvestmentHistoryRepository.findProfitLossBySymbol(userId, start, end);
-                winLossRaw = simInvestmentHistoryRepository.countWinLoss(userId, start, end);
-            }
-        } else {
-            if (hasSymbol) {
-                dailyRaw  = investmentHistoryRepository.findDailyProfitLossBySymbol(userId, start, end, symbol);
-                symbolRaw = investmentHistoryRepository.findProfitLossBySymbolFiltered(userId, start, end, symbol);
-                winLossRaw = investmentHistoryRepository.countWinLossBySymbol(userId, start, end, symbol);
-            } else {
-                dailyRaw  = investmentHistoryRepository.findDailyProfitLoss(userId, start, end);
-                symbolRaw = investmentHistoryRepository.findProfitLossBySymbol(userId, start, end);
-                winLossRaw = investmentHistoryRepository.countWinLoss(userId, start, end);
-            }
-        }
+        List<DailyProfitLossDTO> dailyRaw = history.findDailyProfitLoss(userId, symbol, start, end);
+        List<SymbolProfitLossDTO> symbolRaw = history.findProfitLossBySymbol(userId, symbol, start, end);
+        // 심볼 필터가 있으면 심볼 기준 승패 카운트, 없으면 전체 카운트
+        WinLossCountDTO winLoss = hasValue(symbol)
+                ? history.countWinLossBySymbol(userId, symbol, start, end)
+                : history.countWinLoss(userId, start, end);
 
         // 일별 데이터 변환
         List<HistoryChartResponse.DailyData> dailyData = dailyRaw.stream()
-                .map(row -> HistoryChartResponse.DailyData.builder()
-                        .date((String) row[0])
-                        .profitLoss(((BigDecimal) row[1]).stripTrailingZeros().toPlainString())
+                .map(d -> HistoryChartResponse.DailyData.builder()
+                        .date(d.getDate())
+                        .profitLoss(d.getProfitLoss().stripTrailingZeros().toPlainString())
                         .build())
                 .toList();
 
         // 심볼별 데이터 변환
         List<HistoryChartResponse.SymbolData> symbolData = symbolRaw.stream()
-                .map(row -> HistoryChartResponse.SymbolData.builder()
-                        .symbol((String) row[0])
-                        .profitLoss(((BigDecimal) row[1]).stripTrailingZeros().toPlainString())
+                .map(d -> HistoryChartResponse.SymbolData.builder()
+                        .symbol(d.getSymbol())
+                        .profitLoss(d.getProfitLoss().stripTrailingZeros().toPlainString())
                         .build())
                 .toList();
-
-        // 승패 카운트 변환
-        Object[] winLoss = winLossRaw.isEmpty() ? new Object[]{0L, 0L, 0L} : winLossRaw.get(0);
-        long winCount = winLoss[0] != null ? ((Number) winLoss[0]).longValue() : 0L;
-        long lossCount = winLoss[1] != null ? ((Number) winLoss[1]).longValue() : 0L;
-        long totalCount = winLoss[2] != null ? ((Number) winLoss[2]).longValue() : 0L;
 
         return HistoryChartResponse.builder()
                 .dailyData(dailyData)
                 .symbolData(symbolData)
-                .winCount(winCount)
-                .lossCount(lossCount)
-                .totalCount(totalCount)
+                .winCount(winLoss.getWinCount())
+                .lossCount(winLoss.getLossCount())
+                .totalCount(winLoss.getTotalCount())
                 .build();
     }
 
@@ -287,12 +204,8 @@ public class MyPageService {
      */
     @org.springframework.transaction.annotation.Transactional
     public void deleteTradeHistories(Long userId, List<Long> ids, String mode) {
-        // 모드에 따라 리포지토리 분기
-        if ("sim".equalsIgnoreCase(mode)) {
-            simTradeHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
-        } else {
-            tradeHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
-        }
+        // 모드에 따라 MAIN/SIM 히스토리 서비스 분기
+        historyService(mode).deleteTrades(ids, userId);
     }
 
     /**
@@ -303,12 +216,8 @@ public class MyPageService {
      */
     @org.springframework.transaction.annotation.Transactional
     public void deleteAllTradeHistories(Long userId, String mode) {
-        // 모드에 따라 리포지토리 분기
-        if ("sim".equalsIgnoreCase(mode)) {
-            simTradeHistoryRepository.deleteAllByUserId(userId);
-        } else {
-            tradeHistoryRepository.deleteAllByUserId(userId);
-        }
+        // 모드에 따라 MAIN/SIM 히스토리 서비스 분기
+        historyService(mode).deleteAllTrades(userId);
     }
 
     /**
@@ -320,12 +229,8 @@ public class MyPageService {
      */
     @org.springframework.transaction.annotation.Transactional
     public void deleteInvestmentHistories(Long userId, List<Long> ids, String mode) {
-        // 모드에 따라 리포지토리 분기
-        if ("sim".equalsIgnoreCase(mode)) {
-            simInvestmentHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
-        } else {
-            investmentHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
-        }
+        // 모드에 따라 MAIN/SIM 히스토리 서비스 분기
+        historyService(mode).deleteInvestments(ids, userId);
     }
 
     /**
@@ -336,55 +241,13 @@ public class MyPageService {
      */
     @org.springframework.transaction.annotation.Transactional
     public void deleteAllInvestmentHistories(Long userId, String mode) {
-        // 모드에 따라 리포지토리 분기
-        if ("sim".equalsIgnoreCase(mode)) {
-            simInvestmentHistoryRepository.deleteAllByUserId(userId);
-        } else {
-            investmentHistoryRepository.deleteAllByUserId(userId);
-        }
+        // 모드에 따라 MAIN/SIM 히스토리 서비스 분기
+        historyService(mode).deleteAllInvestments(userId);
     }
 
     // ─────────────────────────────────────────────
     // private 헬퍼 메서드
     // ─────────────────────────────────────────────
-
-    /**
-     * 모의투자 투자 히스토리를 조회한다.
-     */
-    private InvestmentHistoryPageResponse getSimInvestmentHistories(Long userId, InvestmentHistoryRequest request, Sort dbSort) {
-        PageResponse<InvestmentHistoryResponse> pageResponse;
-        InvestmentSummaryResponse summary;
-
-        if (hasValue(request.getSymbol())) {
-            Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-            Page<SimInvestmentHistory> historyPage = simInvestmentHistoryRepository
-                    .findByUserIdAndSymbolContainingIgnoreCaseAndCreatedAtBetween(
-                            userId, request.getSymbol(), request.getStartDate(), request.getEndDate(), pageable);
-
-            pageResponse = PageResponse.from(historyPage, this::toSimInvestmentResponse);
-
-            summary = buildSummaryWithStats(
-                    simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(
-                            userId, request.getStartDate(), request.getEndDate(), request.getSymbol()),
-                    simInvestmentHistoryRepository.countWinLoss(userId, request.getStartDate(), request.getEndDate()));
-        } else {
-            Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), dbSort);
-            Page<SimInvestmentHistory> historyPage = simInvestmentHistoryRepository.findByUserIdAndCreatedAtBetween(
-                    userId, request.getStartDate(), request.getEndDate(), pageable);
-
-            pageResponse = PageResponse.from(historyPage, this::toSimInvestmentResponse);
-
-            summary = buildSummaryWithStats(
-                    simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetween(
-                            userId, request.getStartDate(), request.getEndDate()),
-                    simInvestmentHistoryRepository.countWinLoss(userId, request.getStartDate(), request.getEndDate()));
-        }
-
-        return InvestmentHistoryPageResponse.builder()
-                .page(pageResponse)
-                .summary(summary)
-                .build();
-    }
 
     /**
      * 정렬 조건 객체를 생성한다.
@@ -400,22 +263,19 @@ public class MyPageService {
     }
 
     /**
-     * DB SUM 쿼리 결과 + 승패 카운트 결과로 합산 통계 응답을 생성한다.
+     * 손익 합계 + 승패 카운트로 합산 통계 응답을 생성한다.
      *
-     * @param profitLossResult List containing single Object[] { totalProfit, totalLoss }
-     * @param winLossResult    List containing single Object[] { winCount, lossCount, totalCount }
+     * @param pl 수익 합 / 손실 합
+     * @param wl 승 / 패 / 전체 건수
      * @return 합산 통계 응답 DTO
      */
-    private InvestmentSummaryResponse buildSummaryWithStats(List<Object[]> profitLossResult, List<Object[]> winLossResult) {
-        Object[] pl = profitLossResult.get(0);
-        BigDecimal totalProfit = (BigDecimal) pl[0];
-        BigDecimal totalLoss = (BigDecimal) pl[1];
+    private InvestmentSummaryResponse buildSummaryWithStats(ProfitLossSummaryDTO pl, WinLossCountDTO wl) {
+        BigDecimal totalProfit = pl.getTotalProfit();
+        BigDecimal totalLoss = pl.getTotalLoss();
         BigDecimal netTotal = totalProfit.add(totalLoss);
 
-        Object[] wl = winLossResult.isEmpty() ? new Object[]{0L, 0L, 0L} : winLossResult.get(0);
-        long winCount = wl[0] != null ? ((Number) wl[0]).longValue() : 0L;
-        long lossCount = wl[1] != null ? ((Number) wl[1]).longValue() : 0L;
-        long totalCount = wl[2] != null ? ((Number) wl[2]).longValue() : 0L;
+        long winCount = wl.getWinCount();
+        long totalCount = wl.getTotalCount();
 
         // 승률 계산 (totalCount가 0이면 0.0%)
         String winRate = totalCount > 0
@@ -452,17 +312,27 @@ public class MyPageService {
         return "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
     }
 
+    /**
+     * 모드 문자열에 해당하는 히스토리 서비스를 반환한다.
+     *
+     * @param mode 모드 문자열 ("sim" 또는 그 외)
+     * @return SIM이면 모의투자, 그 외는 실전 히스토리 서비스
+     */
+    private HistoryService historyService(String mode) {
+        return tradeFacade.historyService(resolveMode(mode));
+    }
+
     // ─────────────────────────────────────────────
     // 변환 메서드
     // ─────────────────────────────────────────────
 
     /**
-     * PatternQueue → MyPagePatternResponse 변환 (계층 구조 포함)
+     * PatternQueueDTO → MyPagePatternResponse 변환 (계층 구조 포함)
      *
-     * @param queue PatternQueue 엔티티
+     * @param queue 패턴 큐 DTO
      * @return 마이페이지 패턴 응답 DTO
      */
-    private MyPagePatternResponse toPatternResponse(PatternQueue queue) {
+    private MyPagePatternResponse toPatternResponse(PatternQueueDTO queue) {
         List<MyPagePatternResponse.StepResponse> steps = queue.getSteps().stream()
                 .map(step -> MyPagePatternResponse.StepResponse.builder()
                         .stepLevel(step.getStepLevel())
@@ -475,7 +345,7 @@ public class MyPageService {
         return MyPagePatternResponse.builder()
                 .id(queue.getId())
                 .symbol(queue.getSymbol())
-                .exchangeType(queue.getExchangeType().name())
+                .exchangeType(queue.getExchangeType())
                 .active(queue.isActive())
                 .triggerRate(queue.getTriggerRate())
                 .createdAt(queue.getCreatedAt().format(DT_FMT))
@@ -484,12 +354,12 @@ public class MyPageService {
     }
 
     /**
-     * Pattern → PatternResponse 변환 (블록 포함)
+     * PatternDTO → PatternResponse 변환 (블록 포함)
      *
-     * @param pattern Pattern 엔티티
+     * @param pattern 패턴 DTO
      * @return 패턴 응답 DTO
      */
-    private MyPagePatternResponse.PatternResponse toPatternDetailResponse(Pattern pattern) {
+    private MyPagePatternResponse.PatternResponse toPatternDetailResponse(PatternQueueDTO.PatternDTO pattern) {
         List<MyPagePatternResponse.BlockResponse> blocks = pattern.getBlocks().stream()
                 .map(block -> MyPagePatternResponse.BlockResponse.builder()
                         .side(block.getSide().name())
@@ -509,12 +379,12 @@ public class MyPageService {
     }
 
     /**
-     * InvestmentHistory → InvestmentHistoryResponse 변환
+     * InvestmentHistoryDTO → InvestmentHistoryResponse 변환
      *
-     * @param h InvestmentHistory 엔티티
+     * @param h 투자 히스토리 DTO
      * @return 투자 히스토리 응답 DTO
      */
-    private InvestmentHistoryResponse toInvestmentResponse(InvestmentHistory h) {
+    private InvestmentHistoryResponse toInvestmentResponse(InvestmentHistoryDTO h) {
         return InvestmentHistoryResponse.builder()
                 .id(h.getId())
                 .symbol(h.getSymbol())
@@ -526,61 +396,19 @@ public class MyPageService {
                 .tpPrice(h.getTpPrice() != null ? h.getTpPrice().stripTrailingZeros().toPlainString() : null)
                 .slPrice(h.getSlPrice() != null ? h.getSlPrice().stripTrailingZeros().toPlainString() : null)
                 .profitLoss(h.getProfitLoss().stripTrailingZeros().toPlainString())
-                .fundingFee(h.getFundingFee() != null ? h.getFundingFee().stripTrailingZeros().toPlainString() : null)
+                .fundingFee(h.getFundingFee() != null ? h.getFundingFee().stripTrailingZeros().toPlainString() : null) // SIM은 null
                 .patternStepId(h.getPatternStepId())
                 .createdAt(h.getCreatedAt().format(DT_FMT))
                 .build();
     }
 
     /**
-     * TradeHistory → InvestmentTradeDetailResponse 변환
+     * TradeHistoryDTO → InvestmentTradeDetailResponse 변환
      *
-     * @param h TradeHistory 엔티티
+     * @param h 거래 히스토리 DTO
      * @return 거래 상세 응답 DTO
      */
-    private InvestmentTradeDetailResponse toTradeDetailResponse(TradeHistory h) {
-        return InvestmentTradeDetailResponse.builder()
-                .id(h.getId())
-                .orderType(h.getOrderType())
-                .executedPrice(h.getExecutedPrice().stripTrailingZeros().toPlainString())
-                .amount(h.getAmount().stripTrailingZeros().toPlainString())
-                .fee(h.getFee() != null ? h.getFee().stripTrailingZeros().toPlainString() : null)
-                .orderStatus(h.getOrderResult().name())
-                .errorMessage(h.getErrorMessage())
-                .createdAt(h.getCreatedAt().format(DT_FMT))
-                .build();
-    }
-
-    /**
-     * SimInvestmentHistory → InvestmentHistoryResponse 변환
-     *
-     * @param h SimInvestmentHistory 엔티티
-     * @return 투자 히스토리 응답 DTO
-     */
-    private InvestmentHistoryResponse toSimInvestmentResponse(SimInvestmentHistory h) {
-        return InvestmentHistoryResponse.builder()
-                .id(h.getId())
-                .symbol(h.getSymbol())
-                .side(h.getSide().name())
-                .entryPrice(h.getEntryPrice().stripTrailingZeros().toPlainString())
-                .exitPrice(h.getExitPrice().stripTrailingZeros().toPlainString())
-                .amount(h.getAmount().stripTrailingZeros().toPlainString())
-                .leverage(h.getLeverage())
-                .tpPrice(h.getTpPrice() != null ? h.getTpPrice().stripTrailingZeros().toPlainString() : null)
-                .slPrice(h.getSlPrice() != null ? h.getSlPrice().stripTrailingZeros().toPlainString() : null)
-                .profitLoss(h.getProfitLoss().stripTrailingZeros().toPlainString())
-                .patternStepId(h.getPatternStepId())
-                .createdAt(h.getCreatedAt().format(DT_FMT))
-                .build();
-    }
-
-    /**
-     * SimTradeHistory → InvestmentTradeDetailResponse 변환
-     *
-     * @param h SimTradeHistory 엔티티
-     * @return 거래 상세 응답 DTO
-     */
-    private InvestmentTradeDetailResponse toSimTradeDetailResponse(SimTradeHistory h) {
+    private InvestmentTradeDetailResponse toTradeDetailResponse(TradeHistoryDTO h) {
         return InvestmentTradeDetailResponse.builder()
                 .id(h.getId())
                 .orderType(h.getOrderType())

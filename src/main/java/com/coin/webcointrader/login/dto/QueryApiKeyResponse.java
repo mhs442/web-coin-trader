@@ -1,6 +1,6 @@
 package com.coin.webcointrader.login.dto;
 
-import com.coin.webcointrader.common.dto.BybitMasterDTO;
+import com.coin.webcointrader.bybit.dto.BybitMasterDTO;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Getter;
 import lombok.Setter;

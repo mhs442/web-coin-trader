@@ -1,15 +1,17 @@
 package com.coin.webcointrader.trade.service;
 
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
-import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
-import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
-import com.coin.webcointrader.common.dto.response.GetWalletBalanceResponse;
-import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
-import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
-import com.coin.webcointrader.common.entity.TradeHistory;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.bybit.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.bybit.dto.response.GetExecutionListResponse;
+import com.coin.webcointrader.bybit.dto.response.GetWalletBalanceResponse;
+import com.coin.webcointrader.bybit.dto.response.SetLeverageResponse;
+import com.coin.webcointrader.bybit.dto.response.SetMarginModeResponse;
+import com.coin.webcointrader.trade.dto.InvestmentHistoryDTO;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
 import com.coin.webcointrader.common.enums.TradeMode;
+import com.coin.webcointrader.sim.service.SimHistoryService;
 import com.coin.webcointrader.sim.service.SimTradeService;
 import com.coin.webcointrader.sim.service.SimWalletService;
 import com.coin.webcointrader.wallet.service.WalletService;
@@ -33,6 +35,8 @@ public class TradeFacade {
     private final SimTradeService simTradeService;
     private final WalletService walletService;
     private final SimWalletService simWalletService;
+    private final TradeHistoryService tradeHistoryService;
+    private final SimHistoryService simHistoryService;
 
     /**
      * 주문을 실행한다.
@@ -44,7 +48,7 @@ public class TradeFacade {
      * @return 주문 응답
      */
     public CreateOrderResponse placeOrder(CreateOrderRequest request, Long userId,
-                                          TradeHistory history, TradeMode tradeMode) {
+                                          TradeHistoryDTO history, TradeMode tradeMode) {
         // 모의투자 모드
         if (tradeMode == TradeMode.SIM) {
             return simTradeService.placeOrder(request, userId, history);
@@ -152,5 +156,35 @@ public class TradeFacade {
             simTradeService.applyProfitLoss(userId, amount, profitLoss);
         }
         // 실전 모드: Bybit에서 자동 반영되므로 no-op
+    }
+
+    /**
+     * 거래 히스토리를 모드에 맞는 테이블에 저장한다.
+     *
+     * @param dto       저장할 거래 히스토리
+     * @param tradeMode 거래 모드 (MAIN: trade_history, SIM: sim_trade_history)
+     */
+    public void saveTradeHistory(TradeHistoryDTO dto, TradeMode tradeMode) {
+        historyService(tradeMode).saveTrade(dto);
+    }
+
+    /**
+     * 투자 히스토리를 모드에 맞는 테이블에 저장한다.
+     *
+     * @param dto       저장할 투자 히스토리
+     * @param tradeMode 거래 모드 (MAIN: investment_history, SIM: sim_investment_history)
+     */
+    public void saveInvestmentHistory(InvestmentHistoryDTO dto, TradeMode tradeMode) {
+        historyService(tradeMode).saveInvestment(dto);
+    }
+
+    /**
+     * 거래 모드에 해당하는 히스토리 서비스를 반환한다.
+     *
+     * @param tradeMode 거래 모드
+     * @return SIM이면 {@link SimHistoryService}, 그 외는 {@link TradeHistoryService}
+     */
+    public HistoryService historyService(TradeMode tradeMode) {
+        return tradeMode == TradeMode.SIM ? simHistoryService : tradeHistoryService;
     }
 }

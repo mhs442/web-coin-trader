@@ -1,7 +1,7 @@
 package com.coin.webcointrader.login.repository;
 
 import com.coin.webcointrader.common.config.JpaConfig;
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.login.entity.User;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

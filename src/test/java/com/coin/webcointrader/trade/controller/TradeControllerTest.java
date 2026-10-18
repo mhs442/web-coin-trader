@@ -1,10 +1,10 @@
 package com.coin.webcointrader.trade.controller;
 
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.User;
-import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.login.dto.UserDTO;
+import com.coin.webcointrader.login.entity.User;
+import com.coin.webcointrader.login.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExchangeType;
-import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.login.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.repository.LoginRepository;
 import com.github.tomakehurst.wiremock.client.WireMock;

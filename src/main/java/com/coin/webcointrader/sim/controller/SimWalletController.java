@@ -1,6 +1,6 @@
 package com.coin.webcointrader.sim.controller;
 
-import com.coin.webcointrader.common.dto.UserDTO;
+import com.coin.webcointrader.login.dto.UserDTO;
 import com.coin.webcointrader.sim.dto.AddBalanceRequest;
 import com.coin.webcointrader.sim.service.SimWalletService;
 import lombok.RequiredArgsConstructor;

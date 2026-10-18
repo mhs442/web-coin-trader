@@ -1,18 +1,26 @@
 package com.coin.webcointrader.autotrade.service;
 
+import com.coin.webcointrader.autotrade.entity.Pattern;
+import com.coin.webcointrader.autotrade.entity.PatternBlock;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
+import com.coin.webcointrader.common.enums.Side;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
 import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
+import com.coin.webcointrader.autotrade.dto.PatternQueueDTO;
 import com.coin.webcointrader.autotrade.dto.UpdatePatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -34,6 +42,74 @@ public class PatternQueueService {
      */
     public List<PatternQueue> getQueues(Long userId, String symbol, TradeMode tradeMode) {
         return patternQueueRepository.findByUserIdAndSymbolAndTradeModeOrderByCreatedAtAsc(userId, symbol, tradeMode);
+    }
+
+    /**
+     * 사용자의 패턴 큐를 기간/심볼 조건으로 페이징 조회하여 DTO 로 반환한다. (마이페이지 등 타 도메인용)
+     * 계층(단계→패턴→블록)은 지연 로딩이므로 트랜잭션 안에서 DTO 로 변환한다.
+     *
+     * @param userId    사용자 ID
+     * @param symbol    심볼 키워드 (null/공백이면 심볼 필터 없음, 있으면 대소문자 무시 부분일치)
+     * @param tradeMode 거래 모드 (MAIN/SIM)
+     * @param start     조회 시작 일시
+     * @param end       조회 종료 일시
+     * @param pageable  페이징/정렬 조건
+     * @return 패턴 큐 DTO 페이지
+     */
+    @Transactional(readOnly = true)
+    public Page<PatternQueueDTO> findQueuePage(Long userId, String symbol, TradeMode tradeMode,
+                                               LocalDateTime start, LocalDateTime end, Pageable pageable) {
+        Page<PatternQueue> page;
+        if (symbol != null && !symbol.isBlank()) {
+            // 심볼 키워드 있으면 DB 레벨 LIKE 필터로 페이징
+            page = patternQueueRepository.findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
+                    userId, symbol, tradeMode, start, end, pageable);
+        } else {
+            // 심볼 키워드 없으면 날짜 범위만으로 DB 페이징
+            page = patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                    userId, tradeMode, start, end, pageable);
+        }
+        return page.map(this::toDto);
+    }
+
+    /**
+     * PatternQueue 엔티티를 계층 구조 포함 DTO 로 변환한다.
+     *
+     * @param queue 패턴 큐 엔티티
+     * @return 패턴 큐 DTO
+     */
+    private PatternQueueDTO toDto(PatternQueue queue) {
+        List<PatternQueueDTO.StepDTO> steps = queue.getSteps().stream()
+                .map(step -> PatternQueueDTO.StepDTO.builder()
+                        .stepLevel(step.getStepLevel())
+                        .patterns(step.getPatterns().stream()
+                                .map(p -> PatternQueueDTO.PatternDTO.builder()
+                                        .patternOrder(p.getPatternOrder())
+                                        .amount(p.getAmount())
+                                        .leverage(p.getLeverage())
+                                        .stopLossRate(p.getStopLossRate())
+                                        .takeProfitRate(p.getTakeProfitRate())
+                                        .blocks(p.getBlocks().stream()
+                                                .map(b -> PatternQueueDTO.BlockDTO.builder()
+                                                        .side(b.getSide())
+                                                        .blockOrder(b.getBlockOrder())
+                                                        .leaf(b.isLeaf())
+                                                        .build())
+                                                .toList())
+                                        .build())
+                                .toList())
+                        .build())
+                .toList();
+
+        return PatternQueueDTO.builder()
+                .id(queue.getId())
+                .symbol(queue.getSymbol())
+                .exchangeType(queue.getExchangeType().name())
+                .active(queue.isActive())
+                .triggerRate(queue.getTriggerRate())
+                .createdAt(queue.getCreatedAt())
+                .steps(steps)
+                .build();
     }
 
     /**

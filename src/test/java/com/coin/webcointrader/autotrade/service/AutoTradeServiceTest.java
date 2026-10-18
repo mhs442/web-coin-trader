@@ -1,23 +1,25 @@
 package com.coin.webcointrader.autotrade.service;
 
+import com.coin.webcointrader.autotrade.entity.Pattern;
+import com.coin.webcointrader.autotrade.entity.PatternBlock;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
+import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
 import com.coin.webcointrader.autotrade.dto.AutoTradeStatusResponse;
 import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
 import com.coin.webcointrader.autotrade.dto.TradePhase;
-import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.response.FindTickerResponse;
-import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.trade.dto.InvestmentHistoryDTO;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
+import com.coin.webcointrader.bybit.client.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.response.FindTickerResponse;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
-import com.coin.webcointrader.common.exchange.ExchangeAdapter;
-import com.coin.webcointrader.common.exchange.ExchangeAdapterRegistry;
+import com.coin.webcointrader.common.exchange.ExchangeClient;
+import com.coin.webcointrader.common.exchange.ExchangeClientRegistry;
 import com.coin.webcointrader.market.service.MarketService;
-import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
-import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
 import com.coin.webcointrader.trade.service.TradeFacade;
 import com.coin.webcointrader.trade.service.TradeService;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,18 +59,6 @@ class AutoTradeServiceTest {
     private PatternQueueRepository patternQueueRepository;
 
     @Mock
-    private TradeHistoryRepository tradeHistoryRepository;
-
-    @Mock
-    private InvestmentHistoryRepository investmentHistoryRepository;
-
-    @Mock
-    private SimTradeHistoryRepository simTradeHistoryRepository;
-
-    @Mock
-    private SimInvestmentHistoryRepository simInvestmentHistoryRepository;
-
-    @Mock
     private TradeFacade tradeFacade;
 
     @Mock
@@ -78,10 +68,10 @@ class AutoTradeServiceTest {
     private MarketService marketService;
 
     @Mock
-    private ExchangeAdapterRegistry adapterRegistry;
+    private ExchangeClientRegistry adapterRegistry;
 
     @Mock
-    private ExchangeAdapter bybitAdapter;
+    private ExchangeClient bybitAdapter;
 
     @Mock
     private SimpMessagingTemplate messagingTemplate;
@@ -433,7 +423,7 @@ class AutoTradeServiceTest {
             assertThat(state.getCurrentBlockOrder()).isEqualTo(2); // 첫 블록 자동 매칭으로 2부터
             assertThat(state.getPhase()).isEqualTo(TradePhase.BLOCK_MATCHING);
             then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any());
-            then(investmentHistoryRepository).should(never()).save(any());
+            then(tradeFacade).should(never()).saveInvestmentHistory(any(), any());
         }
 
         @Test
@@ -790,9 +780,9 @@ class AutoTradeServiceTest {
             autoTradeService.processPositionHolding(queue, state, session, "55500.00");
 
             // 매도 주문 + 거래/투자 이력 저장
-            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(TradeHistory.class), any());
-            then(tradeHistoryRepository).should(times(1)).save(any(TradeHistory.class));
-            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+            then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(TradeHistoryDTO.class), any());
+            then(tradeFacade).should(times(1)).saveTradeHistory(any(TradeHistoryDTO.class), any());
+            then(tradeFacade).should(times(1)).saveInvestmentHistory(any(InvestmentHistoryDTO.class), any());
 
             // 1단계 LONG 재진입, currentBlockOrder=2 (첫 블록 자동 매칭)
             assertThat(state.getCurrentStepLevel()).isEqualTo(1);
@@ -818,7 +808,7 @@ class AutoTradeServiceTest {
 
             // 청산 주문 + 거래/투자 이력 저장
             then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
-            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+            then(tradeFacade).should(times(1)).saveInvestmentHistory(any(InvestmentHistoryDTO.class), any());
 
             // 2단계 SHORT 이동, currentBlockOrder=2
             assertThat(state.getCurrentStepLevel()).isEqualTo(2);
@@ -842,7 +832,7 @@ class AutoTradeServiceTest {
             autoTradeService.processPositionHolding(queue, state, session, "44500.00");
 
             then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
-            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+            then(tradeFacade).should(times(1)).saveInvestmentHistory(any(InvestmentHistoryDTO.class), any());
             assertThat(state.getCurrentStepLevel()).isEqualTo(1);
             assertThat(state.getDirection()).isEqualTo(Side.SHORT);
             assertThat(state.getActivePatternId()).isEqualTo(200L);
@@ -861,7 +851,7 @@ class AutoTradeServiceTest {
             autoTradeService.processPositionHolding(queue, state, session, "55500.00");
 
             then(tradeFacade).should(times(1)).placeOrder(any(), any(), any(), any());
-            then(investmentHistoryRepository).should(times(1)).save(any(InvestmentHistory.class));
+            then(tradeFacade).should(times(1)).saveInvestmentHistory(any(InvestmentHistoryDTO.class), any());
             assertThat(state.getCurrentStepLevel()).isEqualTo(2);
             assertThat(state.getDirection()).isEqualTo(Side.LONG);
             assertThat(state.getCurrentBlockOrder()).isEqualTo(2);

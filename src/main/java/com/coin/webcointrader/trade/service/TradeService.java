@@ -1,27 +1,25 @@
 package com.coin.webcointrader.trade.service;
 
-import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.common.client.position.PositionClient;
-import com.coin.webcointrader.common.client.trade.TradeClient;
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
-import com.coin.webcointrader.common.dto.request.SetTradingStopRequest;
-import com.coin.webcointrader.common.dto.request.SetMarginModeRequest;
-import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
-import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
-import com.coin.webcointrader.common.dto.response.SetLeverageResponse;
-import com.coin.webcointrader.common.dto.response.SetMarginModeResponse;
-import com.coin.webcointrader.common.dto.response.SetTradingStopResponse;
-import com.coin.webcointrader.common.entity.TradeHistory;
-import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.bybit.client.position.PositionClient;
+import com.coin.webcointrader.bybit.client.trade.TradeClient;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.bybit.dto.request.SetTradingStopRequest;
+import com.coin.webcointrader.bybit.dto.request.SetMarginModeRequest;
+import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.bybit.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.bybit.dto.response.GetExecutionListResponse;
+import com.coin.webcointrader.bybit.dto.response.SetLeverageResponse;
+import com.coin.webcointrader.bybit.dto.response.SetMarginModeResponse;
+import com.coin.webcointrader.bybit.dto.response.SetTradingStopResponse;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
+import com.coin.webcointrader.login.dto.ExchangeKeyDTO;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
-import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.exception.CustomException;
-import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.login.service.ExchangeKeyService;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import lombok.RequiredArgsConstructor;
@@ -41,8 +39,8 @@ public class TradeService {
 
     private final TradeClient tradeClient;
     private final PositionClient positionClient;
-    private final TradeHistoryRepository tradeHistoryRepository;
-    private final UserExchangeKeyRepository userExchangeKeyRepository;
+    private final TradeHistoryService tradeHistoryService;
+    private final ExchangeKeyService exchangeKeyService;
     private final AesEncryptor aesEncryptor;
 
     /**
@@ -62,15 +60,15 @@ public class TradeService {
      * Bybit에 주문을 실행한다.
      * category가 없으면 LINEAR로 기본 설정하고,
      * 사용자 API Key/Secret을 복호화하여 {@link com.coin.webcointrader.common.util.UserApiKeyContext}에 설정 후 주문을 전송한다.
-     * Bybit 응답의 retCode가 "0"이 아니면 TradeHistory에 실패 이력을 저장한 후 예외를 던진다.
+     * Bybit 응답의 retCode가 "0"이 아니면 거래 히스토리에 실패 이력을 저장한 후 예외를 던진다.
      *
      * @param request 주문 요청 (symbol, side, orderType, qty 등 포함, category 생략 가능)
      * @param userId  API Key를 조회할 사용자 ID
-     * @param history 거래 이력 엔티티 (실패 시 저장용, null 가능)
+     * @param history 거래 이력 DTO (실패 시 저장용, null 가능)
      * @return 주문 생성 응답 (Bybit 주문 ID 포함)
      * @throws CustomException 주문 실패 시 (ORDER_FAILED), 사용자를 찾을 수 없는 경우 (USER_NOT_FOUND)
      */
-    public CreateOrderResponse placeOrder(CreateOrderRequest request, Long userId, TradeHistory history) {
+    public CreateOrderResponse placeOrder(CreateOrderRequest request, Long userId, TradeHistoryDTO history) {
         // category가 없으면 LINEAR로 기본 설정
         if (request.getCategory() == null) {
             request = CreateOrderRequest.builder()
@@ -96,7 +94,7 @@ public class TradeService {
                     history.setExecutedPrice(BigDecimal.ZERO);
                     history.setOrderResult(OrderResult.FAILED);
                     history.setErrorMessage(errorMsg);
-                    tradeHistoryRepository.save(history);
+                    tradeHistoryService.saveTrade(history);
                 }
                 throw new CustomException(ExceptionMessage.ORDER_FAILED, errorMsg);
             }
@@ -263,9 +261,7 @@ public class TradeService {
      * @throws CustomException 거래소 API 키를 찾을 수 없는 경우 (API_KEY_NOT_FOUND)
      */
     private void setApiKeyContext(Long userId) {
-        UserExchangeKey key = userExchangeKeyRepository
-                .findByUserIdAndExchangeType(userId, ExchangeType.BYBIT)
-                .orElseThrow(() -> new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
+        ExchangeKeyDTO key = exchangeKeyService.findKey(userId, ExchangeType.BYBIT);
 
         UserApiKeyContext.set(
                 aesEncryptor.decrypt(key.getApiKey()),

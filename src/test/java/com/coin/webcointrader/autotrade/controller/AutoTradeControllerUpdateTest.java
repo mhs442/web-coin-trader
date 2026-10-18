@@ -1,8 +1,8 @@
 package com.coin.webcointrader.autotrade.controller;
 
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.PatternQueue;
+import com.coin.webcointrader.login.dto.UserDTO;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;

@@ -1,10 +1,19 @@
 package com.coin.webcointrader.autotrade.service;
 
+import com.coin.webcointrader.autotrade.entity.Pattern;
+import com.coin.webcointrader.autotrade.entity.PatternBlock;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
+import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
+import com.coin.webcointrader.autotrade.dto.PatternQueueDTO;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +29,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 
@@ -367,6 +377,62 @@ class PatternQueueServiceTest {
 
     // ─────────────────────────────────────────────
     // 헬퍼 메서드
+    // ─────────────────────────────────────────────
+    // findQueuePage (마이페이지 등 타 도메인 조회용 DTO 페이지)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("findQueuePage: 심볼 키워드가 없으면 날짜 범위만으로 조회하고 DTO로 변환한다")
+    void findQueuePage_withoutSymbol() {
+        Pageable pageable = PageRequest.of(0, 10);
+        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                eq(1L), eq(TradeMode.MAIN), any(), any(), eq(pageable)))
+                .willReturn(new PageImpl<>(List.of(makePatternQueue(1L, 1L, "BTCUSDT"))));
+
+        Page<PatternQueueDTO> result = patternQueueService.findQueuePage(
+                1L, null, TradeMode.MAIN, java.time.LocalDateTime.MIN, java.time.LocalDateTime.MAX, pageable);
+
+        assertThat(result.getContent()).hasSize(1);
+        assertThat(result.getContent().get(0).getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(result.getContent().get(0).getCreatedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("findQueuePage: 심볼 키워드가 있으면 LIKE 필터 쿼리로 조회한다")
+    void findQueuePage_withSymbol() {
+        Pageable pageable = PageRequest.of(0, 10);
+        given(patternQueueRepository.findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndCreatedAtBetween(
+                eq(1L), eq("BTC"), eq(TradeMode.MAIN), any(), any(), eq(pageable)))
+                .willReturn(new PageImpl<>(List.of(makePatternQueue(1L, 1L, "BTCUSDT"))));
+
+        Page<PatternQueueDTO> result = patternQueueService.findQueuePage(
+                1L, "BTC", TradeMode.MAIN, java.time.LocalDateTime.MIN, java.time.LocalDateTime.MAX, pageable);
+
+        assertThat(result.getContent()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("findQueuePage: 단계→패턴→블록 계층 구조가 DTO에 포함된다")
+    void findQueuePage_includesHierarchy() {
+        Pageable pageable = PageRequest.of(0, 10);
+        given(patternQueueRepository.findByUserIdAndTradeModeAndCreatedAtBetween(
+                eq(1L), eq(TradeMode.SIM), any(), any(), eq(pageable)))
+                .willReturn(new PageImpl<>(List.of(makePatternQueueWithSteps(1L, 1L, "BTCUSDT"))));
+
+        PatternQueueDTO dto = patternQueueService.findQueuePage(
+                1L, "", TradeMode.SIM, java.time.LocalDateTime.MIN, java.time.LocalDateTime.MAX, pageable)
+                .getContent().get(0);
+
+        assertThat(dto.getSteps()).hasSize(1);
+        assertThat(dto.getSteps().get(0).getStepLevel()).isEqualTo(1);
+        PatternQueueDTO.PatternDTO pattern = dto.getSteps().get(0).getPatterns().get(0);
+        assertThat(pattern.getAmount()).isEqualByComparingTo(new BigDecimal("10"));
+        assertThat(pattern.getLeverage()).isEqualTo(5);
+        assertThat(pattern.getBlocks()).hasSize(2);
+        assertThat(pattern.getBlocks().get(1).isLeaf()).isTrue();
+        assertThat(pattern.getBlocks().get(0).getSide()).isEqualTo(Side.LONG);
+    }
+
     // ─────────────────────────────────────────────
 
     /**

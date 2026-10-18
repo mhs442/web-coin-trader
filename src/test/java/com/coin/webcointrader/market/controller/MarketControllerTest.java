@@ -1,6 +1,6 @@
 package com.coin.webcointrader.market.controller;
 
-import com.coin.webcointrader.common.dto.UserDTO;
+import com.coin.webcointrader.login.dto.UserDTO;
 import com.coin.webcointrader.market.service.MarketService;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;

@@ -1,9 +1,10 @@
 package com.coin.webcointrader.autotrade.service;
 
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
 import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
 import com.coin.webcointrader.autotrade.dto.UpdatePatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.common.entity.*;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;

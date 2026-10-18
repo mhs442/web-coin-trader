@@ -1,12 +1,12 @@
 package com.coin.webcointrader.wallet.service;
 
-import com.coin.webcointrader.common.client.account.AccountClient;
-import com.coin.webcointrader.common.dto.response.GetWalletBalanceResponse;
-import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.bybit.client.account.AccountClient;
+import com.coin.webcointrader.bybit.dto.response.GetWalletBalanceResponse;
+import com.coin.webcointrader.login.dto.ExchangeKeyDTO;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
-import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.login.service.ExchangeKeyService;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import org.junit.jupiter.api.AfterEach;
@@ -18,7 +18,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -35,7 +34,7 @@ class WalletServiceTest {
     private AccountClient accountClient;
 
     @Mock
-    private UserExchangeKeyRepository userExchangeKeyRepository;
+    private ExchangeKeyService exchangeKeyService;
 
     @Mock
     private AesEncryptor aesEncryptor;
@@ -50,13 +49,12 @@ class WalletServiceTest {
     void getWalletBalance_success() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeKey(userId, "encKey", "encSecret");
+        ExchangeKeyDTO key = makeKey(userId, "encKey", "encSecret");
         GetWalletBalanceResponse response = new GetWalletBalanceResponse();
         response.setRetCode("0");
         response.setRetMsg("OK");
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT))
-                .willReturn(Optional.of(key));
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(accountClient.getWalletBalance("UNIFIED")).willReturn(ResponseEntity.ok(response));
 
@@ -73,8 +71,8 @@ class WalletServiceTest {
     void getWalletBalance_apiKeyNotFound() {
         // given
         Long userId = 99L;
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT))
-                .willReturn(Optional.empty());
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT))
+                .willThrow(new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
 
         // when & then
         assertThatThrownBy(() -> walletService.getWalletBalance(userId))
@@ -87,13 +85,12 @@ class WalletServiceTest {
     void getWalletBalance_retCodeFailure_throwsException() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeKey(userId, "encKey", "encSecret");
+        ExchangeKeyDTO key = makeKey(userId, "encKey", "encSecret");
         GetWalletBalanceResponse response = new GetWalletBalanceResponse();
         response.setRetCode("10003"); // Bybit 서명/권한 오류 등
         response.setRetMsg("Invalid API key");
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT))
-                .willReturn(Optional.of(key));
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(accountClient.getWalletBalance("UNIFIED")).willReturn(ResponseEntity.ok(response));
 
@@ -109,10 +106,9 @@ class WalletServiceTest {
     void getWalletBalance_nullResponse_throwsException() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeKey(userId, "encKey", "encSecret");
+        ExchangeKeyDTO key = makeKey(userId, "encKey", "encSecret");
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT))
-                .willReturn(Optional.of(key));
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(accountClient.getWalletBalance("UNIFIED")).willReturn(ResponseEntity.ok(null));
 
@@ -127,12 +123,11 @@ class WalletServiceTest {
     void getWalletBalance_clearsContext() {
         // given
         Long userId = 1L;
-        UserExchangeKey key = makeKey(userId, "encKey", "encSecret");
+        ExchangeKeyDTO key = makeKey(userId, "encKey", "encSecret");
         GetWalletBalanceResponse response = new GetWalletBalanceResponse();
         response.setRetCode("0");
 
-        given(userExchangeKeyRepository.findByUserIdAndExchangeType(userId, ExchangeType.BYBIT))
-                .willReturn(Optional.of(key));
+        given(exchangeKeyService.findKey(userId, ExchangeType.BYBIT)).willReturn(key);
         given(aesEncryptor.decrypt(anyString())).willReturn("raw");
         given(accountClient.getWalletBalance("UNIFIED")).willReturn(ResponseEntity.ok(response));
 
@@ -148,12 +143,8 @@ class WalletServiceTest {
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
-    private UserExchangeKey makeKey(Long userId, String encApiKey, String encApiSecret) {
-        UserExchangeKey key = new UserExchangeKey();
-        key.setUserId(userId);
-        key.setExchangeType(ExchangeType.BYBIT);
-        key.setApiKey(encApiKey);
-        key.setApiSecret(encApiSecret);
-        return key;
+    private ExchangeKeyDTO makeKey(Long userId, String encApiKey, String encApiSecret) {
+        return ExchangeKeyDTO.builder().userId(userId).exchangeType(ExchangeType.BYBIT)
+                .apiKey(encApiKey).apiSecret(encApiSecret).build();
     }
 }

@@ -1,6 +1,6 @@
 package com.coin.webcointrader.login.controller;
 
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.login.entity.User;
 import com.coin.webcointrader.login.repository.LoginRepository;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;

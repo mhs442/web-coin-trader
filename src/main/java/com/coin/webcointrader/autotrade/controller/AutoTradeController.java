@@ -1,12 +1,14 @@
 package com.coin.webcointrader.autotrade.controller;
 
+import com.coin.webcointrader.autotrade.entity.PatternBlock;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
 import com.coin.webcointrader.autotrade.dto.*;
 import com.coin.webcointrader.autotrade.service.AutoTradeService;
 import com.coin.webcointrader.autotrade.service.PatternQueueService;
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.login.dto.UserDTO;
 import com.coin.webcointrader.common.enums.TradeMode;
-import com.coin.webcointrader.common.entity.Pattern;
+import com.coin.webcointrader.autotrade.entity.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;

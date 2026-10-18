@@ -1,11 +1,11 @@
 package com.coin.webcointrader.market.service;
 
-import com.coin.webcointrader.common.client.market.MarketClient;
-import com.coin.webcointrader.common.client.market.dto.WebSocketTickerDTO;
-import com.coin.webcointrader.common.dto.response.FindTickerResponse;
-import com.coin.webcointrader.common.dto.response.GetInstrumentsInfoResponse;
-import com.coin.webcointrader.common.dto.response.GetKlineResponse;
-import com.coin.webcointrader.common.dto.response.OrderBookResponse;
+import com.coin.webcointrader.bybit.client.market.MarketClient;
+import com.coin.webcointrader.bybit.client.market.dto.WebSocketTickerDTO;
+import com.coin.webcointrader.bybit.dto.response.FindTickerResponse;
+import com.coin.webcointrader.bybit.dto.response.GetInstrumentsInfoResponse;
+import com.coin.webcointrader.bybit.dto.response.GetKlineResponse;
+import com.coin.webcointrader.bybit.dto.response.OrderBookResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

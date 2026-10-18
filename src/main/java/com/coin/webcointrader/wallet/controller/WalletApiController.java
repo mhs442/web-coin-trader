@@ -1,7 +1,7 @@
 package com.coin.webcointrader.wallet.controller;
 
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.dto.response.GetWalletBalanceResponse;
+import com.coin.webcointrader.login.dto.UserDTO;
+import com.coin.webcointrader.bybit.dto.response.GetWalletBalanceResponse;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.trade.service.TradeFacade;
 import lombok.RequiredArgsConstructor;

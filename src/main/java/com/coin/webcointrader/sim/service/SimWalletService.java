@@ -1,10 +1,12 @@
 package com.coin.webcointrader.sim.service;
 
-import com.coin.webcointrader.common.dto.response.GetWalletBalanceResponse;
-import com.coin.webcointrader.common.entity.SimWallet;
+import com.coin.webcointrader.bybit.dto.response.GetWalletBalanceResponse;
+import com.coin.webcointrader.login.entity.User;
+import com.coin.webcointrader.sim.entity.SimWallet;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.sim.repository.SimWalletRepository;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +24,7 @@ import java.util.List;
 public class SimWalletService {
 
     private final SimWalletRepository simWalletRepository;
+    private final EntityManager entityManager;
 
     /**
      * 사용자의 가상 지갑 잔고를 GetWalletBalanceResponse 형태로 조회한다.
@@ -60,6 +63,19 @@ public class SimWalletService {
         response.setResult(result);
 
         return response;
+    }
+
+    /**
+     * 신규 사용자의 가상 지갑을 기본 잔고(10,000 USDT)로 생성한다. (회원가입 시 호출)
+     * User 조회 쿼리 없이 참조(프록시)만 얻어 연관관계를 설정한다.
+     *
+     * @param userId 지갑 소유자 사용자 ID (이미 저장된 사용자)
+     */
+    @Transactional
+    public void createWallet(Long userId) {
+        SimWallet wallet = new SimWallet();
+        wallet.setUser(entityManager.getReference(User.class, userId));
+        simWalletRepository.save(wallet);
     }
 
     /**

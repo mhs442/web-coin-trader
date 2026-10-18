@@ -1,35 +1,35 @@
 package com.coin.webcointrader.autotrade.service;
 
+import com.coin.webcointrader.autotrade.entity.Pattern;
+import com.coin.webcointrader.autotrade.entity.PatternBlock;
+import com.coin.webcointrader.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.autotrade.entity.PatternStep;
+import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.autotrade.dto.AutoTradeAlertResponse;
 import com.coin.webcointrader.autotrade.dto.AutoTradeSessionDTO;
 import com.coin.webcointrader.autotrade.dto.AutoTradeStatusResponse;
 import com.coin.webcointrader.autotrade.dto.QueueStateDTO;
 import com.coin.webcointrader.autotrade.dto.TradePhase;
-import com.coin.webcointrader.autotrade.repository.InvestmentHistoryRepository;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
-import com.coin.webcointrader.autotrade.repository.TradeHistoryRepository;
-import com.coin.webcointrader.common.client.market.dto.WebSocketKlineDTO;
-import com.coin.webcointrader.common.exchange.ExchangeAdapter;
-import com.coin.webcointrader.common.exchange.ExchangeAdapterRegistry;
+import com.coin.webcointrader.trade.dto.InvestmentHistoryDTO;
+import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
+import com.coin.webcointrader.bybit.client.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.common.exchange.ExchangeClient;
+import com.coin.webcointrader.common.exchange.ExchangeClientRegistry;
 import com.coin.webcointrader.common.enums.ExchangeType;
-import com.coin.webcointrader.common.util.TradeCalculator;
-import com.coin.webcointrader.common.dto.request.CreateOrderRequest;
-import com.coin.webcointrader.common.dto.request.SetLeverageRequest;
-import com.coin.webcointrader.common.dto.response.CreateOrderResponse;
-import com.coin.webcointrader.common.dto.response.FindTickerResponse;
-import com.coin.webcointrader.common.dto.response.GetClosedPnlResponse;
-import com.coin.webcointrader.common.dto.response.GetExecutionListResponse;
-import com.coin.webcointrader.common.entity.*;
+import com.coin.webcointrader.autotrade.util.TradeCalculator;
+import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
+import com.coin.webcointrader.bybit.dto.request.SetLeverageRequest;
+import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
+import com.coin.webcointrader.bybit.dto.response.FindTickerResponse;
+import com.coin.webcointrader.bybit.dto.response.GetClosedPnlResponse;
+import com.coin.webcointrader.bybit.dto.response.GetExecutionListResponse;
 import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.market.service.MarketService;
-import com.coin.webcointrader.common.entity.SimTradeHistory;
-import com.coin.webcointrader.common.entity.SimInvestmentHistory;
-import com.coin.webcointrader.sim.repository.SimTradeHistoryRepository;
-import com.coin.webcointrader.sim.repository.SimInvestmentHistoryRepository;
 import com.coin.webcointrader.trade.service.TradeFacade;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -64,13 +64,9 @@ import java.util.stream.Collectors;
 @Slf4j
 public class AutoTradeService {
     private final PatternQueueRepository patternQueueRepository;
-    private final TradeHistoryRepository tradeHistoryRepository;
-    private final InvestmentHistoryRepository investmentHistoryRepository;
-    private final SimTradeHistoryRepository simTradeHistoryRepository;
-    private final SimInvestmentHistoryRepository simInvestmentHistoryRepository;
     private final TradeFacade tradeFacade;
     private final MarketService marketService;
-    private final ExchangeAdapterRegistry adapterRegistry;
+    private final ExchangeClientRegistry adapterRegistry;
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
 
     // 활성 세션 관리 (키: "userId:exchangeType:symbol:tradeMode")
@@ -90,7 +86,7 @@ public class AutoTradeService {
     @PostConstruct
     public void init() {
         // 등록된 모든 거래소 어댑터에 가격/봉마감 콜백을 등록
-        for (ExchangeAdapter adapter : adapterRegistry.getAll()) {
+        for (ExchangeClient adapter : adapterRegistry.getAll()) {
             adapter.registerPriceCallback(this::onPriceUpdate);
             adapter.registerKlineCallback(this::onKlineConfirmed);
         }
@@ -703,7 +699,7 @@ public class AutoTradeService {
                 .build();
 
         // TradeHistory 준비 (투입 금액은 마진 기준으로 저장)
-        TradeHistory history = new TradeHistory();
+        TradeHistoryDTO history = new TradeHistoryDTO();
         history.setQueueStepId(state.getActiveStepId());
         history.setUserId(session.getUserId());
         history.setSymbol(session.getSymbol());
@@ -880,7 +876,7 @@ public class AutoTradeService {
                 .qty(qty)
                 .build();
 
-        TradeHistory history = new TradeHistory();
+        TradeHistoryDTO history = new TradeHistoryDTO();
         history.setQueueStepId(state.getActiveStepId());
         history.setUserId(session.getUserId());
         history.setSymbol(session.getSymbol());
@@ -1042,7 +1038,7 @@ public class AutoTradeService {
                 return;
             }
 
-            TradeHistory history = new TradeHistory();
+            TradeHistoryDTO history = new TradeHistoryDTO();
             history.setQueueStepId(state.getActiveStepId());
             history.setUserId(session.getUserId());
             history.setSymbol(session.getSymbol());
@@ -1187,7 +1183,7 @@ public class AutoTradeService {
                 return;
             }
 
-            TradeHistory history = new TradeHistory();
+            TradeHistoryDTO history = new TradeHistoryDTO();
             history.setQueueStepId(state.getActiveStepId());
             history.setUserId(session.getUserId());
             history.setSymbol(session.getSymbol());
@@ -1339,24 +1335,9 @@ public class AutoTradeService {
      * @param history   거래 히스토리
      * @param tradeMode 거래 모드 (MAIN: trade_history, SIM: sim_trade_history)
      */
-    private void saveTradeHistory(TradeHistory history, TradeMode tradeMode) {
-        if (tradeMode == TradeMode.SIM) {
-            // SimTradeHistory로 변환하여 sim_trade_history 테이블에 저장
-            SimTradeHistory simHistory = new SimTradeHistory();
-            simHistory.setQueueStepId(history.getQueueStepId());
-            simHistory.setUserId(history.getUserId());
-            simHistory.setSymbol(history.getSymbol());
-            simHistory.setSide(history.getSide());
-            simHistory.setAmount(history.getAmount());
-            simHistory.setExecutedPrice(history.getExecutedPrice());
-            simHistory.setOrderType(history.getOrderType());
-            simHistory.setOrderResult(history.getOrderResult());
-            simHistory.setFee(history.getFee());
-            simHistory.setErrorMessage(history.getErrorMessage());
-            simTradeHistoryRepository.save(simHistory);
-        } else {
-            tradeHistoryRepository.save(history);
-        }
+    private void saveTradeHistory(TradeHistoryDTO history, TradeMode tradeMode) {
+        // 모드별 테이블 분기는 TradeFacade → HistoryService 가 담당
+        tradeFacade.saveTradeHistory(history, tradeMode);
     }
 
     /**
@@ -1423,40 +1404,27 @@ public class AutoTradeService {
             slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
         }
 
-        if (tradeMode == TradeMode.SIM) {
-            // SIM: actualPnl은 항상 null → profitLoss는 계산식 fallback 값
-            SimInvestmentHistory simHistory = new SimInvestmentHistory();
-            simHistory.setUserId(userId);
-            simHistory.setPatternStepId(patternStepId);
-            simHistory.setSymbol(symbol);
-            simHistory.setSide(side);
-            simHistory.setEntryPrice(entry);
-            simHistory.setExitPrice(exit);
-            simHistory.setAmount(margin);
-            simHistory.setLeverage(leverage);
-            simHistory.setTpPrice(tpPrice);
-            simHistory.setSlPrice(slPrice);
-            simHistory.setProfitLoss(profitLoss);
-            simInvestmentHistoryRepository.save(simHistory);
+        InvestmentHistoryDTO investmentHistory = InvestmentHistoryDTO.builder()
+                .userId(userId)
+                .patternStepId(patternStepId)
+                .symbol(symbol)
+                .side(side)
+                .entryPrice(entry)
+                .exitPrice(exit)
+                .amount(margin)
+                .leverage(leverage)
+                .tpPrice(tpPrice)
+                .slPrice(slPrice)
+                .profitLoss(profitLoss)
+                .fundingFee(fundingFee) // MAIN: 실펀딩비, SIM/fallback: null
+                .build();
+        // SIM: actualPnl은 항상 null → profitLoss는 계산식 fallback 값
+        tradeFacade.saveInvestmentHistory(investmentHistory, tradeMode);
 
+        if (tradeMode == TradeMode.SIM) {
             // 모의 지갑 반영: 진입 수수료는 placeOrder 시 이미 차감 → 청산 수수료만 반영
             BigDecimal walletProfitLoss = grossProfitLoss.subtract(exitFee);
             tradeFacade.applyProfitLoss(userId, margin, walletProfitLoss, tradeMode);
-        } else {
-            InvestmentHistory investmentHistory = new InvestmentHistory();
-            investmentHistory.setUserId(userId);
-            investmentHistory.setPatternStepId(patternStepId);
-            investmentHistory.setSymbol(symbol);
-            investmentHistory.setSide(side);
-            investmentHistory.setEntryPrice(entry);
-            investmentHistory.setExitPrice(exit);
-            investmentHistory.setAmount(margin);
-            investmentHistory.setLeverage(leverage);
-            investmentHistory.setTpPrice(tpPrice);
-            investmentHistory.setSlPrice(slPrice);
-            investmentHistory.setProfitLoss(profitLoss);
-            investmentHistory.setFundingFee(fundingFee); // MAIN: 실펀딩비, SIM/fallback: null
-            investmentHistoryRepository.save(investmentHistory);
         }
 
         log.info(LogMessage.INVESTMENT_HISTORY_SAVED.getMessage(), symbol, side, profitLoss, tradeMode);
@@ -1621,7 +1589,7 @@ public class AutoTradeService {
                         Collectors.mapping(AutoTradeSessionDTO::getSymbol, Collectors.toSet())
                 ));
 
-        for (ExchangeAdapter adapter : adapterRegistry.getAll()) {
+        for (ExchangeClient adapter : adapterRegistry.getAll()) {
             Set<String> symbols = symbolsByExchange.getOrDefault(adapter.getExchangeType(), Set.of());
             adapter.syncSubscriptions(symbols);
         }

@@ -1,17 +1,16 @@
 package com.coin.webcointrader.login.service;
 
-import com.coin.webcointrader.common.dto.UserDTO;
-import com.coin.webcointrader.common.entity.SimWallet;
-import com.coin.webcointrader.common.entity.User;
-import com.coin.webcointrader.common.entity.UserExchangeKey;
+import com.coin.webcointrader.login.dto.UserDTO;
+import com.coin.webcointrader.login.entity.User;
+import com.coin.webcointrader.login.entity.UserExchangeKey;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
-import com.coin.webcointrader.common.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.login.repository.UserExchangeKeyRepository;
 import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.login.dto.SignupRequest;
 import com.coin.webcointrader.login.repository.LoginRepository;
-import com.coin.webcointrader.sim.repository.SimWalletRepository;
+import com.coin.webcointrader.sim.service.SimWalletService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -30,7 +29,7 @@ public class LoginService implements UserDetailsService {
     private final BybitApiKeyValidator bybitApiKeyValidator;
     private final LoginRepository loginRepository;
     private final UserExchangeKeyRepository userExchangeKeyRepository;
-    private final SimWalletRepository simWalletRepository;
+    private final SimWalletService simWalletService;
 
     /**
      * Spring Security 인증 진입점.
@@ -105,8 +104,6 @@ public class LoginService implements UserDetailsService {
         userExchangeKeyRepository.save(exchangeKey);
 
         // 6. 모의투자 가상 지갑 생성 (기본 잔고 10,000 USDT)
-        SimWallet simWallet = new SimWallet();
-        simWallet.setUser(user);
-        simWalletRepository.save(simWallet);
+        simWalletService.createWallet(user.getId());
     }
 }

@@ -1,6 +1,6 @@
 package com.coin.webcointrader.login.repository;
 
-import com.coin.webcointrader.common.entity.User;
+import com.coin.webcointrader.login.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 

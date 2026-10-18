@@ -1,6 +1,6 @@
 package com.coin.webcointrader.autotrade.dto;
 
-import com.coin.webcointrader.common.entity.Side;
+import com.coin.webcointrader.common.enums.Side;
 import lombok.Getter;
 import lombok.Setter;
 

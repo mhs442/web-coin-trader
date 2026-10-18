@@ -34,71 +34,88 @@
 
 ## 3. 전체 패키지 구조
 
+도메인별 레이어드 아키텍처. 각 도메인은 `controller / service / repository / entity / dto` 를 자체 보유하며,
+**다른 도메인의 Repository·Entity 를 직접 호출하지 않고 해당 도메인의 Service 와 DTO 를 통해서만 접근**한다.
+(예외: `SimWallet → User` JPA 연관관계는 유지)
+
 ```
 src/main/java/com/coin/webcointrader/
 ├── WebCoinTraderApplication.java
 │
 ├── autotrade/                  ★ 자동매매 엔진 (핵심)
 │   ├── controller/             AutoTradeController
-│   ├── service/                AutoTradeService, PatternQueueService
-│   ├── dto/                    QueueStateDTO, TradePhase, AutoTradeSessionDTO,
+│   ├── service/                AutoTradeService, PatternQueueService (findQueuePage → PatternQueueDTO)
+│   ├── dto/                    QueueStateDTO, TradePhase, AutoTradeSessionDTO, PatternQueueDTO,
 │   │                           AutoTradeAlertResponse, AutoTradeStatusResponse,
 │   │                           PatternQueueResponse, AddPatternRequest, UpdatePatternRequest, CopyQueueRequest
-│   └── repository/             PatternQueueRepository, TradeHistoryRepository, InvestmentHistoryRepository
+│   ├── entity/                 Pattern, PatternBlock, PatternStep, PatternQueue, PatternHistory
+│   ├── repository/             PatternQueueRepository
+│   └── util/                   TradeCalculator
 │
-├── common/                     공통 레이어
-│   ├── entity/                 JPA 엔티티 (12개, 아래 섹션 참고)
-│   ├── enums/                  TradeMode, OrderResult, TradeOrderType, Category,
-│   │                           ExceptionMessage, LogMessage
-│   ├── dto/
-│   │   ├── request/            CreateOrderRequest, SetLeverageRequest,
-│   │   │                       SetMarginModeRequest, SetTradingStopRequest
-│   │   └── response/           CreateOrderResponse, FindTickerResponse, GetKlineResponse,
-│   │                           GetPositionListResponse, GetWalletBalanceResponse,
-│   │                           GetInstrumentsInfoResponse, OrderBookResponse,
-│   │                           SetLeverageResponse, SetMarginModeResponse,
-│   │                           SetTradingStopResponse, PageResponse
-│   ├── client/
-│   │   ├── market/             MarketClient (OpenFeign), BybitWebSocketClient
-│   │   │   └── dto/            WebSocketTickerDTO, WebSocketKlineDTO, WebSocketRequest
-│   │   ├── trade/              TradeClient (OpenFeign)
-│   │   ├── account/            AccountClient (OpenFeign)
-│   │   └── position/           PositionClient (OpenFeign)
-│   ├── config/                 SecurityConfig, BybitFeignConfig, JpaConfig,
-│   │                           WebSocketConfig, WebSocketStompConfig, ExceptionAdvice
-│   ├── exception/              CustomException
-│   └── util/                   AesEncryptor, UserApiKeyContext
+├── trade/                      거래 실행 Facade + 실전 거래 히스토리
+│   ├── controller/             TradeController
+│   ├── service/                TradeFacade (TradeMode 별 분기), TradeService,
+│   │                           HistoryService(인터페이스), TradeHistoryService(MAIN), HistoryAggregateMapper
+│   ├── dto/                    TradeHistoryDTO, InvestmentHistoryDTO, ProfitLossSummaryDTO,
+│   │                           WinLossCountDTO, DailyProfitLossDTO, SymbolProfitLossDTO
+│   ├── entity/                 TradeHistory, InvestmentHistory
+│   └── repository/             TradeHistoryRepository, InvestmentHistoryRepository
 │
-├── login/                      로그인 + 회원가입 통합
+├── sim/                        모의투자
+│   ├── controller/             SimWalletController
+│   ├── service/                SimTradeService, SimWalletService (createWallet 포함), SimHistoryService(SIM)
+│   ├── entity/                 SimWallet, SimTradeHistory, SimInvestmentHistory
+│   ├── repository/             SimTradeHistoryRepository, SimInvestmentHistoryRepository, SimWalletRepository
+│   └── dto/                    AddBalanceRequest
+│
+├── login/                      로그인 + 회원가입 + 거래소 API Key
 │   ├── controller/             LoginController
-│   ├── service/                LoginService, BybitApiKeyValidator
-│   ├── repository/             LoginRepository
-│   └── dto/                    SignupRequest, QueryApiKeyResponse
+│   ├── service/                LoginService, BybitApiKeyValidator, ExchangeKeyService (findKey → ExchangeKeyDTO)
+│   ├── entity/                 User, UserExchangeKey
+│   ├── repository/             LoginRepository, UserExchangeKeyRepository
+│   └── dto/                    UserDTO, ExchangeKeyDTO, SignupRequest, QueryApiKeyResponse
 │
-├── market/                     시장 데이터
-│   ├── controller/             MarketController
-│   └── service/                MarketService
-│
-├── mypage/                     마이페이지
+├── mypage/                     마이페이지 (타 도메인은 Service/DTO 로만 접근)
 │   ├── controller/             MyPageController, MyPageApiController
 │   ├── service/                MyPageService
 │   └── dto/                    TradeHistoryRequest/Response, InvestmentHistoryRequest/Response,
 │                               InvestmentHistoryPageResponse, InvestmentSummaryResponse,
 │                               MyPagePatternRequest/Response, DeleteHistoryRequest
 │
-├── trade/                      거래 실행 Facade
-│   ├── controller/             TradeController
-│   └── service/                TradeFacade, TradeService
+├── market/                     시장 데이터
+│   ├── controller/             MarketController
+│   └── service/                MarketService
 │
-├── sim/                        모의투자
-│   ├── controller/             SimWalletController
-│   ├── service/                SimTradeService, SimWalletService
-│   ├── repository/             SimTradeHistoryRepository, SimInvestmentHistoryRepository, SimWalletRepository
-│   └── dto/                    AddBalanceRequest
+├── wallet/                     실전 지갑
+│   ├── controller/             WalletApiController
+│   └── service/                WalletService
 │
-└── wallet/                     실전 지갑
-    ├── controller/             WalletApiController
-    └── service/                WalletService
+├── bybit/                      Bybit 연동 (OpenFeign / WebSocket / 요청·응답 DTO)
+│   ├── client/                 BybitExchangeClient (ExchangeClient 구현체)
+│   │   ├── market/             MarketClient (OpenFeign), BybitWebSocketClient
+│   │   │   └── dto/            WebSocketTickerDTO, WebSocketKlineDTO, WebSocketRequest
+│   │   ├── trade/              TradeClient (OpenFeign)
+│   │   ├── account/            AccountClient (OpenFeign)
+│   │   └── position/           PositionClient (OpenFeign)
+│   ├── config/                 BybitFeignConfig
+│   └── dto/
+│       ├── request/            CreateOrderRequest, SetLeverageRequest,
+│       │                       SetMarginModeRequest, SetTradingStopRequest
+│       └── response/           CreateOrderResponse, FindTickerResponse, GetKlineResponse,
+│                               GetPositionListResponse, GetWalletBalanceResponse,
+│                               GetInstrumentsInfoResponse, OrderBookResponse, GetClosedPnlResponse,
+│                               GetExecutionListResponse, SetLeverageResponse,
+│                               SetMarginModeResponse, SetTradingStopResponse
+│
+└── common/                     도메인 비종속 공통
+    ├── entity/                 BaseEntity
+    ├── enums/                  TradeMode, ExchangeType, Side, OrderResult, TradeOrderType, Category,
+    │                           ExceptionMessage, LogMessage
+    ├── dto/response/           PageResponse
+    ├── exchange/               ExchangeClient(거래소 추상화), ExchangeClientRegistry
+    ├── config/                 SecurityConfig, JpaConfig, WebSocketConfig, WebSocketStompConfig, ExceptionAdvice
+    ├── exception/              CustomException
+    └── util/                   AesEncryptor, UserApiKeyContext
 ```
 
 ---
@@ -144,7 +161,7 @@ POSITION_HOLDING → 포지션 보유 중 TP/SL 모니터링
 - `convertUsdtToQty(symbol, usdt)` — USDT 금액 → 코인 수량 변환 (qtyStep 기반)
 - 거래량 기준 정렬 전체 종목 목록 제공
 
-**BybitWebSocketClient** (`common/client/market/BybitWebSocketClient.java`)
+**BybitWebSocketClient** (`bybit/client/market/BybitWebSocketClient.java`)
 - Bybit WebSocket 연결 관리 (ping 20초, 재연결 최대 30초)
 - ticker/kline 구독 등록 및 콜백 디스패치
 

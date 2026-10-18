@@ -1,6 +1,6 @@
 package com.coin.webcointrader.sim.repository;
 
-import com.coin.webcointrader.common.entity.SimTradeHistory;
+import com.coin.webcointrader.sim.entity.SimTradeHistory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
