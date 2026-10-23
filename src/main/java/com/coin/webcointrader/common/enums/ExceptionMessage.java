@@ -25,6 +25,8 @@ public enum ExceptionMessage {
     INVALID_AMOUNT(HttpStatus.BAD_REQUEST, "금액은 0보다 커야 합니다."),
     INVALID_LEVERAGE(HttpStatus.BAD_REQUEST, "레버리지는 0보다 커야 합니다."),
     INVALID_STOP_LOSS_RATE(HttpStatus.BAD_REQUEST, "손절 비율은 0% 초과 100% 미만이어야 합니다."),
+    STOP_LOSS_EXCEEDS_LIQUIDATION(HttpStatus.BAD_REQUEST, "손절률이 강제청산 한도(100 - 1.5 × 레버리지 %)를 넘습니다. 손절률 또는 레버리지를 낮춰 주세요."),
+    STOP_LOSS_REQUIRED_FOR_LEVERAGE(HttpStatus.BAD_REQUEST, "11배 이상은 기본 손절(가격 8%)이 강제청산 한도를 넘습니다. 손절률을 입력해 주세요."),
     MISSING_LEAF_BLOCK(HttpStatus.BAD_REQUEST, "리프 블록은 필수입니다."),
     INVALID_SIDE(HttpStatus.BAD_REQUEST, "방향은 LONG 또는 SHORT만 입력할 수 있습니다."),
     EXCEED_MAX_QUEUES(HttpStatus.BAD_REQUEST, "큐는 심볼당 1개만 등록할 수 있습니다."),

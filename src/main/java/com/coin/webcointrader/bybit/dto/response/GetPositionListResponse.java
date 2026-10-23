@@ -2,19 +2,23 @@ package com.coin.webcointrader.bybit.dto.response;
 
 import com.coin.webcointrader.bybit.dto.BybitMasterDTO;
 import lombok.Getter;
+import lombok.Setter;
 
 import java.util.List;
 
 @Getter
+@Setter
 public class GetPositionListResponse extends BybitMasterDTO {
     private Result result;      // 포지션 조회 결과
 
     @Getter
+    @Setter
     public static class Result {
         private String category;            // 파생상품 카테고리 (예: "linear")
         private List<PositionInfo> list;    // 포지션 목록
 
         @Getter
+        @Setter
         public static class PositionInfo {
             private String symbol;          // 종목 심볼 (예: "BTCUSDT")
             private String side;            // 포지션 방향 (Buy / Sell)

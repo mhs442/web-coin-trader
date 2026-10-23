@@ -1039,6 +1039,22 @@ body {
     flex: 1;
 }
 
+/* 손절/익절 안내 문구 (레버리지별 손절 한도) */
+.sl-limit-hint {
+    font-size: 0.68rem;
+    color: #6c757d;
+    line-height: 1.5;
+    margin: 0 0 6px 0;
+}
+
+.sl-limit-hint strong {
+    color: #495057;
+}
+
+.sl-limit-hint .sl-limit-warn {
+    color: #dc3545;
+}
+
 .pattern-setting-item label {
     display: block;
     font-size: 0.7rem;

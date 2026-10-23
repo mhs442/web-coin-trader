@@ -1,0 +1,26 @@
+{
+  "retCode": "0",
+  "retMsg": "OK",
+  "result": {
+    "category": "linear",
+    "list": [
+      {
+        "orderId": "fd4300ae-7847-404e-b947-b46980a4d140",
+        "orderLinkId": "q1-E-1700000000000",
+        "symbol": "BTCUSDT",
+        "side": "Buy",
+        "orderType": "Market",
+        "orderStatus": "Filled",
+        "qty": "0.01",
+        "cumExecQty": "0.01",
+        "avgPrice": "50000.5",
+        "leavesQty": "0",
+        "createdTime": "1700000000000",
+        "updatedTime": "1700000000123"
+      }
+    ],
+    "nextPageCursor": ""
+  },
+  "retExtInfo": {},
+  "time": 1700000000200
+}

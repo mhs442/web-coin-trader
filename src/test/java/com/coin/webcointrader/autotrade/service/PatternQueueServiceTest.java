@@ -230,6 +230,70 @@ class PatternQueueServiceTest {
                 .hasMessageContaining("레버리지");
     }
 
+    // ─────────────────────────────────────────────
+    // 손절률 강제청산 한도 (손절률 ≤ 100 - 1.5 × 레버리지)
+    // ─────────────────────────────────────────────
+
+    /** LONG 패턴의 레버리지/손절률만 바꾼 요청 생성 */
+    private AddPatternRequest makeRequestWithLeverageAndStopLoss(int leverage, String stopLossRate) {
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        AddPatternRequest.PatternRequest pattern = makePatternRequest();
+        pattern.setLeverage(leverage);
+        pattern.setStopLossRate(stopLossRate != null ? new BigDecimal(stopLossRate) : null);
+        request.setSteps(List.of(makeStepRequest(1, List.of(pattern, makeShortPatternRequest()))));
+        return request;
+    }
+
+    @Test
+    @DisplayName("addQueue: 손절률이 한도와 같으면 통과한다 (10배 → 최대 85%)")
+    void addQueue_stopLossAtLimit() {
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, "85");
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(1L, "BTCUSDT", TradeMode.MAIN)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        assertThat(patternQueueService.addQueue(1L, request)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("addQueue: 손절률이 강제청산 한도를 넘으면 CustomException 발생 (10배, 86%)")
+    void addQueue_stopLossOverLimit() {
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, "86");
+
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("강제청산");
+    }
+
+    @Test
+    @DisplayName("addQueue: 67배 이상은 손절률을 아무리 낮춰도 CustomException 발생")
+    void addQueue_leverageTooHighForAnyStopLoss() {
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(67, "0.5");
+
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("강제청산");
+    }
+
+    @Test
+    @DisplayName("addQueue: 손절률 미입력 + 10배는 기본값(가격 8%)으로 통과한다")
+    void addQueue_nullStopLossWithinLimit() {
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, null);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeMode(1L, "BTCUSDT", TradeMode.MAIN)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        assertThat(patternQueueService.addQueue(1L, request)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("addQueue: 손절률 미입력 + 11배 이상이면 손절률 입력을 요구하는 CustomException 발생")
+    void addQueue_nullStopLossOverLimit() {
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(11, null);
+
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("손절률을 입력");
+    }
+
     @Test
     @DisplayName("addQueue: 트리거 비율이 0 이하면 CustomException 발생")
     void addQueue_invalidTriggerRate() {

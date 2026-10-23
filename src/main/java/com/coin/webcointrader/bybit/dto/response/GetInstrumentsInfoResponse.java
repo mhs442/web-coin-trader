@@ -33,6 +33,14 @@ public class GetInstrumentsInfoResponse extends BybitMasterDTO {
     public static class InstrumentInfo {
         private String symbol;                      // 종목 심볼 (예: "BTCUSDT")
         private LotSizeFilter lotSizeFilter;        // 수량 관련 규칙
+        private PriceFilter priceFilter;            // 가격 관련 규칙
+    }
+
+    @Getter @Setter
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
+    public static class PriceFilter {
+        private String tickSize;                    // 최소 가격 단위 (예: BTC="0.10", DOGE="0.00001")
     }
 
     @Getter @Setter

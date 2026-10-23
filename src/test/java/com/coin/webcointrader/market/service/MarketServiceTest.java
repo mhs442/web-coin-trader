@@ -71,6 +71,44 @@ class MarketServiceTest {
     }
 
     @Test
+    @DisplayName("refreshTickersCache: 프리런치 진행 중(curPreListingPhase가 Finished 외 값)인 종목은 제외한다")
+    void refreshTickersCache_filtersPreListing() {
+        // given
+        FindTickerResponse.TickerInfo preListing = makeTicker("OPENAIUSDT", "1470.0");
+        preListing.setCurPreListingPhase("ContinuousTrading"); // 프리런치 진행 중 → 제거되어야 함
+        FindTickerResponse response = makeTickerResponse(List.of(makeTicker("BTCUSDT", "1000.0"), preListing));
+        given(marketClient.getTickers("linear")).willReturn(ResponseEntity.ok(response));
+
+        // when
+        marketService.refreshTickersCache();
+
+        // then
+        assertThat(marketService.getTickers().getResult().getList())
+                .extracting(FindTickerResponse.TickerInfo::getSymbol)
+                .containsExactly("BTCUSDT");
+    }
+
+    @Test
+    @DisplayName("refreshTickersCache: 프리런치가 끝났거나(Finished) 원래 정식 종목(빈 값)이면 유지한다")
+    void refreshTickersCache_keepsFinishedAndRegular() {
+        // given
+        FindTickerResponse.TickerInfo finished = makeTicker("ETHUSDT", "500.0");
+        finished.setCurPreListingPhase("Finished"); // 정식 전환 완료
+        FindTickerResponse.TickerInfo regular = makeTicker("BTCUSDT", "1000.0");
+        regular.setCurPreListingPhase("");          // 원래부터 정식 종목
+        FindTickerResponse response = makeTickerResponse(List.of(finished, regular));
+        given(marketClient.getTickers("linear")).willReturn(ResponseEntity.ok(response));
+
+        // when
+        marketService.refreshTickersCache();
+
+        // then
+        assertThat(marketService.getTickers().getResult().getList())
+                .extracting(FindTickerResponse.TickerInfo::getSymbol)
+                .containsExactlyInAnyOrder("ETHUSDT", "BTCUSDT");
+    }
+
+    @Test
     @DisplayName("refreshTickersCache: 거래대금(turnover24h) 기준 내림차순 정렬한다")
     void refreshTickersCache_sortsByTurnover() {
         // given — turnover24h 값을 다르게 설정하여 정렬 검증
@@ -413,6 +451,45 @@ class MarketServiceTest {
     }
 
     // ─────────────────────────────────────────────
+    // getTickSize
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("refreshQtyStepCache: priceFilter.tickSize도 함께 캐시하여 getTickSize로 반환한다")
+    void refreshQtyStepCache_cachesTickSize() {
+        GetInstrumentsInfoResponse page = makeInstrumentsInfoResponse(
+                List.of(
+                        makeInstrumentInfo("BTCUSDT", "0.001", "0.10"),
+                        makeInstrumentInfo("DOGEUSDT", "1", "0.00001")
+                ),
+                ""
+        );
+        given(marketClient.getInstrumentsInfo("linear", 1000, null))
+                .willReturn(ResponseEntity.ok(page));
+
+        marketService.refreshQtyStepCache();
+
+        assertThat(marketService.getTickSize("BTCUSDT")).isEqualTo("0.10");
+        assertThat(marketService.getTickSize("DOGEUSDT")).isEqualTo("0.00001");
+        // 캐시 적중 → 추가 호출 없음
+        then(marketClient).should(times(1)).getInstrumentsInfo("linear", 1000, null);
+    }
+
+    @Test
+    @DisplayName("getTickSize: 캐시 미스 시 갱신을 시도하고, 그래도 없으면 null을 반환한다")
+    void getTickSize_cacheMissRefreshes() {
+        GetInstrumentsInfoResponse page = makeInstrumentsInfoResponse(
+                List.of(makeInstrumentInfo("BTCUSDT", "0.001", "0.10")), "");
+        given(marketClient.getInstrumentsInfo("linear", 1000, null))
+                .willReturn(ResponseEntity.ok(page));
+
+        // 캐시 비어있는 상태에서 조회 → 갱신 후 반환
+        assertThat(marketService.getTickSize("BTCUSDT")).isEqualTo("0.10");
+        // 존재하지 않는 종목 → 갱신 후에도 null
+        assertThat(marketService.getTickSize("NONEUSDT")).isNull();
+    }
+
+    // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 
@@ -483,6 +560,17 @@ class MarketServiceTest {
         filter.setMaxOrderQty("10000");
         info.setLotSizeFilter(filter);
 
+        return info;
+    }
+
+    /**
+     * tickSize를 포함한 InstrumentInfo 테스트 헬퍼 메서드.
+     */
+    private GetInstrumentsInfoResponse.InstrumentInfo makeInstrumentInfo(String symbol, String qtyStep, String tickSize) {
+        GetInstrumentsInfoResponse.InstrumentInfo info = makeInstrumentInfo(symbol, qtyStep);
+        GetInstrumentsInfoResponse.PriceFilter priceFilter = new GetInstrumentsInfoResponse.PriceFilter();
+        priceFilter.setTickSize(tickSize);
+        info.setPriceFilter(priceFilter);
         return info;
     }
 }

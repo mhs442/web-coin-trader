@@ -11,10 +11,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 
+import java.net.URI;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -237,5 +241,87 @@ class BybitWebSocketClientTest {
         boolean hasResubscribe = captor.getAllValues().stream()
                 .anyMatch(msg -> msg.getPayload().contains("subscribe") && msg.getPayload().contains("tickers.BTCUSDT"));
         assertThat(hasResubscribe).isTrue();
+    }
+
+    // ─────────────────────────────────────────────
+    // 연결 실패·재연결
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("connect: 핸드셰이크가 비동기로 실패하면 재연결을 예약한다")
+    void connect_asyncHandshakeFailure_schedulesReconnect() {
+        // given - 연결 허용 + 핸드셰이크 실패 future
+        ReflectionTestUtils.setField(client, "shouldConnect", true);
+        given(webSocketClient.execute(any(WebSocketHandler.class), nullable(WebSocketHttpHeaders.class), any(URI.class)))
+                .willReturn(CompletableFuture.failedFuture(new IllegalStateException("handshake failed")));
+
+        try {
+            // when
+            client.init();
+
+            // then - 재연결 예약 시 다음 대기 시간이 2배로 증가
+            assertThat(ReflectionTestUtils.getField(client, "currentReconnectDelay")).isEqualTo(2000L);
+        } finally {
+            client.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("connect: 재연결 시도도 실패하면 다시 예약해 재시도를 계속한다")
+    void connect_reconnectAttemptFailure_keepsRetrying() {
+        // given - 짧은 재연결 대기 + 핸드셰이크 계속 실패
+        ReflectionTestUtils.setField(client, "shouldConnect", true);
+        ReflectionTestUtils.setField(client, "reconnectDelay", 10L);
+        ReflectionTestUtils.setField(client, "reconnectMaxDelay", 20L);
+        given(webSocketClient.execute(any(WebSocketHandler.class), nullable(WebSocketHttpHeaders.class), any(URI.class)))
+                .willAnswer(inv -> CompletableFuture.failedFuture(new IllegalStateException("handshake failed")));
+
+        try {
+            // when
+            client.init();
+
+            // then - 최초 1회 + 재연결 시도가 끊기지 않고 반복
+            then(webSocketClient).should(timeout(2000).atLeast(3)).execute(any(WebSocketHandler.class), nullable(WebSocketHttpHeaders.class), any(URI.class));
+        } finally {
+            client.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("connect: 핸드셰이크에 성공하면 재연결을 예약하지 않는다")
+    void connect_handshakeSuccess_doesNotScheduleReconnect() {
+        // given
+        ReflectionTestUtils.setField(client, "shouldConnect", true);
+        given(webSocketClient.execute(any(WebSocketHandler.class), nullable(WebSocketHttpHeaders.class), any(URI.class)))
+                .willReturn(CompletableFuture.completedFuture(session));
+
+        try {
+            // when
+            client.init();
+
+            // then - 대기 시간 변화 없음
+            assertThat(ReflectionTestUtils.getField(client, "currentReconnectDelay")).isEqualTo(1000L);
+        } finally {
+            client.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("connect: 종료 중(shouldConnect=false)에는 핸드셰이크가 실패해도 재연결하지 않는다")
+    void connect_shuttingDown_doesNotScheduleReconnect() {
+        // given - setUp 기본값 shouldConnect=false
+        given(webSocketClient.execute(any(WebSocketHandler.class), nullable(WebSocketHttpHeaders.class), any(URI.class)))
+                .willReturn(CompletableFuture.failedFuture(new IllegalStateException("handshake failed")));
+
+        try {
+            // when
+            client.init();
+
+            // then
+            assertThat(ReflectionTestUtils.getField(client, "currentReconnectDelay")).isEqualTo(1000L);
+            then(webSocketClient).should(times(1)).execute(any(WebSocketHandler.class), nullable(WebSocketHttpHeaders.class), any(URI.class));
+        } finally {
+            client.destroy();
+        }
     }
 }

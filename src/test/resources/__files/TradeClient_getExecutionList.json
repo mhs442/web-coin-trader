@@ -9,6 +9,7 @@
         "side": "Buy",
         "execPrice": "50100.50",
         "execQty": "0.002",
+        "orderQty": "0.002",
         "execFee": "0.0551",
         "execTime": "1700000000000"
       }

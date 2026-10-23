@@ -9,6 +9,7 @@ import com.coin.webcointrader.autotrade.dto.AddPatternRequest;
 import com.coin.webcointrader.autotrade.dto.PatternQueueDTO;
 import com.coin.webcointrader.autotrade.dto.UpdatePatternRequest;
 import com.coin.webcointrader.autotrade.repository.PatternQueueRepository;
+import com.coin.webcointrader.autotrade.util.TradeCalculator;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
@@ -448,7 +449,7 @@ public class PatternQueueService {
     }
 
     /**
-     * 개별 패턴 검증 (금액, 레버리지, 블록 구조, side)
+     * 개별 패턴 검증 (금액, 레버리지, 손절률·강제청산 한도, 블록 구조, side)
      */
     private void validatePattern(AddPatternRequest.PatternRequest pattern) {
         // 금액 검증
@@ -465,6 +466,14 @@ public class PatternQueueService {
                     || pattern.getStopLossRate().compareTo(BigDecimal.valueOf(100)) >= 0) {
                 throw new CustomException(ExceptionMessage.INVALID_STOP_LOSS_RATE);
             }
+        }
+        // 손절률 강제청산 한도 검증 — 거래소 안전망 손절(+0.5%p)이 강제청산가보다 안쪽이어야 함
+        // 미입력이면 기본값(가격 8%)을 투자금 기준으로 환산해 검사
+        BigDecimal resolvedStopLoss = TradeCalculator.resolveRoiRate(pattern.getStopLossRate(), pattern.getLeverage());
+        if (!TradeCalculator.isStopLossWithinLimit(resolvedStopLoss, pattern.getLeverage())) {
+            throw new CustomException(pattern.getStopLossRate() == null
+                    ? ExceptionMessage.STOP_LOSS_REQUIRED_FOR_LEVERAGE
+                    : ExceptionMessage.STOP_LOSS_EXCEEDS_LIQUIDATION);
         }
         // 리프 블록 필수
         if (pattern.getLeafBlock() == null) {

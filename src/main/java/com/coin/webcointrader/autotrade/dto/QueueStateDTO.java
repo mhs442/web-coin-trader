@@ -6,7 +6,6 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 큐별 자동매매 런타임 상태를 관리하는 DTO.
@@ -38,29 +37,11 @@ public class QueueStateDTO {
     private String entryQty;           // 진입 시 코인 수량 (매도/청산 시 포지션 전량 청산에 재사용)
     private BigDecimal entryMargin;    // 진입 시 마진 (pattern.amount, applyProfitLoss 원금 기준)
     private BigDecimal entryFee;       // 진입 시 수수료 (MAIN: 실수수료, SIM/fallback: 추정값)
+    private Long entryTime;            // 진입 주문 전송 시각 (epoch ms, 놓친 외부 청산 재조정 시 청산 내역 검색 시작점)
     private int closeSkipCount;        // 청산 수량 오류 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
     private int entrySkipCount;        // 진입 시 최소 주문 단위 미달(qty=0) 연속 스킵 횟수 (5회 초과 시 큐 비활성화)
     private BigDecimal tpPrice;        // 익절가 (POSITION_HOLDING 매도 트리거 기준, 진입 시점 계산)
     private BigDecimal slPrice;        // 손절가 (POSITION_HOLDING 청산 트리거 기준, 진입 시점 계산)
-
-    // 처리 중 플래그 (중복 주문 방지)
-    private final AtomicBoolean processing = new AtomicBoolean(false);
-
-    /**
-     * 처리 락을 시도한다. 이미 처리 중이면 false를 반환한다.
-     *
-     * @return 락 획득 성공 시 true, 이미 처리 중이면 false
-     */
-    public boolean tryLock() {
-        return processing.compareAndSet(false, true);
-    }
-
-    /**
-     * 처리 락을 해제한다.
-     */
-    public void unlock() {
-        processing.set(false);
-    }
 
     /**
      * 초기 상태로 생성한다. (TRIGGER_WAIT 페이즈)
@@ -79,7 +60,6 @@ public class QueueStateDTO {
 
     /**
      * 현재 인스턴스를 초기 상태로 리셋한다.
-     * processing AtomicBoolean은 유지하여 락 정합성을 보존한다.
      * 사이클 재시작 시 새 인스턴스 생성 없이 호출한다.
      */
     public void reset() {
@@ -97,6 +77,7 @@ public class QueueStateDTO {
         entryQty = null;
         entryMargin = null;
         entryFee = null;
+        entryTime = null;
         closeSkipCount = 0;
         entrySkipCount = 0;
         tpPrice = null;

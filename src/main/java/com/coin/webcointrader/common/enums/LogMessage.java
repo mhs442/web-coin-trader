@@ -37,6 +37,28 @@ public enum LogMessage {
     WS_MESSAGE_SEND_FAILED("WebSocket 메시지 전송 실패: {}"),
 
     // ─────────────────────────────────────────────
+    // BybitPrivateWebSocketClient
+    // ─────────────────────────────────────────────
+    PRIVATE_WS_CONNECTING("Bybit Private WebSocket 연결 시도: userId={}"),
+    PRIVATE_WS_CONNECT_FAILED("Bybit Private WebSocket 연결 실패: userId={}, error={}"),
+    PRIVATE_WS_AUTH_SUCCESS("Bybit Private WebSocket 인증 성공: userId={}"),
+    PRIVATE_WS_AUTH_FAILED("Bybit Private WebSocket 인증 실패 → 연결 종료(재연결 안 함): userId={}, reason={}"),
+    PRIVATE_WS_SUBSCRIBE("Bybit Private WebSocket 구독 요청: userId={}, topics={}"),
+    PRIVATE_WS_SUBSCRIBE_FAILED("Bybit Private WebSocket 구독 실패: userId={}, reason={}"),
+    PRIVATE_WS_EXECUTION_RECEIVED("체결 수신: userId={}, symbol={}, orderLinkId={}, execType={}, execPrice={}, execQty={}, execFee={}"),
+    PRIVATE_WS_CALLBACK_ERROR("체결 콜백 처리 오류: userId={}, execId={}, error={}"),
+    PRIVATE_WS_CONNECTION_CLOSED("Bybit Private WebSocket 연결 종료: userId={}, status={}"),
+    PRIVATE_WS_TRANSPORT_ERROR("Bybit Private WebSocket 전송 오류: userId={}, error={}"),
+    PRIVATE_WS_RECONNECT_SCHEDULED("Bybit Private WebSocket 재연결 예약: userId={}, {}ms 후"),
+    PRIVATE_WS_EXECUTION_WAIT_TIMEOUT("WS 체결 대기 시간 초과 → REST 체결 조회로 전환: orderLinkId={}, timeout={}ms"),
+    PRIVATE_WS_OPEN_SKIPPED("Bybit Private WebSocket 연결 생략(REST 체결 조회로 동작): userId={}, reason={}"),
+    EXTERNAL_CLOSE_DETECTED("외부 청산 감지: queueId={}, symbol={}, closeType={}, orderId={}"),
+    EXTERNAL_CLOSE_IGNORED("외부 청산 무시(거래소 포지션 남아 있음): userId={}, symbol={}, size={}, orderId={}"),
+    CLOSE_ORDER_FAILED_ALREADY_CLOSED("앱 매도/청산 주문 실패 — 거래소 포지션 이미 청산됨: queueId={}, symbol={}, closeType={}, orderId={}"),
+    EXTERNAL_CLOSE_RECONCILED("놓친 외부 청산 감지(재조정): userId={}, symbol={}, closeType={}, orderId={}"),
+    EXTERNAL_CLOSE_CHECK_FAILED("외부 청산 확인 실패(포지션 조회 불가) → 상태 유지: userId={}, symbol={}, orderId={}"),
+
+    // ─────────────────────────────────────────────
     // AutoTradeService
     // ─────────────────────────────────────────────
     AUTO_TRADE_LISTENER_REGISTERED("자동매매 WebSocket 가격 리스너 등록 완료"),
@@ -44,7 +66,6 @@ public enum LogMessage {
     AUTO_TRADE_STOPPED("자동매매 중지: userId={}, symbol={} (활성 큐 없음)"),
     AUTO_TRADE_SESSION_REFRESHED("자동매매 세션 갱신: userId={}, symbol={}, 큐 {}개"),
     AUTO_TRADE_STARTED("자동매매 시작: userId={}, symbol={}, 큐 {}개"),
-    AUTO_TRADE_TICK_ERROR("자동매매 tick 오류: symbol={}, error={}"),
     MARGIN_MODE_SWITCH_FAILED("마진 모드 전환 실패 : queue={}, error={}"),
     LEVERAGE_SET_FAILED("레버리지 설정 실패 (계속 진행): {}"),
     POSITION_ENTRY_FAILED("포지션 진입 실패: queue={}, error={}"),

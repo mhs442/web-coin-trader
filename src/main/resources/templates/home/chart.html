@@ -159,6 +159,8 @@
                                 <input type="number" id="pattern-takeprofit" step="0.01" min="0" placeholder="선택">
                             </div>
                         </div>
+                        <!-- 손절/익절 기준 및 레버리지별 손절 한도 안내 (레버리지 입력 시 갱신) -->
+                        <div class="sl-limit-hint" id="pattern-sl-hint"></div>
                         <button onclick="addPatternToStep()" class="trade-btn btn-outline" style="width:100%; margin-top:4px;">패턴 추가</button>
                     </div>
                     <div class="step-action-buttons">
@@ -733,6 +735,77 @@
         const MAX_STEPS = 20;           // 큐당 단계 최대 20개
         const MAX_PATTERNS_PER_STEP = 2; // 단계당 패턴 최대 2개
 
+        // 손절 한도 계산 상수 — BE TradeCalculator와 동일 값 유지
+        const EXCHANGE_TPSL_BUFFER_RATE = 0.5; // 거래소 안전 TP/SL 버퍼 (가격 %p)
+        const LIQUIDATION_MARGIN_RATE = 1;     // 강제청산 여유분 (가격 %p, 유지증거금 근사)
+        const DEFAULT_PRICE_RATE = 8;          // 손절/익절 미입력 시 기본값 (가격 %)
+
+        /** 레버리지별 손절률 최대값 (투자금 기준 %) = 100 - 1.5 × 레버리지 */
+        function maxStopLossRate(lev) {
+            return 100 - (EXCHANGE_TPSL_BUFFER_RATE + LIQUIDATION_MARGIN_RATE) * lev;
+        }
+
+        /** 손절 설정 가능한 최대 레버리지 (손절률 최대값이 0보다 커야 함) */
+        function maxLeverageForStopLoss() {
+            return Math.ceil(100 / (EXCHANGE_TPSL_BUFFER_RATE + LIQUIDATION_MARGIN_RATE)) - 1;
+        }
+
+        /**
+         * 손절률 강제청산 한도 검증. 통과 시 null, 실패 시 alert 메시지 반환.
+         * @param lev      레버리지
+         * @param stopLoss 손절률 입력값 (빈 문자열이면 미입력 → 기본 가격 8% 적용)
+         */
+        function checkStopLossLimit(lev, stopLoss) {
+            const max = maxStopLossRate(lev);
+            // 레버리지가 너무 높아 어떤 손절률도 불가
+            if (max <= 0) {
+                return '레버리지 ' + lev + '배에서는 강제청산 위험으로 손절을 설정할 수 없습니다.\n'
+                    + '레버리지를 ' + maxLeverageForStopLoss() + '배 이하로 낮춰주세요.';
+            }
+            // 입력값이 한도 초과
+            if (stopLoss && parseFloat(stopLoss) > max) {
+                return '레버리지 ' + lev + '배에서 손절률은 최대 ' + max + '%까지 설정할 수 있습니다.\n'
+                    + '(거래소 안전 손절이 강제청산보다 먼저 발동되도록 하기 위함)';
+            }
+            // 미입력 시 기본값(가격 8% = 투자금 8 × 레버리지 %)이 한도 초과
+            if (!stopLoss && DEFAULT_PRICE_RATE * lev > max) {
+                return '레버리지 ' + lev + '배에서는 손절률을 입력해주세요. (최대 ' + max + '%)\n'
+                    + '(미입력 시 기본 손절인 가격 ' + DEFAULT_PRICE_RATE + '%가 강제청산 한도를 넘습니다)';
+            }
+            return null;
+        }
+
+        /** 손절/익절 안내 문구 HTML (레버리지별 손절 최대값 포함) */
+        function stopLossHintHtml(lev) {
+            lev = lev || 1;
+            const max = maxStopLossRate(lev);
+            let html = '💡 손절/익절률은 <strong>투자금 기준</strong>입니다 (예: 손절 50% → 투자금 절반 손실 시 청산).<br>'
+                + '서버 장애에 대비해 거래소에도 <strong>가격 기준 ' + EXCHANGE_TPSL_BUFFER_RATE
+                + '% 더 바깥</strong>에 안전 손절/익절이 함께 설정됩니다.<br>';
+            if (max <= 0) {
+                html += '<span class="sl-limit-warn">현재 레버리지(' + lev + '배)에서는 강제청산 위험으로 손절을 설정할 수 없습니다. '
+                    + maxLeverageForStopLoss() + '배 이하로 낮춰주세요.</span>';
+            } else {
+                html += '현재 레버리지(' + lev + '배)에서 손절률은 <strong>최대 ' + max + '%</strong>까지 설정할 수 있습니다 (강제청산 방지).';
+                // 미입력 기본값이 한도를 넘는 레버리지면 입력 필수 안내
+                if (DEFAULT_PRICE_RATE * lev > max) {
+                    html += '<br><span class="sl-limit-warn">이 레버리지에서는 손절률을 반드시 입력해주세요.</span>';
+                }
+            }
+            return html;
+        }
+
+        // 레버리지 입력 시 안내 문구 즉시 갱신 (인라인 폼은 동적 생성이므로 위임 바인딩)
+        $(function () {
+            $('#pattern-sl-hint').html(stopLossHintHtml(1));
+            $(document).on('input', '#pattern-leverage', function () {
+                $('#pattern-sl-hint').html(stopLossHintHtml(parseInt($(this).val())));
+            });
+            $(document).on('input', '#inline-leverage', function () {
+                $('#inline-sl-hint').html(stopLossHintHtml(parseInt($(this).val())));
+            });
+        });
+
         /**
          * 서버에 저장된 큐 목록을 API로 조회하여 렌더링
          */
@@ -998,6 +1071,12 @@
                     return false;
                 }
             }
+            // 레버리지별 강제청산 한도 검증 (미입력 시 기본값 포함)
+            const slLimitError = checkStopLossLimit(lev, stopLoss);
+            if (slLimitError) {
+                alert(slLimitError);
+                return false;
+            }
 
             return {
                 conditionBlocks: [...conditionBlocks],
@@ -1129,6 +1208,8 @@
             ['pattern-amount', 'pattern-leverage', 'pattern-stoploss', 'pattern-takeprofit'].forEach(id => {
                 document.getElementById(id).value = '';
             });
+            // 레버리지 초기화에 맞춰 안내 문구도 1배 기준으로 갱신
+            $('#pattern-sl-hint').html(stopLossHintHtml(1));
         }
 
         /**
@@ -1388,6 +1469,7 @@
                 '<div class="pattern-setting-item"><label>익절(%)</label>' +
                 '<input type="number" id="inline-takeprofit" value="' + (inlineForm.takeProfit != null ? inlineForm.takeProfit : '') + '" step="0.01" min="0" placeholder="선택"></div>' +
                 '</div>' +
+                '<div class="sl-limit-hint" id="inline-sl-hint">' + stopLossHintHtml(inlineForm.leverage) + '</div>' +
                 '<div style="display:flex; gap:4px; margin-top:6px;">' +
                 '<button onclick="' + confirmFn + '" class="trade-btn queue-save-btn" style="flex:1;">확정</button>' +
                 '<button onclick="' + cancelFn + '" class="trade-btn btn-outline" style="flex:1;">취소</button>' +
@@ -1461,6 +1543,12 @@
                     alert('손절율은 0% 초과 100% 미만으로 입력해주세요.\n(투자금 기준: 50% 설정 시 투자금의 절반 손실 시 청산)');
                     return false;
                 }
+            }
+            // 레버리지별 강제청산 한도 검증 (미입력 시 기본값 포함)
+            var inlineSlLimitError = checkStopLossLimit(inlineLev, stopLoss);
+            if (inlineSlLimitError) {
+                alert(inlineSlLimitError);
+                return false;
             }
 
             return {

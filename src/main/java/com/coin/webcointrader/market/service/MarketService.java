@@ -55,6 +55,9 @@ public class MarketService {
     // 종목별 qtyStep 캐시 (심볼 → qtyStep, 예: "BTCUSDT" → "0.001")
     private final ConcurrentHashMap<String, String> qtyStepCache = new ConcurrentHashMap<>();
 
+    // 종목별 tickSize 캐시 (심볼 → tickSize, 예: "BTCUSDT" → "0.10") — 거래소 TP/SL 가격 단위 맞춤용
+    private final ConcurrentHashMap<String, String> tickSizeCache = new ConcurrentHashMap<>();
+
     // WebSocket 마지막 수신 시각 (ms) — tick() fallback 스킵 판단에 사용
     private volatile long lastWsTickMs = 0;
 
@@ -68,12 +71,25 @@ public class MarketService {
 
         if (response != null && response.getResult() != null && response.getResult().getList() != null) {
             response.getResult().getList()
-                    .removeIf(ticker -> !ticker.getSymbol().endsWith("USDT"));
+                    // USDT 무기한만 남기고, 정식 상장 전(프리런치 진행 중) 종목은 제외 — 거래 규칙이 다르고 qtyStep 캐시에도 없음
+                    .removeIf(ticker -> !ticker.getSymbol().endsWith("USDT") || isPreListing(ticker));
             response.getResult().getList()
                     // 24시간 거래대금(turnover) 내림차순 정렬 (Bybit 마켓 페이지 기준)
                     .sort((t1, t2) -> Double.compare(Double.parseDouble(t2.getTurnover24h()), Double.parseDouble(t1.getTurnover24h())));
             cachedTickers.set(response);
         }
+    }
+
+    /**
+     * 프리런치(정식 상장 전) 진행 중인 종목인지 판단한다.
+     * curPreListingPhase가 비어 있으면 정식 종목, Finished면 정식 전환이 끝난 종목이다.
+     *
+     * @param ticker 티커 정보
+     * @return 프리런치 진행 중이면 true
+     */
+    private boolean isPreListing(FindTickerResponse.TickerInfo ticker) {
+        String phase = ticker.getCurPreListingPhase();
+        return phase != null && !phase.isEmpty() && !"Finished".equals(phase);
     }
 
     /**
@@ -177,7 +193,7 @@ public class MarketService {
     }
 
     /**
-     * Bybit에서 전체 Linear 종목의 qtyStep을 조회하여 캐시에 저장한다.
+     * Bybit에서 전체 Linear 종목의 qtyStep·tickSize를 조회하여 캐시에 저장한다.
      * 애플리케이션 시작 시 호출되며, 캐시가 비어있을 때도 호출된다.
      *
      * <p>Bybit instruments-info API는 페이징 응답이므로,
@@ -202,6 +218,11 @@ public class MarketService {
                     if (info.getSymbol() != null && info.getLotSizeFilter() != null
                             && info.getLotSizeFilter().getQtyStep() != null) {
                         qtyStepCache.put(info.getSymbol(), info.getLotSizeFilter().getQtyStep());
+                    }
+                    // 가격 단위(tickSize)도 같은 응답에서 함께 캐시
+                    if (info.getSymbol() != null && info.getPriceFilter() != null
+                            && info.getPriceFilter().getTickSize() != null) {
+                        tickSizeCache.put(info.getSymbol(), info.getPriceFilter().getTickSize());
                     }
                 }
 
@@ -233,6 +254,23 @@ public class MarketService {
             qtyStep = qtyStepCache.get(symbol);
         }
         return qtyStep;
+    }
+
+    /**
+     * 특정 심볼의 tickSize(최소 가격 단위)를 반환한다.
+     * 캐시에 없으면 갱신을 시도한다.
+     *
+     * @param symbol 종목 심볼 (예: "BTCUSDT")
+     * @return tickSize 문자열 (예: "0.10"), 조회 실패 시 null
+     */
+    public String getTickSize(String symbol) {
+        String tickSize = tickSizeCache.get(symbol);
+        // 캐시 미스 시 갱신 시도
+        if (tickSize == null) {
+            refreshQtyStepCache();
+            tickSize = tickSizeCache.get(symbol);
+        }
+        return tickSize;
     }
 
     /**

@@ -10,6 +10,9 @@
           "qtyStep": "0.1",
           "minOrderQty": "0.1",
           "maxOrderQty": "10000000"
+        },
+        "priceFilter": {
+          "tickSize": "0.010"
         }
       },
       {
@@ -18,6 +21,9 @@
           "qtyStep": "1",
           "minOrderQty": "1",
           "maxOrderQty": "10000000"
+        },
+        "priceFilter": {
+          "tickSize": "0.00001"
         }
       }
     ],

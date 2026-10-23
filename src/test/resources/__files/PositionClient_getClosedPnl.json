@@ -2,19 +2,28 @@
   "retCode": "0",
   "retMsg": "OK",
   "result": {
+    "category": "linear",
     "list": [
       {
         "symbol": "BTCUSDT",
         "orderId": "test-order-id-456",
-        "side": "Buy",
+        "side": "Sell",
         "qty": "0.002",
-        "closedPnl": "12.5000",
-        "avgEntryPrice": "50000.00",
-        "avgExitPrice": "50100.50",
-        "openFee": "0.0550",
-        "closeFee": "0.0551",
-        "fundingFee": "-0.0125",
-        "createdTime": "1700000001000"
+        "orderPrice": "50100.50",
+        "orderType": "Market",
+        "execType": "Trade",
+        "closedSize": "0.002",
+        "cumEntryValue": "100",
+        "avgEntryPrice": "50000",
+        "cumExitValue": "100.201",
+        "avgExitPrice": "50100.5",
+        "closedPnl": "0.0899",
+        "fillCount": "1",
+        "leverage": "10",
+        "openFee": "0.055",
+        "closeFee": "0.0561",
+        "createdTime": "1700000001000",
+        "updatedTime": "1700000001000"
       }
     ],
     "nextPageCursor": ""

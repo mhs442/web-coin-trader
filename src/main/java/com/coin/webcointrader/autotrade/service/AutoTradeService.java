@@ -16,6 +16,9 @@ import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
 import com.coin.webcointrader.bybit.client.market.dto.WebSocketKlineDTO;
 import com.coin.webcointrader.common.exchange.ExchangeClient;
 import com.coin.webcointrader.common.exchange.ExchangeClientRegistry;
+import com.coin.webcointrader.common.exchange.PositionCloseDTO;
+import com.coin.webcointrader.common.exchange.PrivateStreamCapable;
+import com.coin.webcointrader.common.enums.PositionCloseType;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.autotrade.util.TradeCalculator;
 import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
@@ -46,6 +49,8 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 
 /**
@@ -68,6 +73,8 @@ public class AutoTradeService {
     private final MarketService marketService;
     private final ExchangeClientRegistry adapterRegistry;
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
+    private final ExecutorService closeRecordExecutor;     // 청산 후처리(체결 조회·이력 저장) 전용 실행기 (AsyncConfig)
+    private final ExecutorService sessionLaneExecutor;     // 세션별 가격 처리 레인 실행기 (AsyncConfig, 고정 4개)
 
     // 활성 세션 관리 (키: "userId:exchangeType:symbol:tradeMode")
     private final ConcurrentHashMap<String, AutoTradeSessionDTO> activeSessions = new ConcurrentHashMap<>();
@@ -75,8 +82,18 @@ public class AutoTradeService {
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
     // 블록 매칭 고정 대기 시간 (초)
     private static final long BLOCK_WAIT_SECONDS = 60L;
-    // SL/TP 기본값: 가격 변동 기준 8% (미설정 시 적용)
-    private static final BigDecimal SL_TP_SAFETY_FACTOR = new BigDecimal("0.08");
+    // 블록 기준 시각 유효 한도: 초과 시 봉 마감 신호 누락으로 간주하고 재대기
+    private static final Duration BLOCK_BASE_STALE_LIMIT = Duration.ofMinutes(2);
+    // 레인 실행 대기 경고 기준 (ms): 제출 후 실행까지 이 시간 이상 걸리면 warn 로그
+    private static final long LANE_WAIT_WARN_MS = 3000L;
+    // [사용자 정책 2026-10-23] 놓친 외부 청산 재조정 점검 주기 30초 — 사용자가 직접 정한 값이므로 변경 시 사용자 확인 필수
+    // (짧을수록 감지가 빠르지만 보유 큐가 있는 사용자·심볼마다 포지션 조회 REST 호출이 늘어남)
+    private static final long EXTERNAL_CLOSE_RECONCILE_INTERVAL_MS = 30_000L;
+    // 진입 시각이 없는 상태(재시작 직후 등)의 청산 내역 검색 범위: Bybit closed-pnl 최대 조회 범위(7일)
+    private static final long RECONCILE_FALLBACK_LOOKBACK_MS = 7L * 24 * 60 * 60 * 1000L;
+    // 앱이 보낸 매도/청산 주문의 orderLinkId (q{큐ID}-S/L-{millis}) — 외부 청산 판단에서 제외
+    // (진입 E는 거래소 TP/SL 발동 주문이 원주문 링크를 이어받을 가능성이 있어 제외 대상에 넣지 않음)
+    private static final java.util.regex.Pattern OWN_CLOSE_LINK_ID = java.util.regex.Pattern.compile("^q\\d+-[SL]-\\d+$");
 
     /**
      * 애플리케이션 시작 시 WebSocket 가격/봉마감 리스너를 등록한다.
@@ -89,13 +106,42 @@ public class AutoTradeService {
         for (ExchangeClient adapter : adapterRegistry.getAll()) {
             adapter.registerPriceCallback(this::onPriceUpdate);
             adapter.registerKlineCallback(this::onKlineConfirmed);
+            // private 스트림 지원 거래소는 외부 청산(거래소 TP/SL·강제청산·수동 청산) 감지 리스너도 등록
+            if (adapter instanceof PrivateStreamCapable privateStream) {
+                privateStream.addPositionCloseListener(this::onPositionClose);
+            }
         }
         log.info(LogMessage.AUTO_TRADE_LISTENER_REGISTERED.getMessage());
     }
 
     /**
+     * 거래소 private 스트림에서 포지션 청산 체결이 수신되면 호출된다. (WebSocket 수신 스레드)
+     * 앱이 보낸 매도/청산 주문(orderLinkId q{큐ID}-S/L-…)은 이미 처리했으므로 무시하고,
+     * 나머지는 같은 사용자·거래소·심볼의 MAIN 세션 대기열에 넣어 레인에서 확인·전환하게 한다.
+     *
+     * @param event 청산 체결 이벤트
+     */
+    public void onPositionClose(PositionCloseDTO event) {
+        if (activeSessions.isEmpty() || event == null) return;
+        // 앱이 보낸 매도/청산 주문의 체결 → 이미 처리됨
+        if (event.getOrderLinkId() != null && OWN_CLOSE_LINK_ID.matcher(event.getOrderLinkId()).matches()) return;
+
+        for (AutoTradeSessionDTO session : activeSessions.values()) {
+            // 실거래(MAIN) 세션 중 체결이 발생한 사용자·거래소·심볼만 대상
+            if (session.getTradeMode() == TradeMode.MAIN
+                    && event.getUserId().equals(session.getUserId())
+                    && event.getExchangeType() == session.getExchangeType()
+                    && event.getSymbol().equals(session.getSymbol())) {
+                session.getPendingCloses().add(event);
+                scheduleLane(session);
+            }
+        }
+    }
+
+    /**
      * WebSocket에서 가격 변동이 수신되면 호출된다.
-     * 해당 심볼의 활성 세션만 필터링하여 즉시 처리한다.
+     * 해당 심볼의 활성 세션에 최신 가격만 기록하고 세션 레인에 처리를 맡긴 뒤 즉시 반환한다.
+     * (WS 스레드가 한 세션의 주문·체결 조회 대기로 막히지 않도록 분리)
      *
      * @param symbol   변동이 발생한 심볼 (예: "BTCUSDT")
      * @param newPrice 새로운 가격
@@ -105,17 +151,110 @@ public class AutoTradeService {
             return;
         }
 
-        // 해당 심볼의 활성 세션만 필터링하여 처리
+        // 해당 심볼의 활성 세션만 필터링
         for (AutoTradeSessionDTO session : activeSessions.values()) {
             if (session.getSymbol().equals(symbol)) {
+                // 최신 가격만 기록 (처리 전 이전 가격은 덮어씀) — 실제 처리는 레인 스레드에서 수행
+                session.getLatestPrice().set(newPrice);
+                scheduleLane(session);
+            }
+        }
+    }
+
+    /**
+     * 세션 레인 작업을 실행기에 제출한다.
+     * 이미 제출된 작업이 있으면 그 작업이 최신 가격까지 처리하므로 추가 제출하지 않는다.
+     * (세션당 동시에 1개 작업만 실행 → 같은 세션의 처리 순서 보장)
+     *
+     * @param session 처리할 자동매매 세션
+     */
+    private void scheduleLane(AutoTradeSessionDTO session) {
+        // 이미 제출된 작업이 있으면 건너뜀
+        if (!session.getLaneScheduled().compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            // 제출 시각을 함께 넘겨 실행 대기 시간 측정
+            long submittedAt = System.currentTimeMillis();
+            sessionLaneExecutor.execute(() -> drainLane(session, submittedAt));
+        } catch (RejectedExecutionException e) {
+            // 애플리케이션 종료 중 제출 거부 → 플래그 원복
+            session.getLaneScheduled().set(false);
+            log.warn("[세션 레인] 작업 제출 거부: symbol={}, error={}", session.getSymbol(), e.getMessage());
+        }
+    }
+
+    /**
+     * 세션의 봉 마감 대기열과 최신 가격 슬롯이 빌 때까지 처리한다. (레인 스레드에서 실행)
+     * 매 반복마다 쌓인 봉 마감을 순서대로 전부 처리한 뒤 최신 가격 1개를 처리한다.
+     * (봉 마감으로 바뀐 블록 순서 기준으로 다음 가격을 판단하도록 봉 마감을 먼저 처리)
+     * 처리 중 새 값이 들어오면 루프에서 이어서 처리하고, 처리할 때마다 STOMP로 세션 상태를 push한다.
+     * 제출 후 실행까지 {@link #LANE_WAIT_WARN_MS} 이상 기다렸으면 경고 로그를 남긴다.
+     *
+     * @param session     처리할 자동매매 세션
+     * @param submittedAt 레인 작업 제출 시각 (epoch ms)
+     */
+    private void drainLane(AutoTradeSessionDTO session, long submittedAt) {
+        // 풀 스레드가 모두 주문·조회 중이라 실행이 늦어진 경우 → 지속되면 풀 크기 조정 검토
+        long waitMs = System.currentTimeMillis() - submittedAt;
+        if (waitMs >= LANE_WAIT_WARN_MS) {
+            log.warn("[세션 레인] 실행 대기 지연: userId={}, symbol={}, waitMs={}",
+                    session.getUserId(), session.getSymbol(), waitMs);
+        }
+        try {
+            while (true) {
+                // 대기 중 세션이 종료됐으면 남은 값을 비우고 종료 (비우지 않으면 재제출이 반복됨)
+                if (!activeSessions.containsValue(session)) {
+                    session.getPendingCloses().clear();
+                    session.getPendingKlines().clear();
+                    session.getLatestPrice().set(null);
+                    return;
+                }
+
+                // 0) 외부 청산 먼저 처리 (포지션이 이미 닫혔으면 이후 가격으로 매도/청산 주문을 내지 않도록)
+                PositionCloseDTO close;
+                while ((close = session.getPendingCloses().poll()) != null) {
+                    try {
+                        processExternalClose(session, close);
+                    } catch (Exception e) {
+                        log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), session.getSymbol(), e.getMessage());
+                        session.addLog(now() + " [오류] " + e.getMessage());
+                    }
+                    pushAutoTradeStatus(session);
+                }
+
+                // 1) 쌓인 봉 마감을 순서대로 전부 처리 (봉당 1회 신호 → 유실 없이)
+                WebSocketKlineDTO.KlineData kline;
+                while ((kline = session.getPendingKlines().poll()) != null) {
+                    try {
+                        applyKlineSignal(session, kline, toSignal(kline));
+                    } catch (Exception e) {
+                        log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), session.getSymbol(), e.getMessage());
+                        session.addLog(now() + " [오류] " + e.getMessage());
+                    }
+                    pushAutoTradeStatus(session);
+                }
+
+                // 2) 최신 가격 1개 처리 (밀린 가격은 이미 덮어써짐), 없으면 종료
+                String price = session.getLatestPrice().getAndSet(null);
+                if (price == null) {
+                    return;
+                }
                 try {
-                    processSessionWithPrice(session, newPrice);
+                    processSessionWithPrice(session, price);
                 } catch (Exception e) {
-                    log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), symbol, e.getMessage());
+                    log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), session.getSymbol(), e.getMessage());
                     session.addLog(now() + " [오류] " + e.getMessage());
                 }
-                // STOMP: 가격 변동마다 해당 세션의 자동매매 상태를 브라우저에 push
+                // STOMP: 가격 처리마다 해당 세션의 자동매매 상태를 브라우저에 push
                 pushAutoTradeStatus(session);
+            }
+        } finally {
+            session.getLaneScheduled().set(false);
+            // 플래그 해제 직전에 들어온 값은 WS 스레드가 제출하지 못했으므로 재제출 (처리 누락 방지)
+            if (session.getLatestPrice().get() != null || !session.getPendingKlines().isEmpty()
+                    || !session.getPendingCloses().isEmpty()) {
+                scheduleLane(session);
             }
         }
     }
@@ -136,40 +275,47 @@ public class AutoTradeService {
         if (kline.getStart() == null || kline.getEnd() == null
                 || kline.getOpen() == null || kline.getClose() == null) return;
 
-        // 봉의 신호 = 양봉/음봉/도지
-        BigDecimal open = new BigDecimal(kline.getOpen());
-        BigDecimal close = new BigDecimal(kline.getClose());
-        Side signal;
-        int cmp = close.compareTo(open);
-        if (cmp > 0) signal = Side.LONG;
-        else if (cmp < 0) signal = Side.SHORT;
-        else signal = null; // 도지 — 다음 봉 재대기
-
         for (AutoTradeSessionDTO session : activeSessions.values()) {
             if (!session.getSymbol().equals(symbol)) continue;
-            try {
-                applyKlineSignal(session, kline, signal);
-                pushAutoTradeStatus(session);
-            } catch (Exception e) {
-                log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), symbol, e.getMessage());
-                session.addLog(now() + " [오류] " + e.getMessage());
-            }
+            // 봉 마감은 대기열에 쌓고 레인에서 처리 (WS 스레드가 큐 락 대기로 막히지 않도록)
+            session.getPendingKlines().add(kline);
+            scheduleLane(session);
         }
+    }
+
+    /**
+     * 마감된 봉의 신호 방향을 판정한다.
+     *
+     * @param kline 마감된 1분봉 (open/close 필수)
+     * @return 양봉이면 LONG, 음봉이면 SHORT, 도지(close == open)이면 null
+     */
+    private Side toSignal(WebSocketKlineDTO.KlineData kline) {
+        BigDecimal open = new BigDecimal(kline.getOpen());
+        BigDecimal close = new BigDecimal(kline.getClose());
+        int cmp = close.compareTo(open);
+        if (cmp > 0) return Side.LONG;
+        if (cmp < 0) return Side.SHORT;
+        return null; // 도지 — 다음 봉 재대기
     }
 
     /**
      * 마감된 1분봉의 신호를 세션 내 각 큐에 적용한다.
      * 큐가 BLOCK_MATCHING 상태이고 현재 블록이 조건 블록(leaf 아님)이며
      * blockBaseTime이 이 봉 구간에 속할 때만 신호를 처리한다.
+     * 세션 레인 스레드에서만 호출한다. (세션당 레인 1개 → 큐 상태 단일 스레드 접근, 락 불필요)
      */
     private void applyKlineSignal(AutoTradeSessionDTO session,
                                   WebSocketKlineDTO.KlineData kline, Side signal) {
         long startMs = kline.getStart();
         long endMs = kline.getEnd();
+        // 다음 판정 봉의 시작 시각 (end는 봉의 마지막 ms) — 서버 시계·레인 지연과 무관하게 다음 봉과 정확히 맞물림
+        LocalDateTime nextCandleStart = LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(endMs + 1), java.time.ZoneId.systemDefault());
 
         for (PatternQueue queue : new ArrayList<>(session.getQueues())) {
             QueueStateDTO state = session.getQueueStates().get(queue.getId());
             if (state == null) continue;
+
             if (state.getPhase() != TradePhase.BLOCK_MATCHING) continue;
             if (state.getBlockBaseTime() == null) continue;
 
@@ -184,49 +330,45 @@ public class AutoTradeService {
             PatternBlock currentBlock = findBlockByOrder(pattern, state.getCurrentBlockOrder());
             if (currentBlock == null || currentBlock.isLeaf()) continue; // leaf는 push 기반 진입에서 처리
 
-            if (!state.tryLock()) continue;
-            try {
-                if (signal == null) {
-                    // 도지: 기준 시각만 다음 봉으로 리셋 (다음 1분봉 마감 시 재판정)
-                    state.setBlockBaseTime(LocalDateTime.now());
-                    state.setBlockBasePrice(kline.getClose());
-                    session.addLog(now() + " [블록 매칭] 도지(close==open) → 다음 봉 재대기 (큐 #"
-                            + queue.getId() + ")");
+            if (signal == null) {
+                // 도지: 기준 시각만 다음 봉으로 리셋 (다음 1분봉 마감 시 재판정)
+                state.setBlockBaseTime(nextCandleStart);
+                state.setBlockBasePrice(kline.getClose());
+                session.addLog(now() + " [블록 매칭] 도지(close==open) → 다음 봉 재대기 (큐 #"
+                        + queue.getId() + ")");
+                continue;
+            }
+
+            if (signal == currentBlock.getSide()) {
+                // 신호 일치 → 다음 블록으로 이동
+                state.setCurrentBlockOrder(state.getCurrentBlockOrder() + 1);
+                state.setBlockBaseTime(nextCandleStart);
+                state.setBlockBasePrice(kline.getClose());
+                session.addLog(now() + " [블록 매칭] " + signal + " 일치 → 블록 "
+                        + state.getCurrentBlockOrder() + " (큐 #" + queue.getId() + ")");
+            } else {
+                // 신호 반대 → 같은 단계에서 신호 방향 시작 패턴 새로 선택 (단계 유지)
+                // 단계당 패턴 2개 보장(LONG 시작+SHORT 시작)이라 selectPattern은 항상 매칭됨
+                PatternStep currentStep = findStepByLevel(queue, state.getCurrentStepLevel());
+                Pattern nextPattern = currentStep != null ? selectPattern(currentStep, signal) : null;
+                if (nextPattern == null) {
+                    // 방어 코드: 단계당 양방향 패턴 검증을 통과한 큐에서는 발생하지 않음
+                    log.warn("[패턴 전환 실패] 단계 {}에 {} 시작 패턴 없음, queueId={}",
+                            state.getCurrentStepLevel(), signal, queue.getId());
+                    deactivateQueue(queue, state, session,
+                            state.getCurrentStepLevel() + "단계에 " + signal + " 시작 패턴 없음");
                     continue;
                 }
-
-                if (signal == currentBlock.getSide()) {
-                    // 신호 일치 → 다음 블록으로 이동
-                    state.setCurrentBlockOrder(state.getCurrentBlockOrder() + 1);
-                    state.setBlockBaseTime(LocalDateTime.now());
-                    state.setBlockBasePrice(kline.getClose());
-                    session.addLog(now() + " [블록 매칭] " + signal + " 일치 → 블록 "
-                            + state.getCurrentBlockOrder() + " (큐 #" + queue.getId() + ")");
-                } else {
-                    // 신호 반대 → 같은 단계에서 신호 방향 시작 패턴 새로 선택 (단계 유지)
-                    // 단계당 패턴 2개 보장(LONG 시작+SHORT 시작)이라 selectPattern은 항상 매칭됨
-                    PatternStep currentStep = findStepByLevel(queue, state.getCurrentStepLevel());
-                    Pattern nextPattern = currentStep != null ? selectPattern(currentStep, signal) : null;
-                    if (nextPattern == null) {
-                        // 방어 코드: 단계당 양방향 패턴 검증을 통과한 큐에서는 발생하지 않음
-                        log.warn("[패턴 전환 실패] 단계 {}에 {} 시작 패턴 없음, queueId={}",
-                                state.getCurrentStepLevel(), signal, queue.getId());
-                        deactivateQueue(queue, state, session,
-                                state.getCurrentStepLevel() + "단계에 " + signal + " 시작 패턴 없음");
-                        continue;
-                    }
-                    state.setActivePatternId(nextPattern.getId());
-                    state.setDirection(signal);
-                    // 첫 블록은 새 신호로 자동 매칭 간주 → 두 번째 블록부터 매칭 재시작
-                    state.setCurrentBlockOrder(2);
-                    state.setBlockBaseTime(null);
-                    state.setBlockBasePrice(null);
-                    session.addLog(now() + " [패턴 전환] " + signal + " 신호 → 단계 "
-                            + state.getCurrentStepLevel() + " " + signal + " 시작 패턴 (큐 #"
-                            + queue.getId() + ")");
-                }
-            } finally {
-                state.unlock();
+                state.setActivePatternId(nextPattern.getId());
+                state.setDirection(signal);
+                // 첫 블록은 새 신호로 자동 매칭 간주 → 두 번째 블록부터 매칭 재시작
+                state.setCurrentBlockOrder(2);
+                // 전환된 패턴도 바로 다음 봉부터 판정 (null로 두면 레인 지연 시 다음 봉이 구간 밖으로 버려짐)
+                state.setBlockBaseTime(nextCandleStart);
+                state.setBlockBasePrice(kline.getClose());
+                session.addLog(now() + " [패턴 전환] " + signal + " 신호 → 단계 "
+                        + state.getCurrentStepLevel() + " " + signal + " 시작 패턴 (큐 #"
+                        + queue.getId() + ")");
             }
         }
     }
@@ -444,6 +586,7 @@ public class AutoTradeService {
     /**
      * 1초 주기로 실행되는 자동매매 안전망(fallback).
      * WebSocket 장애 시에도 REST 폴링으로 매매가 지속되도록 한다.
+     * REST 조회는 스케줄러 스레드에서 하고, 처리는 WS 가격과 같은 세션 레인에 맡긴다.
      */
     @Scheduled(fixedRate = 1000)
     public void tick() {
@@ -464,13 +607,71 @@ public class AutoTradeService {
         List<FindTickerResponse.TickerInfo> tickers = tickerResponse.getResult().getList();
 
         for (AutoTradeSessionDTO session : new ArrayList<>(activeSessions.values())) {
+            String currentPrice = findLastPrice(tickers, session.getSymbol());
+            if (currentPrice == null) {
+                continue;
+            }
+            // WS 가격과 같은 슬롯에 기록 → 레인에서 처리 (같은 세션은 항상 레인 한 곳에서만 처리)
+            session.getLatestPrice().set(currentPrice);
+            scheduleLane(session);
+        }
+    }
+
+    /**
+     * 놓친 외부 청산을 재조정한다. (스케줄러 스레드, 점검 주기는 사용자 정책 {@link #EXTERNAL_CLOSE_RECONCILE_INTERVAL_MS})
+     * private WS가 끊긴 동안의 청산은 거래소가 다시 보내주지 않고, 키 문제로 private WS를 생략한 사용자도 있으므로
+     * 포지션 보유 큐가 있는 MAIN 세션의 거래소 포지션을 주기적으로 확인한다.
+     * - 포지션 남아 있음·조회 실패: 아무것도 하지 않음
+     * - 포지션 0: 진입 이후 가장 최근 청산 건과 방식을 조회해 실시간 감지와 같은 경로({@link #onPositionClose})로 넘김
+     *   (방식을 알 수 없으면 OTHER → 큐 비활성화, 레인에서 포지션 재확인 후 처리)
+     */
+    @Scheduled(fixedDelay = EXTERNAL_CLOSE_RECONCILE_INTERVAL_MS, initialDelay = EXTERNAL_CLOSE_RECONCILE_INTERVAL_MS)
+    public void reconcileExternalCloses() {
+        if (activeSessions.isEmpty()) return;
+
+        for (AutoTradeSessionDTO session : new ArrayList<>(activeSessions.values())) {
+            // 실거래 세션만 대상 (SIM은 거래소 포지션 없음)
+            if (session.getTradeMode() != TradeMode.MAIN) continue;
             try {
-                processSession(session, tickers);
+                reconcileSession(session);
             } catch (Exception e) {
-                log.error(LogMessage.AUTO_TRADE_TICK_ERROR.getMessage(), session.getSymbol(), e.getMessage());
-                session.addLog(now() + " [오류] " + e.getMessage());
+                log.warn("[외부 청산 재조정] 실패: userId={}, symbol={}, error={}",
+                        session.getUserId(), session.getSymbol(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * 세션 1건의 놓친 외부 청산을 확인한다.
+     *
+     * @param session 대상 MAIN 세션
+     */
+    private void reconcileSession(AutoTradeSessionDTO session) {
+        // 포지션 보유 큐의 진입 시각 수집 (보유 큐가 없으면 조회 생략)
+        List<QueueStateDTO> holdingStates = session.getQueueStates().values().stream()
+                .filter(st -> st.getPhase() == TradePhase.POSITION_HOLDING)
+                .toList();
+        if (holdingStates.isEmpty()) return;
+
+        BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getTradeMode());
+        // 조회 실패 또는 포지션 유지 중 → 다음 주기에 다시 확인
+        if (positionSize == null || positionSize.signum() > 0) return;
+
+        // 검색 시작점: 보유 큐 중 가장 이른 진입 시각 (진입 시각이 없는 큐가 있으면 최대 범위)
+        long now = System.currentTimeMillis();
+        long since = holdingStates.stream()
+                .mapToLong(st -> st.getEntryTime() != null ? st.getEntryTime() : now - RECONCILE_FALLBACK_LOOKBACK_MS)
+                .min()
+                .orElse(now - RECONCILE_FALLBACK_LOOKBACK_MS);
+
+        PositionCloseDTO close = tradeFacade.findLastClose(session.getUserId(), session.getSymbol(), since, session.getTradeMode());
+        // 청산 내역 조회 실패 → 다음 주기에 재시도
+        if (close == null) return;
+
+        log.warn(LogMessage.EXTERNAL_CLOSE_RECONCILED.getMessage(),
+                session.getUserId(), session.getSymbol(), close.getCloseType(), close.getOrderId());
+        // 실시간 감지와 같은 경로로 처리 (앱 자체 매도/청산 건은 그 안에서 걸러짐)
+        onPositionClose(close);
     }
 
     // ─────────────────────────────────────────────
@@ -495,51 +696,32 @@ public class AutoTradeService {
     }
 
     /**
-     * REST 폴링 티커로 세션 내 각 큐를 독립적으로 처리한다. (fallback용)
+     * REST 폴링 티커 목록에서 심볼의 현재가를 찾는다. (fallback용)
+     *
+     * @param tickers REST 티커 목록
+     * @param symbol  심볼 (예: "BTCUSDT")
+     * @return 현재가, 목록에 없으면 null
      */
-    private void processSession(AutoTradeSessionDTO session, List<FindTickerResponse.TickerInfo> tickers) {
-        // 해당 심볼의 현재가 조회
-        String currentPrice = null;
+    private String findLastPrice(List<FindTickerResponse.TickerInfo> tickers, String symbol) {
         for (FindTickerResponse.TickerInfo ticker : tickers) {
-            if (ticker.getSymbol().equals(session.getSymbol())) {
-                currentPrice = ticker.getLastPrice();
-                break;
+            if (ticker.getSymbol().equals(symbol)) {
+                return ticker.getLastPrice();
             }
         }
-
-        if (currentPrice == null) {
-            return;
-        }
-
-        // 각 큐를 독립적으로 처리
-        for (PatternQueue queue : new ArrayList<>(session.getQueues())) {
-            QueueStateDTO state = session.getQueueStates().get(queue.getId());
-            if (state == null) {
-                continue;
-            }
-            processQueue(queue, state, session, currentPrice);
-        }
+        return null;
     }
 
     /**
      * 개별 큐의 현재 페이즈에 따라 적절한 처리를 수행한다.
+     * 세션 레인 스레드에서만 호출한다. (세션당 레인 1개 → 큐 상태 단일 스레드 접근, 락 불필요)
      */
     private void processQueue(PatternQueue queue, QueueStateDTO state,
                               AutoTradeSessionDTO session, String currentPrice) {
-        // 중복 실행 방지: 이미 처리 중이면 스킵
-        if (!state.tryLock()) return;
-
-        try {
-            // 페이즈별 분기 처리
-            switch (state.getPhase()) {
-                case TRIGGER_WAIT -> processTriggerWait(queue, state, session, currentPrice);
-                // POSITION_OPEN은 트리거 → BLOCK_MATCHING 전환 중간 상태로만 사용 (즉시 BLOCK_MATCHING으로 이동)
-                case POSITION_OPEN -> state.setPhase(TradePhase.BLOCK_MATCHING);
-                case BLOCK_MATCHING -> processBlockMatching(queue, state, session, currentPrice);
-                case POSITION_HOLDING -> processPositionHolding(queue, state, session, currentPrice);
-            }
-        } finally {
-            state.unlock();
+        // 페이즈별 분기 처리
+        switch (state.getPhase()) {
+            case TRIGGER_WAIT -> processTriggerWait(queue, state, session, currentPrice);
+            case BLOCK_MATCHING -> processBlockMatching(queue, state, session, currentPrice);
+            case POSITION_HOLDING -> processPositionHolding(queue, state, session, currentPrice);
         }
     }
 
@@ -619,133 +801,6 @@ public class AutoTradeService {
     }
 
     // ─────────────────────────────────────────────
-    // Phase 2 (비활성): processPositionOpen은 더 이상 사용하지 않음
-    // 트리거 충족 시 transitionToBlockMatching()으로 직접 BLOCK_MATCHING 진입
-    // 포지션 진입은 leaf 직전 블록(N-1) 매칭 시 openPosition()에서 실행
-    // ─────────────────────────────────────────────
-
-    /**
-     * @deprecated 더 이상 사용하지 않음. processQueue의 POSITION_OPEN 케이스에서 즉시 BLOCK_MATCHING으로 전환.
-     */
-    @Deprecated
-    void processPositionOpen(PatternQueue queue, QueueStateDTO state,
-                             AutoTradeSessionDTO session, String currentPrice) {
-        // 이미 포지션이 열려있으면 이중 진입 방지 (상태 불일치 보정)
-        if (state.getEntryPrice() != null) {
-            log.warn("[이중 진입 감지] entryPrice={}, queueId={}", state.getEntryPrice(), queue.getId());
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-            return;
-        }
-
-        Pattern pattern = findPatternById(queue, state.getActivePatternId());
-        if (pattern == null) {
-            session.addLog(now() + " [오류] 패턴을 찾을 수 없음: " + state.getActivePatternId());
-            return;
-        }
-
-        String side = state.getDirection() == Side.LONG ? "Buy" : "Sell";
-        String leverageStr = String.valueOf(pattern.getLeverage());
-
-        // 마진 모드를 Isolated로 전환 (Cross 모드 진입 방지)
-        try {
-            tradeFacade.switchToIsolated(session.getUserId(), session.getTradeMode());
-        } catch (Exception e) {
-            // Isolated 전환 실패 시 Cross 모드로 주문 방지 → 큐 비활성화
-            session.addLog(now() + " [진입 실패] 마진 모드 Isolated 전환 실패 : " + e.getMessage());
-            log.error(LogMessage.MARGIN_MODE_SWITCH_FAILED.getMessage(), queue.getId(), e.getMessage());
-            deactivateQueue(queue, state, session, "마진 모드 전환 실패: " + e.getMessage());
-            return;
-        }
-
-        // 레버리지 설정
-        try {
-            SetLeverageRequest leverageRequest = new SetLeverageRequest(
-                    Category.LINEAR.getCategory(),
-                    session.getSymbol(),
-                    leverageStr,
-                    leverageStr
-            );
-            tradeFacade.setLeverage(leverageRequest, session.getUserId(), session.getTradeMode());
-        } catch (Exception e) {
-            // 이미 동일 레버리지가 설정된 경우 Bybit이 에러를 반환할 수 있으므로 경고만 로그
-            log.warn(LogMessage.LEVERAGE_SET_FAILED.getMessage(), e.getMessage());
-        }
-
-        // USDT 금액을 코인 수량으로 변환 (Linear 선물은 코인 수량 단위로 주문)
-        // notional = 마진(amount) × 레버리지 → 실제 포지션 크기 기준으로 수량 계산
-        BigDecimal notional = pattern.getAmount().multiply(BigDecimal.valueOf(pattern.getLeverage()));
-        String qty = marketService.convertUsdtToQty(
-                session.getSymbol(), notional, new BigDecimal(currentPrice));
-        if (qty == null) {
-            // qtyStep 캐시 미스 → 진짜 오류, 큐 비활성화
-            session.addLog(now() + " [진입 실패] qtyStep 조회 실패: " + session.getSymbol());
-            deactivateQueue(queue, state, session, "수량 변환 실패");
-            return;
-        }
-        if ("0".equals(qty)) {
-            // 금액 대비 현재가가 너무 높아 최소 주문 단위 미달 → 이번 틱 스킵 (가격 하락 시 자동 해결)
-            session.addLog(now() + " [진입 스킵] 최소 주문 단위 미달: " + session.getSymbol()
-                    + " " + pattern.getAmount() + "USDT, 현재가=" + currentPrice);
-            return;
-        }
-
-        // 시장가 주문 실행
-        CreateOrderRequest orderRequest = CreateOrderRequest.builder()
-                .category(Category.LINEAR.getCategory())
-                .symbol(session.getSymbol())
-                .side(side)
-                .orderType("Market")
-                .qty(qty)
-                .build();
-
-        // TradeHistory 준비 (투입 금액은 마진 기준으로 저장)
-        TradeHistoryDTO history = new TradeHistoryDTO();
-        history.setQueueStepId(state.getActiveStepId());
-        history.setUserId(session.getUserId());
-        history.setSymbol(session.getSymbol());
-        history.setSide(state.getDirection());
-        history.setOrderType(TradeOrderType.ENTRY.getTradeOrderType());
-        history.setAmount(pattern.getAmount()); // 마진(실제 투자금) 저장
-
-        // 진입 수수료 계산: qty × 진입가 × taker 요율 (SIM 지갑 차감 및 히스토리 기록용)
-        BigDecimal entryFee = TradeCalculator.calcFee(new BigDecimal(currentPrice), new BigDecimal(qty));
-        history.setFee(entryFee);
-
-        // 주문 전 진입가 선점: 이중 진입 방지 (상단 가드와 함께 이중 안전장치)
-        state.setEntryPrice(currentPrice);
-
-        try {
-            // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
-            tradeFacade.placeOrder(orderRequest, session.getUserId(), history, session.getTradeMode());
-
-            // 주문 성공: 이력 저장 (모드에 따라 테이블 분기)
-            history.setExecutedPrice(new BigDecimal(currentPrice));
-            history.setOrderResult(OrderResult.SUCCESS);
-            saveTradeHistory(history, session.getTradeMode());
-
-            state.setEntryQty(qty);                        // 매도/청산 시 포지션 전량 청산을 위해 진입 수량 저장
-            state.setEntryMargin(pattern.getAmount());     // 마진 기억 (투자 히스토리 원금 기준)
-            state.setCloseSkipCount(0);                    // 새 포지션 진입 시 스킵 카운터 초기화
-
-            session.addLog(now() + " [진입] " + side + " "
-                    + pattern.getAmount().stripTrailingZeros().toPlainString() + "$ "
-                    + session.getSymbol() + " (큐 #" + queue.getId()
-                    + ", " + state.getCurrentStepLevel() + "단계, x" + pattern.getLeverage() + ")");
-
-            // BLOCK_MATCHING 전환 (첫 조건 블록은 진입 방향으로 이미 소비)
-            state.setCurrentBlockOrder(2);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
-
-        } catch (Exception e) {
-            // 주문 실패: 진입가 선점 해제 후 큐 비활성화 (TradeService에서 이미 history 저장 완료)
-            state.setEntryPrice(null);
-            session.addLog(now() + " [진입 실패] " + e.getMessage());
-            log.error(LogMessage.POSITION_ENTRY_FAILED.getMessage(), queue.getId(), e.getMessage());
-            deactivateQueue(queue, state, session, "주문 실패: " + e.getMessage());
-        }
-    }
-
-    // ─────────────────────────────────────────────
     // Phase 3: 블록 매칭 (SRS 11-14, 17)
     // ─────────────────────────────────────────────
 
@@ -772,11 +827,25 @@ public class AutoTradeService {
 
         // leaf 블록 도달 → 즉시 진입 (포지션 방향은 leaf의 side)
         if (currentBlock.isLeaf()) {
-            log.info("Success match the leaf block! ===>{} \n Insert the Money ===> {}", currentBlock ,currentPrice);
+            log.info("leaf 블록 도달 → 진입: queueId={}, blockOrder={}, side={}, price={}",
+                    queue.getId(), currentBlock.getBlockOrder(), currentBlock.getSide(), currentPrice);
             openPosition(queue, state, session, pattern, currentPrice);
             return;
         }
-        log.info("Success match the next block! ===> {}", currentBlock);
+        // 가격 push마다 호출되므로 debug 레벨 (파일 로그 미기록)
+        log.debug("조건 블록 봉 마감 대기: queueId={}, blockOrder={}, side={}",
+                queue.getId(), currentBlock.getBlockOrder(), currentBlock.getSide());
+
+        // 봉 마감 신호 누락(WebSocket 단절 등)으로 기준 시각이 오래된 경우 → 현재 시각으로 재대기
+        // 정상이라면 기준 시각 이후 최대 약 1분 내에 봉 마감 push가 와서 갱신된다
+        if (state.getBlockBaseTime() != null
+                && state.getBlockBaseTime().isBefore(LocalDateTime.now().minus(BLOCK_BASE_STALE_LIMIT))) {
+            state.setBlockBaseTime(LocalDateTime.now());
+            state.setBlockBasePrice(currentPrice);
+            session.addLog(now() + " [블록 관찰] 봉 마감 신호 누락 → 재대기 - 블록 "
+                    + state.getCurrentBlockOrder() + " (큐 #" + queue.getId() + ")");
+            return;
+        }
 
         // 조건 블록: 관찰 시작 시각만 한 번 기록 — 신호 판단은 1분봉 마감 push에서
         if (state.getBlockBaseTime() == null) {
@@ -868,13 +937,17 @@ public class AutoTradeService {
             log.warn(LogMessage.LEVERAGE_SET_FAILED.getMessage(), e.getMessage());
         }
 
-        CreateOrderRequest orderRequest = CreateOrderRequest.builder()
+        String orderLinkId = newOrderLinkId(queue, "E");
+        CreateOrderRequest.CreateOrderRequestBuilder orderBuilder = CreateOrderRequest.builder()
                 .category(Category.LINEAR.getCategory())
                 .symbol(session.getSymbol())
                 .side(side)
                 .orderType("Market")
                 .qty(qty)
-                .build();
+                .orderLinkId(orderLinkId); // 응답 불명확 시 결과 조회 + WS 체결 매칭용
+        // 4) 서버 장애 대비 거래소 안전망 TP/SL 동봉 (앱 TP/SL보다 가격 0.5%p 바깥 — 정상 시 앱이 먼저 청산)
+        attachExchangeTpSl(orderBuilder, entryDirection, pattern, currentPrice, queue, session);
+        CreateOrderRequest orderRequest = orderBuilder.build();
 
         TradeHistoryDTO history = new TradeHistoryDTO();
         history.setQueueStepId(state.getActiveStepId());
@@ -889,15 +962,19 @@ public class AutoTradeService {
 
         // 이중 진입 방지: 주문 전 진입가 선점
         state.setEntryPrice(currentPrice);
+        // 진입 주문 전송 시각 (이 시각 이후의 청산 내역만 이 포지션의 청산으로 봄)
+        long entrySentAt = System.currentTimeMillis();
 
         try {
+            // WS 체결 대기는 주문 전에 등록 (체결 push가 주문 응답보다 먼저 올 수 있음, SIM은 무시)
+            tradeFacade.expectExecution(session.getUserId(), orderLinkId, session.getTradeMode());
             CreateOrderResponse orderResponse = tradeFacade.placeOrder(orderRequest, session.getUserId(), history, session.getTradeMode());
 
-            // 실체결 데이터 조회 (MAIN 모드만, SIM은 null 반환)
+            // 실체결 데이터 조회 — WS 우선, 미수신 시 REST (MAIN 모드만, SIM은 null 반환)
             String orderId = orderResponse != null && orderResponse.getResult() != null
                     ? orderResponse.getResult().getOrderId() : null;
             GetExecutionListResponse.ExecutionInfo exec = orderId != null
-                    ? tradeFacade.getExecution(orderId, session.getSymbol(), session.getUserId(), session.getTradeMode())
+                    ? tradeFacade.getExecution(orderId, orderLinkId, session.getSymbol(), session.getUserId(), session.getTradeMode())
                     : null;
 
             // 실체결가 / 실수수료 적용 (조회 실패 시 currentPrice / 추정 수수료 fallback)
@@ -914,27 +991,19 @@ public class AutoTradeService {
             state.setEntryFee(actualEntryFee);
             state.setEntryQty(qty);
             state.setEntryMargin(pattern.getAmount());
+            state.setEntryTime(entrySentAt);
             state.setCloseSkipCount(0);
             // 진입 후 state.direction을 leaf side로 갱신 — 이후 흐름(POSITION_HOLDING TP/SL 비교,
             // handleSellSuccess 1단계 재진입 등)이 실제 포지션 방향 기준으로 동작하도록 정합성 보장
             state.setDirection(entryDirection);
 
-            // 익절/손절 가격 계산 — 실체결가 기준, rate는 가격 변동 기준 (%), 미설정 시 default = 8%
+            // 익절/손절 가격 계산 — 실체결가 기준, rate는 투자금 기준 (%), 미설정 시 가격 8%
             BigDecimal entry = new BigDecimal(actualEntryPrice);
-            BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR); // 8%
-            BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
-            BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
-            BigDecimal hundred = BigDecimal.valueOf(100);
-            BigDecimal tpPrice;
-            BigDecimal slPrice;
-            // LONG: 가격 상승 시 익절 / SHORT: 가격 하락 시 익절
-            if (entryDirection == Side.LONG) {
-                tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-                slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-            } else {
-                tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-                slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-            }
+            int leverage = pattern.getLeverage();
+            BigDecimal tpPrice = TradeCalculator.calcTpPrice(entryDirection, entry,
+                    TradeCalculator.resolveRoiRate(pattern.getTakeProfitRate(), leverage), leverage);
+            BigDecimal slPrice = TradeCalculator.calcSlPrice(entryDirection, entry,
+                    TradeCalculator.resolveRoiRate(pattern.getStopLossRate(), leverage), leverage);
             state.setTpPrice(tpPrice);
             state.setSlPrice(slPrice);
 
@@ -953,6 +1022,86 @@ public class AutoTradeService {
             session.addLog(now() + " [진입 실패] " + e.getMessage());
             log.error(LogMessage.POSITION_ENTRY_FAILED.getMessage(), queue.getId(), e.getMessage());
             deactivateQueue(queue, state, session, "주문 실패: " + e.getMessage());
+        } finally {
+            // WS 체결 대기 정리 (주문 실패·orderId 없음 대비, 체결 조회에서 이미 제거됐으면 무시)
+            tradeFacade.cancelExecution(orderLinkId, session.getTradeMode());
+        }
+    }
+
+    /**
+     * 주문별 고유 orderLinkId를 생성한다. 형식: q{큐ID}-{유형}-{epoch ms}
+     * Bybit 제약(36자 이하, 영문·숫자·-·_)을 만족하며, 한 큐는 단일 스레드에서 순차 주문하므로 ms 단위로 고유하다.
+     *
+     * @param queue 주문을 실행하는 큐
+     * @param type  주문 유형 (E: 진입, S: 매도, L: 청산)
+     * @return orderLinkId (예: q12-E-1760950000000)
+     */
+    private String newOrderLinkId(PatternQueue queue, String type) {
+        return "q" + queue.getId() + "-" + type + "-" + System.currentTimeMillis();
+    }
+
+    /**
+     * 진입 주문에 거래소 안전망 TP/SL을 동봉한다.
+     * 서버 장애·재시작으로 앱 모니터링이 끊겨도 거래소가 포지션을 정리하도록 하는 보조 장치이며,
+     * 앱 TP/SL보다 가격 기준 0.5%p 바깥에 두어 정상 상황에서는 앱이 먼저 청산한다.
+     * Full 모드(포지션 전체)는 Market만 지원하므로 발동 시 시장가 1회 체결(taker 수수료 1회)이다.
+     *
+     * <p>설정 생략 조건 (진입 자체는 계속):</p>
+     * <ul>
+     *   <li>tickSize 조회 실패 → TP/SL 모두 생략</li>
+     *   <li>손절률이 강제청산 한도 초과(검증 도입 이전 패턴) → SL만 생략</li>
+     *   <li>SHORT 익절가가 0 이하 → TP만 생략</li>
+     * </ul>
+     *
+     * @param orderBuilder 진입 주문 빌더 (TP/SL 필드가 추가됨)
+     * @param direction    진입 방향 (leaf side)
+     * @param pattern      진입 패턴 (레버리지, 익절/손절률)
+     * @param currentPrice 주문 시점 현재가 (거래소 TP/SL 기준가)
+     * @param queue        대상 큐 (로그용)
+     * @param session      사용자 세션 (경고 로그 기록)
+     */
+    private void attachExchangeTpSl(CreateOrderRequest.CreateOrderRequestBuilder orderBuilder, Side direction,
+                                    Pattern pattern, String currentPrice,
+                                    PatternQueue queue, AutoTradeSessionDTO session) {
+        String tickSizeStr = marketService.getTickSize(session.getSymbol());
+        if (tickSizeStr == null) {
+            log.warn("거래소 안전 TP/SL 생략 (tickSize 조회 실패): queueId={}, symbol={}", queue.getId(), session.getSymbol());
+            session.addLog(now() + " [경고] 가격 단위 조회 실패로 거래소 안전 손절/익절 없이 진입합니다 (큐 #" + queue.getId() + ")");
+            return;
+        }
+        BigDecimal tickSize = new BigDecimal(tickSizeStr);
+        BigDecimal basePrice = new BigDecimal(currentPrice);
+        int leverage = pattern.getLeverage();
+
+        BigDecimal tpRate = TradeCalculator.resolveRoiRate(pattern.getTakeProfitRate(), leverage);
+        BigDecimal slRate = TradeCalculator.resolveRoiRate(pattern.getStopLossRate(), leverage);
+        BigDecimal exchangeTp = TradeCalculator.calcExchangeTpPrice(direction, basePrice, tpRate, leverage, tickSize);
+
+        // 손절률이 강제청산 한도를 넘으면 거래소가 SL을 거부할 수 있으므로 SL만 생략 (진입 주문 거부 방지)
+        BigDecimal exchangeSl = null;
+        if (TradeCalculator.isStopLossWithinLimit(slRate, leverage)) {
+            exchangeSl = TradeCalculator.calcExchangeSlPrice(direction, basePrice, slRate, leverage, tickSize);
+        } else {
+            log.warn("거래소 안전 SL 생략 (강제청산 한도 초과): queueId={}, slRate={}, leverage={}",
+                    queue.getId(), slRate, leverage);
+            session.addLog(now() + " [경고] 손절률이 강제청산 한도("
+                    + TradeCalculator.maxStopLossRate(leverage).stripTrailingZeros().toPlainString()
+                    + "%)를 넘어 거래소 안전 손절 없이 진입합니다 (큐 #" + queue.getId() + ") — 큐 수정에서 손절률을 낮춰 주세요.");
+        }
+
+        if (exchangeTp != null) {
+            orderBuilder.takeProfit(exchangeTp.stripTrailingZeros().toPlainString())
+                    .tpOrderType("Market")
+                    .tpTriggerBy("LastPrice");
+        }
+        if (exchangeSl != null) {
+            orderBuilder.stopLoss(exchangeSl.stripTrailingZeros().toPlainString())
+                    .slOrderType("Market")
+                    .slTriggerBy("LastPrice");
+        }
+        // TP 또는 SL이 하나라도 있을 때만 모드 지정
+        if (exchangeTp != null || exchangeSl != null) {
+            orderBuilder.tpslMode("Full");
         }
     }
 
@@ -1051,6 +1200,7 @@ public class AutoTradeService {
                     new BigDecimal(currentPrice), new BigDecimal(closeQty));
             history.setFee(estimatedExitFee);
 
+            String orderLinkId = newOrderLinkId(queue, "S");
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
                     .category(Category.LINEAR.getCategory())
                     .symbol(session.getSymbol())
@@ -1058,92 +1208,63 @@ public class AutoTradeService {
                     .orderType("Market")
                     .qty(closeQty)
                     .reduceOnly(true) // 포지션 청산 전용 (새 포지션 열림 방지)
+                    .orderLinkId(orderLinkId) // 응답 불명확 시 결과 조회용 + WS 체결 매칭 키
                     .build();
 
             // 주문 실행 (실패 시 TradeService에서 history에 실패 이력 저장 후 예외)
-            CreateOrderResponse orderResponse = tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
+            CreateOrderResponse orderResponse = placeCloseOrder(closeRequest, session, history, orderLinkId);
 
-            // 실체결 데이터 조회 (MAIN 모드만, SIM은 null 반환)
-            String orderId = orderResponse != null && orderResponse.getResult() != null
-                    ? orderResponse.getResult().getOrderId() : null;
-            GetExecutionListResponse.ExecutionInfo exec = orderId != null
-                    ? tradeFacade.getExecution(orderId, session.getSymbol(), session.getUserId(), session.getTradeMode())
-                    : null;
+            // 체결 조회·이력 저장은 후처리 실행기에 위임 (상태 리셋 전에 진입 정보 스냅샷)
+            submitCloseRecord(CloseRecord.of(orderResponse, orderLinkId, history, "매도", queue, state, session,
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee), session);
 
-            String actualExitPrice = exec != null ? exec.getExecPrice() : currentPrice;
-            BigDecimal actualExitFee = exec != null ? new BigDecimal(exec.getExecFee()) : estimatedExitFee;
-
-            // 주문 성공: 실체결가 / 실수수료로 이력 저장
-            history.setExecutedPrice(new BigDecimal(actualExitPrice));
-            history.setFee(actualExitFee);
-            history.setOrderResult(OrderResult.SUCCESS);
-            saveTradeHistory(history, session.getTradeMode());
-
-            // 투자 히스토리 저장
-            if (state.getEntryMargin() == null) {
-                // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
-                log.warn("투자 히스토리 저장 건너뜀: entryMargin null, queueId={}", queue.getId());
-                session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
-            } else {
-                // state.entryFee: 진입 시 저장된 실수수료, null이면 추정값으로 재계산
-                BigDecimal actualEntryFee = state.getEntryFee() != null
-                        ? state.getEntryFee()
-                        : TradeCalculator.calcFee(
-                                new BigDecimal(state.getEntryPrice()), new BigDecimal(state.getEntryQty()));
-
-                // 실손익 + 펀딩비 조회 (MAIN 모드만, SIM은 null → 계산식 fallback)
-                GetClosedPnlResponse.ClosedPnlInfo pnlInfo = tradeFacade.getClosedPnl(
-                        session.getSymbol(), session.getUserId(), session.getTradeMode());
-                BigDecimal actualPnl = parseSafeBD(pnlInfo != null ? pnlInfo.getClosedPnl() : null);
-                BigDecimal actualFundingFee = parseSafeBD(pnlInfo != null ? pnlInfo.getFundingFee() : null);
-
-                saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
-                        session.getSymbol(), state.getDirection(),
-                        state.getEntryPrice(), actualExitPrice, state.getEntryMargin(), pattern,
-                        actualEntryFee, actualExitFee, actualPnl, actualFundingFee, session.getTradeMode());
-            }
-
-            BigDecimal closeValue = new BigDecimal(closeQty).multiply(new BigDecimal(actualExitPrice))
-                    .setScale(2, RoundingMode.HALF_UP);
+            // 즉시 로그는 현재가 기준 추정 금액 (실체결가는 후처리 완료 시 [체결 확정] 로그로 표시)
             session.addLog(now() + " [매도 성공] " + closeSide + " "
-                    + closeValue.stripTrailingZeros().toPlainString() + "$ "
+                    + estimateCloseValue(closeQty, currentPrice) + "$ (추정)"
                     + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
 
-            // SRS 11, 12: 매도 성공 → 1단계부터 다시 수행
-            // 단, 재진입 시 매도 성공한 포지션 방향 그대로 1단계 패턴을 선택한다
-            PatternStep firstStep = findStepByLevel(queue, 1);
-            if (firstStep == null) {
-                deactivateQueue(queue, state, session, "1단계가 존재하지 않음");
-                return;
-            }
-            Pattern nextPattern = selectPattern(firstStep, state.getDirection());
-            if (nextPattern == null) {
-                // 1단계에 현재 방향 패턴이 없으면 큐 비활성화
-                deactivateQueue(queue, state, session,
-                        "1단계에 " + state.getDirection() + " 패턴 없음");
-                return;
-            }
-            state.setCurrentStepLevel(1);
-            state.setActiveStepId(firstStep.getId());
-            state.setActivePatternId(nextPattern.getId());
-
-            // 블록 리셋 + 다음 사이클 준비 (첫 블록은 매도 직후의 동일 방향 신호로 자동 매칭 간주)
-            state.setCurrentBlockOrder(2);
-            state.setEntryPrice(null);
-            state.setEntryQty(null);
-            state.setEntryMargin(null);
-            state.setEntryFee(null);
-            state.setTpPrice(null);
-            state.setSlPrice(null);
-            state.setBlockBaseTime(null);
-            state.setBlockBasePrice(null);
-            state.setPhase(TradePhase.BLOCK_MATCHING);
+            resetToFirstStepAfterSell(queue, state, session);
 
         } catch (Exception e) {
-            // 주문 실패 (TradeService에서 이미 history 저장 완료) → 큐 비활성화
+            // 주문 실패 (TradeService에서 이미 history 저장 완료) → 이미 닫힌 포지션인지 확인 후 처리
             session.addLog(now() + " [매도 실패] " + e.getMessage());
-            deactivateQueue(queue, state, session, "매도 실패: " + e.getMessage());
+            handleCloseOrderFailure(queue, state, session, "매도 실패: " + e.getMessage());
         }
+    }
+
+    /**
+     * 매도(익절) 완료 후 상태 전환: 1단계부터 다시 수행한다. (SRS 11, 12)
+     * 재진입 시 매도 성공한 포지션 방향 그대로 1단계 패턴을 선택하며, 패턴이 없으면 큐를 비활성화한다.
+     */
+    private void resetToFirstStepAfterSell(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        PatternStep firstStep = findStepByLevel(queue, 1);
+        if (firstStep == null) {
+            deactivateQueue(queue, state, session, "1단계가 존재하지 않음");
+            return;
+        }
+        Pattern nextPattern = selectPattern(firstStep, state.getDirection());
+        if (nextPattern == null) {
+            // 1단계에 현재 방향 패턴이 없으면 큐 비활성화
+            deactivateQueue(queue, state, session,
+                    "1단계에 " + state.getDirection() + " 패턴 없음");
+            return;
+        }
+        state.setCurrentStepLevel(1);
+        state.setActiveStepId(firstStep.getId());
+        state.setActivePatternId(nextPattern.getId());
+
+        // 블록 리셋 + 다음 사이클 준비 (첫 블록은 매도 직후의 동일 방향 신호로 자동 매칭 간주)
+        state.setCurrentBlockOrder(2);
+        state.setEntryPrice(null);
+        state.setEntryQty(null);
+        state.setEntryMargin(null);
+        state.setEntryFee(null);
+        state.setEntryTime(null);
+        state.setTpPrice(null);
+        state.setSlPrice(null);
+        state.setBlockBaseTime(null);
+        state.setBlockBasePrice(null);
+        state.setPhase(TradePhase.BLOCK_MATCHING);
     }
 
     /**
@@ -1196,6 +1317,7 @@ public class AutoTradeService {
                     new BigDecimal(currentPrice), new BigDecimal(closeQty));
             history.setFee(estimatedExitFee);
 
+            String orderLinkId = newOrderLinkId(queue, "L");
             CreateOrderRequest closeRequest = CreateOrderRequest.builder()
                     .category(Category.LINEAR.getCategory())
                     .symbol(session.getSymbol())
@@ -1203,64 +1325,39 @@ public class AutoTradeService {
                     .orderType("Market")
                     .qty(closeQty)
                     .reduceOnly(true) // 포지션 청산 전용
+                    .orderLinkId(orderLinkId) // 응답 불명확 시 결과 조회용 + WS 체결 매칭 키
                     .build();
 
-            CreateOrderResponse orderResponse = tradeFacade.placeOrder(closeRequest, session.getUserId(), history, session.getTradeMode());
+            CreateOrderResponse orderResponse = placeCloseOrder(closeRequest, session, history, orderLinkId);
 
-            // 실체결 데이터 조회 (MAIN 모드만, SIM은 null 반환)
-            String orderId = orderResponse != null && orderResponse.getResult() != null
-                    ? orderResponse.getResult().getOrderId() : null;
-            GetExecutionListResponse.ExecutionInfo exec = orderId != null
-                    ? tradeFacade.getExecution(orderId, session.getSymbol(), session.getUserId(), session.getTradeMode())
-                    : null;
-
-            String actualExitPrice = exec != null ? exec.getExecPrice() : currentPrice;
-            BigDecimal actualExitFee = exec != null ? new BigDecimal(exec.getExecFee()) : estimatedExitFee;
-
-            // 청산 주문 성공: 실체결가 / 실수수료로 이력 저장
-            history.setExecutedPrice(new BigDecimal(actualExitPrice));
-            history.setFee(actualExitFee);
-            history.setOrderResult(OrderResult.SUCCESS);
-            saveTradeHistory(history, session.getTradeMode());
-
-            // 투자 히스토리 저장
-            if (state.getEntryMargin() == null) {
-                // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
-                log.warn("투자 히스토리 저장 건너뜀: entryMargin null, queueId={}", queue.getId());
-                session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
-            } else {
-                // state.entryFee: 진입 시 저장된 실수수료, null이면 추정값으로 재계산
-                BigDecimal actualEntryFee = state.getEntryFee() != null
-                        ? state.getEntryFee()
-                        : TradeCalculator.calcFee(
-                                new BigDecimal(state.getEntryPrice()), new BigDecimal(state.getEntryQty()));
-
-                // 실손익 + 펀딩비 조회 (MAIN 모드만, SIM은 null → 계산식 fallback)
-                GetClosedPnlResponse.ClosedPnlInfo pnlInfo = tradeFacade.getClosedPnl(
-                        session.getSymbol(), session.getUserId(), session.getTradeMode());
-                BigDecimal actualPnl = parseSafeBD(pnlInfo != null ? pnlInfo.getClosedPnl() : null);
-                BigDecimal actualFundingFee = parseSafeBD(pnlInfo != null ? pnlInfo.getFundingFee() : null);
-
-                saveInvestmentHistory(session.getUserId(), state.getActiveStepId(),
-                        session.getSymbol(), state.getDirection(),
-                        state.getEntryPrice(), actualExitPrice, state.getEntryMargin(), currentPattern,
-                        actualEntryFee, actualExitFee, actualPnl, actualFundingFee, session.getTradeMode());
-            }
+            // 체결 조회·이력 저장은 후처리 실행기에 위임 (상태 이동 전에 진입 정보 스냅샷)
+            submitCloseRecord(CloseRecord.of(orderResponse, orderLinkId, history, "청산", queue, state, session,
+                    currentPattern, closeSide, closeQty, currentPrice, estimatedExitFee), session);
             state.setEntryMargin(null); // 포지션 리셋 시 초기화
 
-            BigDecimal closeValue = new BigDecimal(closeQty).multiply(new BigDecimal(actualExitPrice))
-                    .setScale(2, RoundingMode.HALF_UP);
+            // 즉시 로그는 현재가 기준 추정 금액 (실체결가는 후처리 완료 시 [체결 확정] 로그로 표시)
             session.addLog(now() + " [청산 완료] " + closeSide + " "
-                    + closeValue.stripTrailingZeros().toPlainString() + "$ "
+                    + estimateCloseValue(closeQty, currentPrice) + "$ (추정)"
                     + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
 
         } catch (Exception e) {
-            // 청산 주문 실패 → 큐 비활성화
+            // 청산 주문 실패 → 이미 닫힌 포지션인지 확인 후 처리
             session.addLog(now() + " [청산 실패] " + e.getMessage());
-            deactivateQueue(queue, state, session, "청산 주문 실패: " + e.getMessage());
+            handleCloseOrderFailure(queue, state, session, "청산 주문 실패: " + e.getMessage());
             return;
         }
 
+        moveToNextStepAfterLiquidation(queue, state, session, liquidationDirection);
+    }
+
+    /**
+     * 청산(손절) 완료 후 상태 전환: 다음 단계의 청산 방향 패턴으로 이동한다. (SRS 12)
+     * 모든 단계 소진 시 cycle 설정에 따라 1단계 재시작 또는 큐 비활성화 (SRS 14)
+     *
+     * @param liquidationDirection 청산을 유발한 신호 방향 (다음 단계 진입 방향)
+     */
+    private void moveToNextStepAfterLiquidation(PatternQueue queue, QueueStateDTO state,
+                                                AutoTradeSessionDTO session, Side liquidationDirection) {
         // 다음 단계로 이동
         int nextStepLevel = state.getCurrentStepLevel() + 1;
         PatternStep nextStep = findStepByLevel(queue, nextStepLevel);
@@ -1293,6 +1390,7 @@ public class AutoTradeService {
         state.setEntryPrice(null);
         state.setEntryQty(null);
         state.setEntryFee(null);
+        state.setEntryTime(null);
         state.setTpPrice(null);
         state.setSlPrice(null);
         state.setBlockBaseTime(null);
@@ -1301,6 +1399,301 @@ public class AutoTradeService {
 
         session.addLog(now() + " [다음 단계] " + nextStepLevel + "단계 "
                 + liquidationDirection + " 패턴 선택 (큐 #" + queue.getId() + ")");
+    }
+
+    /**
+     * 앱의 매도/청산(reduceOnly) 주문 실패를 처리한다.
+     * 거래소 TP/SL·강제청산 등으로 포지션이 이미 닫혔는데 외부 청산 감지보다 앱의 주문이 먼저 나간 경우,
+     * Bybit는 줄일 포지션이 없다며 주문을 거절한다(retCode 110017, 같은 코드가 수량 0 절삭에도 쓰여 코드로는 구분 불가).
+     * 그래서 에러 코드 대신 거래소 포지션을 재확인해 판단한다.
+     * - 포지션 0: 진입 이후 청산 건을 찾아 외부 청산과 같은 규칙으로 전환 ({@link #processExternalClose})
+     *   청산 내역 조회 실패 시 상태 유지 → 놓친 외부 청산 재조정({@link #reconcileExternalCloses})이 재시도
+     * - 포지션 남아 있음·조회 실패·SIM: 실제 주문 실패로 보고 큐 비활성화 (기존 동작)
+     *
+     * @param queue    주문이 실패한 큐
+     * @param state    큐 런타임 상태 (POSITION_HOLDING)
+     * @param session  세션
+     * @param reason   비활성화 시 남길 사유
+     */
+    private void handleCloseOrderFailure(PatternQueue queue, QueueStateDTO state,
+                                         AutoTradeSessionDTO session, String reason) {
+        // SIM은 거래소 포지션이 없어 null → 기존처럼 비활성화
+        BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getTradeMode());
+        if (positionSize == null || positionSize.signum() > 0) {
+            deactivateQueue(queue, state, session, reason);
+            return;
+        }
+
+        // 포지션이 이미 0 → 진입 시각 이후 청산 건 조회 (진입 시각이 없으면 최대 범위)
+        long since = state.getEntryTime() != null
+                ? state.getEntryTime()
+                : System.currentTimeMillis() - RECONCILE_FALLBACK_LOOKBACK_MS;
+        PositionCloseDTO close = tradeFacade.findLastClose(session.getUserId(), session.getSymbol(), since, session.getTradeMode());
+        if (close == null) {
+            // 청산 방식 판단 불가 → 상태 유지 (재조정 주기에 다시 확인)
+            session.addLog(now() + " [경고] 포지션이 이미 닫혀 있으나 청산 내역을 확인하지 못했습니다 — 잠시 후 다시 확인합니다 (큐 #"
+                    + queue.getId() + ")");
+            return;
+        }
+
+        log.warn(LogMessage.CLOSE_ORDER_FAILED_ALREADY_CLOSED.getMessage(),
+                queue.getId(), session.getSymbol(), close.getCloseType(), close.getOrderId());
+        // 외부 청산과 같은 규칙으로 전환 (같은 심볼의 다른 보유 큐도 함께 처리됨)
+        processExternalClose(session, close);
+    }
+
+    /**
+     * 외부 청산 체결을 확인하고 큐 상태를 전환한다. (레인 스레드에서 실행 → 앱 자체 매도/청산과 직렬화)
+     * 거래소 포지션 수량을 REST로 재확인해 0일 때만 처리하며, 조회 실패·포지션 잔존 시 상태를 유지한다.
+     * 청산 방식별 전환 (사용자 확정 규칙):
+     * - 거래소 TP 발동: 매도와 같이 1단계·같은 방향으로 재시작
+     * - 거래소 SL 발동·강제청산: 청산과 같이 다음 단계·반대 방향으로 이동
+     * - 수동 청산·ADL 등: 이력만 저장하고 큐 비활성화 (앱이 전략 의도를 판단하지 않음)
+     *
+     * @param session 대상 MAIN 세션
+     * @param event   외부 청산 체결 이벤트
+     */
+    private void processExternalClose(AutoTradeSessionDTO session, PositionCloseDTO event) {
+        // 포지션 보유 중인 큐만 대상 (이미 앱이 청산했거나 진입 전이면 무시)
+        List<PatternQueue> holdingQueues = session.getQueues().stream()
+                .filter(q -> {
+                    QueueStateDTO st = session.getQueueStates().get(q.getId());
+                    return st != null && st.getPhase() == TradePhase.POSITION_HOLDING;
+                })
+                .toList();
+        if (holdingQueues.isEmpty()) return;
+
+        // 거래소 포지션 재확인: 부분 청산·체결 지연 등으로 포지션이 남아 있으면 오판 방지를 위해 상태 유지
+        BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getTradeMode());
+        if (positionSize == null) {
+            log.warn(LogMessage.EXTERNAL_CLOSE_CHECK_FAILED.getMessage(),
+                    session.getUserId(), session.getSymbol(), event.getOrderId());
+            session.addLog(now() + " [경고] 외부 청산 체결을 받았으나 포지션 확인에 실패했습니다 ("
+                    + event.getCloseType().getExplain() + ") — 거래소 포지션을 확인해 주세요.");
+            return;
+        }
+        if (positionSize.signum() > 0) {
+            log.warn(LogMessage.EXTERNAL_CLOSE_IGNORED.getMessage(),
+                    session.getUserId(), session.getSymbol(), positionSize, event.getOrderId());
+            return;
+        }
+
+        // 단방향 모드는 같은 심볼 포지션이 합쳐지므로, 보유 큐가 여럿이면 거래소 손익 1건을 큐마다 중복 저장하지 않도록
+        // 주문 ID 없이 기록 → 체결가는 이벤트 체결가, 손익은 큐별 계산식 사용
+        String recordOrderId = holdingQueues.size() > 1 ? null : event.getOrderId();
+        PositionCloseType closeType = event.getCloseType();
+        String exitPrice = event.getExecPrice();
+
+        for (PatternQueue queue : holdingQueues) {
+            QueueStateDTO state = session.getQueueStates().get(queue.getId());
+            log.info(LogMessage.EXTERNAL_CLOSE_DETECTED.getMessage(),
+                    queue.getId(), session.getSymbol(), closeType, event.getOrderId());
+            session.addLog(now() + " [외부 청산] " + closeType.getExplain() + " 감지 (큐 #" + queue.getId()
+                    + ", " + state.getCurrentStepLevel() + "단계)");
+
+            // 이력 저장 (상태 전환 전에 진입 정보 스냅샷)
+            Pattern pattern = findPatternById(queue, state.getActivePatternId());
+            String closeQty = state.getEntryQty();
+            String priceForRecord = exitPrice != null ? exitPrice : state.getEntryPrice();
+            if (pattern != null && closeQty != null && !"0".equals(closeQty) && priceForRecord != null) {
+                TradeHistoryDTO history = new TradeHistoryDTO();
+                history.setQueueStepId(state.getActiveStepId());
+                history.setUserId(session.getUserId());
+                history.setSymbol(session.getSymbol());
+                history.setSide(state.getDirection());
+                // 익절은 매도, 그 외(손절·강제청산·수동)는 청산으로 기록
+                history.setOrderType(closeType == PositionCloseType.TAKE_PROFIT
+                        ? TradeOrderType.SELL.getTradeOrderType()
+                        : TradeOrderType.LIQUIDATION.getTradeOrderType());
+                history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
+                BigDecimal estimatedExitFee = TradeCalculator.calcFee(
+                        new BigDecimal(priceForRecord), new BigDecimal(closeQty));
+                history.setFee(estimatedExitFee);
+                String closeSide = state.getDirection() == Side.LONG ? "Sell" : "Buy";
+                submitCloseRecord(CloseRecord.of(recordOrderId, null, history, closeType.getExplain(),
+                        queue, state, session, pattern, closeSide, closeQty, priceForRecord, estimatedExitFee), session);
+            } else {
+                // 방어 코드: 진입 정보가 없어 이력을 남길 수 없음 (상태 전환은 계속)
+                log.warn("외부 청산 이력 저장 건너뜀: queueId={}, patternId={}, entryQty={}",
+                        queue.getId(), state.getActivePatternId(), closeQty);
+                session.addLog(now() + " [경고] 외부 청산 이력을 저장할 수 없습니다 (진입 정보 없음, 큐 #" + queue.getId() + ")");
+            }
+
+            // 청산 방식별 상태 전환
+            switch (closeType) {
+                case TAKE_PROFIT -> resetToFirstStepAfterSell(queue, state, session);
+                case STOP_LOSS, LIQUIDATION -> {
+                    state.setEntryMargin(null); // 포지션 리셋 시 초기화 (앱 청산과 동일)
+                    Side nextDirection = state.getDirection() == Side.LONG ? Side.SHORT : Side.LONG;
+                    moveToNextStepAfterLiquidation(queue, state, session, nextDirection);
+                }
+                default -> deactivateQueue(queue, state, session,
+                        "외부 청산(" + closeType.getExplain() + ") 감지 — 포지션이 앱 밖에서 닫혀 큐를 중단했습니다");
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 청산 후처리 (체결 조회 → 이력 저장, 비동기)
+    // ─────────────────────────────────────────────
+
+    /**
+     * 청산 주문 직후의 진입 정보 스냅샷.
+     * 후처리는 상태 리셋/단계 이동 이후 실행되므로 QueueStateDTO 대신 이 값을 사용한다.
+     */
+    private record CloseRecord(
+            String orderId,             // 청산 주문 ID (SIM 또는 응답 누락 시 null)
+            String orderLinkId,         // 청산 주문 orderLinkId (WS 체결 대기 키)
+            TradeHistoryDTO history,    // 거래 이력 (주문 시 사용한 객체, 실체결 값으로 갱신 후 저장)
+            String label,               // 로그 표기용 구분 ("매도" / "청산")
+            Long queueId,               // 큐 ID (로그용)
+            Long userId,                // 사용자 ID
+            String symbol,              // 심볼
+            TradeMode tradeMode,        // 거래 모드
+            Long patternStepId,         // 청산 대상 포지션의 단계 ID
+            Side direction,             // 청산 대상 포지션 방향
+            String entryPrice,          // 진입가
+            String entryQty,            // 진입 수량
+            BigDecimal entryMargin,     // 진입 마진 (null이면 투자 이력 저장 생략)
+            BigDecimal entryFee,        // 진입 실수수료 (null이면 추정값 재계산)
+            Pattern pattern,            // 청산 대상 패턴 (레버리지, 익절/손절 비율)
+            String closeSide,           // 청산 주문 방향 (Sell/Buy)
+            String closeQty,            // 청산 수량
+            String currentPrice,        // 청산 판단 시점 현재가 (실체결 조회 실패 시 fallback)
+            BigDecimal estimatedExitFee // 추정 청산 수수료 (실체결 조회 실패 시 fallback)
+    ) {
+        static CloseRecord of(CreateOrderResponse orderResponse, String orderLinkId,
+                              TradeHistoryDTO history, String label,
+                              PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                              Pattern pattern, String closeSide, String closeQty,
+                              String currentPrice, BigDecimal estimatedExitFee) {
+            String orderId = orderResponse != null && orderResponse.getResult() != null
+                    ? orderResponse.getResult().getOrderId() : null;
+            return of(orderId, orderLinkId, history, label, queue, state, session,
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee);
+        }
+
+        /** 주문 ID를 직접 지정하는 생성 (외부 청산: 거래소가 만든 청산 주문 ID 사용) */
+        static CloseRecord of(String orderId, String orderLinkId,
+                              TradeHistoryDTO history, String label,
+                              PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                              Pattern pattern, String closeSide, String closeQty,
+                              String currentPrice, BigDecimal estimatedExitFee) {
+            return new CloseRecord(orderId, orderLinkId, history, label, queue.getId(),
+                    session.getUserId(), session.getSymbol(), session.getTradeMode(),
+                    state.getActiveStepId(), state.getDirection(),
+                    state.getEntryPrice(), state.getEntryQty(), state.getEntryMargin(), state.getEntryFee(),
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee);
+        }
+    }
+
+    /**
+     * 청산(매도/청산) 주문을 실행한다. 체결 push가 주문 응답보다 먼저 올 수 있어 주문 전에 WS 체결 대기를 등록하고,
+     * 주문이 실패하면 대기를 정리한 뒤 예외를 다시 던진다. (성공 시 대기는 후처리에서 소비)
+     *
+     * @param request     청산 주문 요청
+     * @param session     세션 (사용자 ID, 거래 모드)
+     * @param history     거래 이력 (주문 실패 시 TradeService가 실패 이력 저장)
+     * @param orderLinkId 주문에 지정한 orderLinkId
+     * @return 주문 응답
+     */
+    private CreateOrderResponse placeCloseOrder(CreateOrderRequest request, AutoTradeSessionDTO session,
+                                                TradeHistoryDTO history, String orderLinkId) {
+        tradeFacade.expectExecution(session.getUserId(), orderLinkId, session.getTradeMode());
+        try {
+            return tradeFacade.placeOrder(request, session.getUserId(), history, session.getTradeMode());
+        } catch (RuntimeException e) {
+            // 주문 실패 → 체결이 오지 않으므로 대기 정리
+            tradeFacade.cancelExecution(orderLinkId, session.getTradeMode());
+            throw e;
+        }
+    }
+
+    /**
+     * 청산 후처리를 전용 실행기에 제출한다.
+     * 후처리 실패는 이미 청산된 포지션에 영향을 주지 않으므로 큐를 비활성화하지 않고 경고 로그만 남긴다.
+     *
+     * @param record  청산 시점 스냅샷
+     * @param session 로그를 남길 세션
+     */
+    private void submitCloseRecord(CloseRecord record, AutoTradeSessionDTO session) {
+        closeRecordExecutor.execute(() -> {
+            try {
+                recordCloseResult(record, session);
+            } catch (Exception e) {
+                log.error("청산 후처리 실패: queueId={}, orderId={}", record.queueId(), record.orderId(), e);
+                session.addLog(now() + " [경고] " + record.label() + " 이력 저장 실패 (큐 #"
+                        + record.queueId() + "): " + e.getMessage() + " — 거래소 내역을 확인해 주세요.");
+            }
+        });
+    }
+
+    /**
+     * 청산 주문의 실체결 정보를 조회해 거래 이력과 투자 이력을 저장한다. (후처리 스레드에서 실행)
+     * - MAIN: 실체결가·실수수료(WS 우선, 최대 2초 대기 후 REST)·실손익(펀딩비 포함, REST) 사용
+     *   (WS execPnl은 수수료·펀딩비 차감 전 값이라 실손익은 REST closed-pnl을 유지)
+     * - SIM 또는 조회 실패: 현재가·추정 수수료·계산식 손익 fallback
+     *
+     * @param r       청산 시점 스냅샷
+     * @param session 로그를 남길 세션
+     */
+    private void recordCloseResult(CloseRecord r, AutoTradeSessionDTO session) {
+        // 실체결 데이터: WS 체결 우선, 미수신 시 REST 조회 (MAIN 모드만, SIM은 null 반환)
+        GetExecutionListResponse.ExecutionInfo exec = null;
+        if (r.orderId() != null) {
+            exec = tradeFacade.getExecution(r.orderId(), r.orderLinkId(), r.symbol(), r.userId(), r.tradeMode());
+        } else {
+            // 주문 ID 없음 → 체결 조회 생략, 등록해 둔 WS 대기만 정리
+            tradeFacade.cancelExecution(r.orderLinkId(), r.tradeMode());
+        }
+
+        String actualExitPrice = exec != null ? exec.getExecPrice() : r.currentPrice();
+        BigDecimal actualExitFee = exec != null ? new BigDecimal(exec.getExecFee()) : r.estimatedExitFee();
+
+        // 주문 성공: 실체결가 / 실수수료로 거래 이력 저장
+        TradeHistoryDTO history = r.history();
+        history.setExecutedPrice(new BigDecimal(actualExitPrice));
+        history.setFee(actualExitFee);
+        history.setOrderResult(OrderResult.SUCCESS);
+        saveTradeHistory(history, r.tradeMode());
+
+        // 투자 히스토리 저장
+        String pnlText = "-";
+        if (r.entryMargin() == null) {
+            // 방어 코드: 정상 흐름에서는 발생하지 않으나, 예외 상황 대비
+            log.warn("투자 히스토리 저장 건너뜀: entryMargin null, queueId={}", r.queueId());
+            session.addLog(now() + " [경고] 투자 히스토리를 저장할 수 없습니다 (진입 금액 정보 없음)");
+        } else {
+            // entryFee: 진입 시 저장된 실수수료, null이면 추정값으로 재계산
+            BigDecimal actualEntryFee = r.entryFee() != null
+                    ? r.entryFee()
+                    : TradeCalculator.calcFee(new BigDecimal(r.entryPrice()), new BigDecimal(r.entryQty()));
+
+            // 실손익 + 펀딩비 조회 (MAIN 모드만, SIM은 null → 계산식 fallback)
+            GetClosedPnlResponse.ClosedPnlInfo pnlInfo = r.orderId() != null
+                    ? tradeFacade.getClosedPnl(r.orderId(), r.symbol(), r.userId(), r.tradeMode())
+                    : null;
+            BigDecimal actualPnl = parseSafeBD(pnlInfo != null ? pnlInfo.getClosedPnl() : null);
+            BigDecimal actualFundingFee = parseSafeBD(pnlInfo != null ? pnlInfo.getFundingFee() : null);
+
+            BigDecimal profitLoss = saveInvestmentHistory(r.userId(), r.patternStepId(), r.symbol(), r.direction(),
+                    r.entryPrice(), actualExitPrice, r.entryMargin(), r.pattern(),
+                    actualEntryFee, actualExitFee, actualPnl, actualFundingFee, r.tradeMode());
+            pnlText = profitLoss.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + "$";
+        }
+
+        session.addLog(now() + " [체결 확정] " + r.label() + " " + r.closeSide()
+                + " 실체결가 " + actualExitPrice
+                + " / 체결금액 " + estimateCloseValue(r.closeQty(), actualExitPrice) + "$"
+                + " / 손익 " + pnlText + " (큐 #" + r.queueId() + ")");
+    }
+
+    /**
+     * 청산 수량 × 가격으로 체결 금액을 계산한다. (소수 2자리, 표시용)
+     */
+    private String estimateCloseValue(String closeQty, String price) {
+        return new BigDecimal(closeQty).multiply(new BigDecimal(price))
+                .setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
 
     // ─────────────────────────────────────────────
@@ -1371,8 +1764,9 @@ public class AutoTradeService {
      * @param actualPnl     Bybit 실손익 (MAIN 성공 시 펀딩비 포함, 조회 실패 또는 SIM이면 null)
      * @param fundingFee    Bybit 펀딩비 (MAIN 성공 시, 양수: 지급, 음수: 수취, 조회 실패 또는 SIM이면 null)
      * @param tradeMode     거래 모드 (MAIN: investment_history, SIM: sim_investment_history)
+     * @return 저장된 손익 (Bybit 실손익 또는 계산식 fallback)
      */
-    private void saveInvestmentHistory(Long userId, Long patternStepId, String symbol,
+    private BigDecimal saveInvestmentHistory(Long userId, Long patternStepId, String symbol,
                                        Side side, String entryPrice, String exitPrice,
                                        BigDecimal margin, Pattern pattern,
                                        BigDecimal entryFee, BigDecimal exitFee,
@@ -1389,20 +1783,11 @@ public class AutoTradeService {
                 ? actualPnl
                 : grossProfitLoss.subtract(entryFee.add(exitFee));
 
-        // 익절/손절 예상가 계산 — 진입가 기준, 가격 변동률(%), 미설정 시 default = 8%
-        BigDecimal defaultThreshold = BigDecimal.valueOf(100).multiply(SL_TP_SAFETY_FACTOR);
-        BigDecimal tpRate = pattern.getTakeProfitRate() != null ? pattern.getTakeProfitRate() : defaultThreshold;
-        BigDecimal slRate = pattern.getStopLossRate()   != null ? pattern.getStopLossRate()   : defaultThreshold;
-        BigDecimal hundred = BigDecimal.valueOf(100);
-        BigDecimal tpPrice;
-        BigDecimal slPrice;
-        if (side == Side.LONG) {
-            tpPrice = entry.multiply(BigDecimal.ONE.add(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-            slPrice = entry.multiply(BigDecimal.ONE.subtract(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-        } else {
-            tpPrice = entry.multiply(BigDecimal.ONE.subtract(tpRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-            slPrice = entry.multiply(BigDecimal.ONE.add(slRate.divide(hundred, 6, RoundingMode.HALF_UP)));
-        }
+        // 익절/손절 예상가 계산 — 진입가 기준, rate는 투자금 기준 (%), 미설정 시 가격 8%
+        BigDecimal tpPrice = TradeCalculator.calcTpPrice(side, entry,
+                TradeCalculator.resolveRoiRate(pattern.getTakeProfitRate(), leverage), leverage);
+        BigDecimal slPrice = TradeCalculator.calcSlPrice(side, entry,
+                TradeCalculator.resolveRoiRate(pattern.getStopLossRate(), leverage), leverage);
 
         InvestmentHistoryDTO investmentHistory = InvestmentHistoryDTO.builder()
                 .userId(userId)
@@ -1428,6 +1813,7 @@ public class AutoTradeService {
         }
 
         log.info(LogMessage.INVESTMENT_HISTORY_SAVED.getMessage(), symbol, side, profitLoss, tradeMode);
+        return profitLoss;
     }
 
     /**
@@ -1465,7 +1851,7 @@ public class AutoTradeService {
         patternQueueRepository.save(queue);
 
         // 런타임 상태를 1단계 TRIGGER_WAIT으로 초기화
-        // 새 인스턴스 생성 대신 reset()으로 기존 객체를 재사용 — AtomicBoolean 락 정합성 보존
+        // 새 인스턴스 생성 대신 reset()으로 기존 객체를 재사용 — 처리 중인 참조와 맵의 상태 객체 일치 유지
         state.reset();
 
         session.addLog(now() + " [사이클 재시작] 모든 단계 소진 → 1단계 재시작 (큐 #" + queue.getId() + ")");
@@ -1580,8 +1966,11 @@ public class AutoTradeService {
 
     /**
      * 활성 세션의 심볼 목록과 WebSocket 구독을 거래소별로 동기화한다.
+     * private 스트림 지원 어댑터는 활성 MAIN 세션 보유 사용자로 체결 수신 연결도 동기화한다.
+     * 컨트롤러 스레드(syncSession)와 레인 스레드(deactivateQueue)가 동시에 호출할 수 있어,
+     * 오래된 집합이 나중에 반영되지 않도록 집합 계산과 동기화를 한 번에 묶는다.
      */
-    private void syncWebSocketSubscriptions() {
+    private synchronized void syncWebSocketSubscriptions() {
         // 거래소 타입별로 활성 심볼을 그룹핑하여 각 어댑터에 동기화
         Map<ExchangeType, Set<String>> symbolsByExchange = activeSessions.values().stream()
                 .collect(Collectors.groupingBy(
@@ -1589,9 +1978,22 @@ public class AutoTradeService {
                         Collectors.mapping(AutoTradeSessionDTO::getSymbol, Collectors.toSet())
                 ));
 
+        // 거래소 타입별 활성 MAIN 세션 사용자 (SIM은 실주문이 없어 체결 수신 불필요)
+        Map<ExchangeType, Set<Long>> mainUsersByExchange = activeSessions.values().stream()
+                .filter(s -> s.getTradeMode() == TradeMode.MAIN)
+                .collect(Collectors.groupingBy(
+                        s -> s.getExchangeType() != null ? s.getExchangeType() : ExchangeType.BYBIT,
+                        Collectors.mapping(AutoTradeSessionDTO::getUserId, Collectors.toSet())
+                ));
+
         for (ExchangeClient adapter : adapterRegistry.getAll()) {
             Set<String> symbols = symbolsByExchange.getOrDefault(adapter.getExchangeType(), Set.of());
             adapter.syncSubscriptions(symbols);
+
+            // private 스트림 미지원 거래소는 REST 체결 조회만 사용
+            if (adapter instanceof PrivateStreamCapable privateStream) {
+                privateStream.syncPrivateStreams(mainUsersByExchange.getOrDefault(adapter.getExchangeType(), Set.of()));
+            }
         }
     }
 

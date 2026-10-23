@@ -3,6 +3,7 @@ package com.coin.webcointrader.bybit.client.trade;
 import com.coin.webcointrader.bybit.dto.request.CreateOrderRequest;
 import com.coin.webcointrader.bybit.dto.response.CreateOrderResponse;
 import com.coin.webcointrader.bybit.dto.response.GetExecutionListResponse;
+import com.coin.webcointrader.bybit.dto.response.GetOpenOrdersResponse;
 import com.coin.webcointrader.bybit.config.BybitFeignConfig;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.http.ResponseEntity;
@@ -35,14 +36,34 @@ public interface TradeClient {
      * @param category 상품 유형 (예: "linear")
      * @param symbol   심볼 (예: "BTCUSDT")
      * @param orderId  조회할 주문 ID
-     * @param limit    조회 건수 (최대 100)
-     * @return 체결 내역 목록 (execPrice, execQty, execFee 포함)
+     * @param limit    조회 건수 (1~100, 기본 50)
+     * @param cursor   다음 페이지 커서 (이전 응답의 nextPageCursor, 첫 조회 시 null)
+     * @return 체결 내역 목록 (execPrice, execQty, execFee, orderQty, nextPageCursor 포함)
+     *         — 주문 1건이 여러 체결 레코드로 나뉠 수 있음
      */
     @GetMapping("/v5/execution/list")
     ResponseEntity<GetExecutionListResponse> getExecutionList(
             @RequestParam("category") String category,
             @RequestParam("symbol") String symbol,
             @RequestParam("orderId") String orderId,
-            @RequestParam("limit") int limit
+            @RequestParam("limit") int limit,
+            @RequestParam(value = "cursor", required = false) String cursor
+    );
+
+    /**
+     * Bybit GET /v5/order/realtime
+     * 주문 상태를 조회한다. orderLinkId로 조회하면 openOnly와 무관하게
+     * 미체결 주문과 최근 종료 주문(Filled/Cancelled/Rejected, 계정·카테고리당 최근 500건)을 모두 반환한다.
+     *
+     * @param category    상품 유형 (예: "linear")
+     * @param symbol      심볼 (예: "BTCUSDT", linear는 symbol/baseCoin/settleCoin 중 하나 필수)
+     * @param orderLinkId 주문 생성 시 지정한 클라이언트 주문 ID
+     * @return 주문 목록 (orderId, orderLinkId, orderStatus, cumExecQty, avgPrice 포함), 없으면 빈 목록
+     */
+    @GetMapping("/v5/order/realtime")
+    ResponseEntity<GetOpenOrdersResponse> getOpenOrders(
+            @RequestParam("category") String category,
+            @RequestParam("symbol") String symbol,
+            @RequestParam("orderLinkId") String orderLinkId
     );
 }

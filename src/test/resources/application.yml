@@ -14,6 +14,14 @@ spring:
   h2:
     console:
       enabled: false
+  cloud:
+    openfeign:
+      client:
+        config:
+          # main application.yml과 동일 (테스트 리소스가 main 설정을 대체하므로 함께 유지)
+          tradeClient:
+            connect-timeout: 3000
+            read-timeout: 5000
 
 bybit:
   api:
@@ -21,6 +29,7 @@ bybit:
     recv-window: 5000
   websocket:
     url: ws://localhost:0/mock-ws
+    private-url: ws://localhost:0/mock-private-ws
     ping-interval: 20000
     reconnect-delay: 1000
     reconnect-max-delay: 30000

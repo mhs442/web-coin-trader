@@ -16,12 +16,23 @@ spring:
         jdbc:
           time_zone: Asia/Seoul
 
+  cloud:
+    openfeign:
+      client:
+        config:
+          # 주문 클라이언트: 기본값(연결 10초/읽기 60초)이면 단일 WS 스레드가 장시간 멈춤 → 짧게 제한
+          # 읽기 타임아웃 시 결과 불명확 → TradeService가 orderLinkId로 주문 상태 조회
+          tradeClient:
+            connect-timeout: 3000
+            read-timeout: 5000
+
 bybit:
   api:
     url: https://api.bybit.com
     recv-window: 5000
   websocket:
     url: wss://stream.bybit.com/v5/public/linear
+    private-url: wss://stream.bybit.com/v5/private
     ping-interval: 20000
     reconnect-delay: 1000
     reconnect-max-delay: 30000

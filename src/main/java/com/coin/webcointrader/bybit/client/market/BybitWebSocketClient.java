@@ -329,17 +329,30 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
 
     /**
      * Bybit WebSocket 서버에 연결한다.
+     * 핸드셰이크는 비동기라 실패해도 예외가 던져지지 않고 afterConnectionClosed도 호출되지 않으므로,
+     * future 실패 시 직접 재연결을 예약한다. (재연결 시도 자체가 실패해도 재시도가 끊기지 않도록)
      */
     private void connect() {
         try {
             log.info(LogMessage.WS_CONNECTING.getMessage(), websocketUrl);
-            webSocketClient.execute(this, null, URI.create(websocketUrl));
+            webSocketClient.execute(this, null, URI.create(websocketUrl))
+                    .whenComplete((s, ex) -> {
+                        // 비동기 핸드셰이크 실패 (Bybit 점검·네트워크 순단 등)
+                        if (ex != null) onConnectFailed(ex);
+                    });
         } catch (Exception e) {
-            log.error(LogMessage.WS_CONNECT_FAILED.getMessage(), e.getMessage());
-            // 연결 실패 시 재연결 스케줄
-            if (shouldConnect) {
-                scheduleReconnect();
-            }
+            // 요청 생성 단계의 동기 실패
+            onConnectFailed(e);
+        }
+    }
+
+    /**
+     * 연결 실패를 기록하고, 종료 중이 아니면 재연결을 예약한다.
+     */
+    private void onConnectFailed(Throwable e) {
+        log.error(LogMessage.WS_CONNECT_FAILED.getMessage(), e.getMessage());
+        if (shouldConnect) {
+            scheduleReconnect();
         }
     }
 

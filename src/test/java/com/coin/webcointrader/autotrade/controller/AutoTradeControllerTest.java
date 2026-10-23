@@ -131,6 +131,40 @@ class AutoTradeControllerTest {
                 .andExpect(jsonPath("$.steps[0].patterns[0].blocks").isArray());
     }
 
+    @Test
+    @DisplayName("POST /api/autotrade/patterns: 손절률이 강제청산 한도를 넘으면 400을 반환한다 (10배, 90%)")
+    void addPattern_stopLossOverLiquidationLimit_returns400() throws Exception {
+        mockMvc.perform(post("/api/autotrade/patterns")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                    "symbol": "BTCUSDT",
+                                    "triggerRate": 1.0,
+                                    "steps": [{
+                                        "stepOrder": 1,
+                                        "patterns": [
+                                            {
+                                                "amount": 10,
+                                                "leverage": 10,
+                                                "stopLossRate": 90,
+                                                "conditionBlocks": [{"side": "LONG", "blockOrder": 1, "isLeaf": false}],
+                                                "leafBlock": {"side": "LONG", "blockOrder": 2, "isLeaf": true}
+                                            },
+                                            {
+                                                "amount": 10,
+                                                "leverage": 5,
+                                                "stopLossRate": 1.0,
+                                                "conditionBlocks": [{"side": "SHORT", "blockOrder": 1, "isLeaf": false}],
+                                                "leafBlock": {"side": "SHORT", "blockOrder": 2, "isLeaf": true}
+                                            }
+                                        ]
+                                    }]
+                                }
+                                """)
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest());
+    }
+
     // ─────────────────────────────────────────────
     // DELETE /api/autotrade/patterns/{id}
     // ─────────────────────────────────────────────

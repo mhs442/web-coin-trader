@@ -35,6 +35,7 @@ public class FindTickerResponse extends BybitMasterDTO {
         private String lowPrice24h;         // 24시간 최저가
         private String volume24h;           // 24시간 거래량 (코인 기준)
         private String turnover24h;         // 24시간 거래대금 (USDT 기준)
+        private String curPreListingPhase;  // 프리런치 단계 (빈 값: 정식 종목, Finished: 정식 전환 완료, 그 외: 프리런치 진행 중)
 
         // 단순히 USDT만 제거하고 숫자는 그대로 둠 (예: 1000000BABYDOGE)
         public String getBaseCoin() {

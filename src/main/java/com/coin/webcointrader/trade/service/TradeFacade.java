@@ -11,6 +11,7 @@ import com.coin.webcointrader.bybit.dto.response.SetMarginModeResponse;
 import com.coin.webcointrader.trade.dto.InvestmentHistoryDTO;
 import com.coin.webcointrader.trade.dto.TradeHistoryDTO;
 import com.coin.webcointrader.common.enums.TradeMode;
+import com.coin.webcointrader.common.exchange.PositionCloseDTO;
 import com.coin.webcointrader.sim.service.SimHistoryService;
 import com.coin.webcointrader.sim.service.SimTradeService;
 import com.coin.webcointrader.sim.service.SimWalletService;
@@ -129,17 +130,88 @@ public class TradeFacade {
     }
 
     /**
-     * MAIN 모드에서 가장 최근 청산된 포지션의 손익 정보를 Bybit에서 조회한다. (closedPnl + fundingFee 포함)
+     * MAIN 모드에서 주문의 WS 체결 대기를 등록한다. 주문 전송 전에 호출해야 한다.
+     * SIM 모드는 실체결이 없으므로 아무것도 하지 않는다.
+     *
+     * @param userId      사용자 ID
+     * @param orderLinkId 주문에 지정할 orderLinkId
+     * @param tradeMode   거래 모드
+     */
+    public void expectExecution(Long userId, String orderLinkId, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return;
+        tradeService.expectExecution(userId, orderLinkId);
+    }
+
+    /**
+     * MAIN 모드에서 주문의 WS 체결 대기를 취소한다. SIM 모드는 아무것도 하지 않는다.
+     *
+     * @param orderLinkId 취소할 orderLinkId
+     * @param tradeMode   거래 모드
+     */
+    public void cancelExecution(String orderLinkId, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return;
+        tradeService.cancelExecution(orderLinkId);
+    }
+
+    /**
+     * MAIN 모드에서 주문의 실체결 정보를 WS 우선으로 얻는다. (WS 미수신 시 REST 조회)
      * SIM 모드는 실체결이 없으므로 null을 반환한다.
      *
+     * @param orderId     Bybit 주문 ID
+     * @param orderLinkId 주문의 orderLinkId
+     * @param symbol      심볼
+     * @param userId      사용자 ID
+     * @param tradeMode   거래 모드
+     * @return 실체결 정보, SIM 모드이거나 조회 실패 시 null
+     */
+    public GetExecutionListResponse.ExecutionInfo getExecution(
+            String orderId, String orderLinkId, String symbol, Long userId, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return null;
+        return tradeService.getExecution(orderId, orderLinkId, symbol, userId);
+    }
+
+    /**
+     * MAIN 모드에서 청산 주문 ID에 해당하는 포지션 손익 정보를 Bybit에서 조회한다. (closedPnl + fundingFee 포함)
+     * SIM 모드는 실체결이 없으므로 null을 반환한다.
+     *
+     * @param orderId   청산 주문 ID
      * @param symbol    심볼
      * @param userId    사용자 ID
      * @param tradeMode 거래 모드
      * @return 청산 손익 정보, SIM 모드이거나 조회 실패 시 null
      */
-    public GetClosedPnlResponse.ClosedPnlInfo getClosedPnl(String symbol, Long userId, TradeMode tradeMode) {
+    public GetClosedPnlResponse.ClosedPnlInfo getClosedPnl(String orderId, String symbol, Long userId, TradeMode tradeMode) {
         if (tradeMode == TradeMode.SIM) return null;
-        return tradeService.getClosedPnl(symbol, userId);
+        return tradeService.getClosedPnl(orderId, symbol, userId);
+    }
+
+    /**
+     * MAIN 모드에서 심볼의 현재 포지션 수량을 Bybit에서 조회한다. (외부 청산 확인용)
+     * SIM 모드는 거래소 포지션이 없으므로 null을 반환한다.
+     *
+     * @param userId    사용자 ID
+     * @param symbol    심볼
+     * @param tradeMode 거래 모드
+     * @return 포지션 수량 (포지션 없으면 0), SIM 모드이거나 조회 실패 시 null
+     */
+    public BigDecimal getPositionSize(Long userId, String symbol, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return null;
+        return tradeService.getPositionSize(userId, symbol);
+    }
+
+    /**
+     * MAIN 모드에서 기준 시각 이후 심볼의 가장 최근 청산 건과 청산 방식을 Bybit에서 조회한다. (놓친 외부 청산 재조정용)
+     * SIM 모드는 거래소 청산 내역이 없으므로 null을 반환한다.
+     *
+     * @param userId      사용자 ID
+     * @param symbol      심볼
+     * @param sinceMillis 검색 시작 시각 (epoch ms, 보통 진입 시각)
+     * @param tradeMode   거래 모드
+     * @return 청산 이벤트 (청산 건 없으면 orderId null·OTHER), SIM 모드이거나 조회 실패 시 null
+     */
+    public PositionCloseDTO findLastClose(Long userId, String symbol, long sinceMillis, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return null;
+        return tradeService.findLastClose(userId, symbol, sinceMillis);
     }
 
     /**
