@@ -15,10 +15,13 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
  *
  * <h3>토픽 구조:</h3>
  * <ul>
- *   <li>{@code /topic/price.{symbol}} - 실시간 가격 데이터 (예: /topic/price.BTCUSDT)</li>
- *   <li>{@code /topic/autotrade.status.{symbol}} - 자동매매 상태 변경 이벤트</li>
- *   <li>향후 {@code /topic/orderbook.{symbol}}, {@code /topic/kline.{symbol}} 등 확장 가능</li>
+ *   <li>{@code /topic/price.{exchange}.{symbol}} - 실시간 가격 (공개, 예: /topic/price.BYBIT.BTCUSDT)</li>
+ *   <li>{@code /user/queue/autotrade.status.{exchange}.{mode}.{symbol}} - 자동매매 상태 (본인 전용)</li>
+ *   <li>{@code /user/queue/autotrade.alert.{exchange}.{mode}.{symbol}} - 큐 비활성화 등 즉시 알림 (본인 전용)</li>
  * </ul>
+ *
+ * <p>본인 전용 채널은 연결 시 {@link UserIdHandshakeHandler}가 지정한 userId로 구분되며,
+ * 서버는 {@code convertAndSendToUser(userId, "/queue/...", payload)}로 전송한다.</p>
  *
  * <h3>엔드포인트:</h3>
  * <ul>
@@ -39,9 +42,9 @@ public class WebSocketStompConfig implements WebSocketMessageBrokerConfigurer {
      */
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
-        // /topic prefix: 브라우저가 구독할 수 있는 목적지 prefix
-        // 서버에서 /topic/... 으로 메시지를 보내면, 해당 토픽을 구독한 브라우저에 전달된다
-        registry.enableSimpleBroker("/topic");
+        // /topic: 공개 채널 (구독한 모든 브라우저에 전달)
+        // /queue: 사용자 전용 채널 (브라우저는 /user/queue/... 로 구독, 기본 user prefix "/user")
+        registry.enableSimpleBroker("/topic", "/queue");
     }
 
     /**
@@ -55,8 +58,10 @@ public class WebSocketStompConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         // /ws 경로로 WebSocket 연결을 받는다
+        // setHandshakeHandler: 로그인 사용자 연결에 userId 식별값 지정 (본인 전용 채널용)
         // withSockJS(): WebSocket을 지원하지 않는 브라우저를 위한 SockJS fallback 활성화
         registry.addEndpoint("/ws")
+                .setHandshakeHandler(new UserIdHandshakeHandler())
                 .withSockJS();
     }
 }

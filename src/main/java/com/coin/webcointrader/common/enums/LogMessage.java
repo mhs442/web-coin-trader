@@ -12,12 +12,6 @@ public enum LogMessage {
     // ─────────────────────────────────────────────
     // MarketService
     // ─────────────────────────────────────────────
-    WS_TICKER_CALLBACK_REGISTERED("WebSocket 티커 콜백 등록 완료"),
-    QTY_STEP_CACHE_INIT_SUCCESS("qtyStep 캐시 초기화 완료: {}개 종목"),
-    QTY_STEP_CACHE_INIT_FAILED("qtyStep 캐시 초기화 실패: {}"),
-    QTY_STEP_LOOKUP_FAILED("qtyStep 조회 실패: symbol={}"),
-    QTY_CONVERT_ZERO("변환 결과 수량이 0: symbol={}, usdtAmount={}, currentPrice={}, qtyStep={}"),
-    PRICE_LISTENER_ERROR("가격 리스너 오류: symbol={}, error={}"),
 
     // ─────────────────────────────────────────────
     // BybitWebSocketClient
@@ -26,7 +20,6 @@ public enum LogMessage {
     WS_SUBSCRIBE("WebSocket 구독 요청: {}"),
     WS_UNSUBSCRIBE("WebSocket 구독 해제 요청: {}"),
     WS_CONNECTED("Bybit WebSocket 연결 성공: {}"),
-    WS_RECEIVED_DATA("WebSocket 수신 데이터 : {}"),
     WS_MESSAGE_PARSE_ERROR("WebSocket 메시지 파싱 오류: {}"),
     WS_CONNECTION_CLOSED("Bybit WebSocket 연결 종료: status={}"),
     WS_TRANSPORT_ERROR("Bybit WebSocket 전송 오류: {}"),
@@ -67,7 +60,7 @@ public enum LogMessage {
     AUTO_TRADE_SESSION_REFRESHED("자동매매 세션 갱신: userId={}, symbol={}, 큐 {}개"),
     AUTO_TRADE_STARTED("자동매매 시작: userId={}, symbol={}, 큐 {}개"),
     MARGIN_MODE_SWITCH_FAILED("마진 모드 전환 실패 : queue={}, error={}"),
-    LEVERAGE_SET_FAILED("레버리지 설정 실패 (계속 진행): {}"),
+    LEVERAGE_SET_FAILED("레버리지 설정 실패 : queue={}, error={}"),
     POSITION_ENTRY_FAILED("포지션 진입 실패: queue={}, error={}"),
     INVESTMENT_HISTORY_SAVED("투자 히스토리 저장: symbol={}, side={}, profitLoss={}, mode={}"),
     QUEUE_DEACTIVATED("큐 비활성화: queue={}, reason={}"),
@@ -88,7 +81,23 @@ public enum LogMessage {
     // ─────────────────────────────────────────────
     // BybitFeignConfig
     // ─────────────────────────────────────────────
-    BYBIT_API_CALL_DATA("[Bybit API 호출 데이터] = {} {} body={}");
+    BYBIT_API_CALL_DATA("[Bybit API 호출 데이터] = {} {} body={}"),
+    BINANCE_API_CALL("[Binance API 호출] = {} {}"),  // 메서드·경로만 (쿼리에 서명 포함)
+    BINANCE_WEIGHT_HIGH("[Binance 사용 가중치 경고] 최근 1분 {}/{} - {} {}"),  // 메서드·경로만
+
+    // ─────────────────────────────────────────────
+    // BinanceWebSocketClient
+    // ─────────────────────────────────────────────
+    BINANCE_WS_CONNECTING("Binance WebSocket 연결 시도: {}"),
+    BINANCE_WS_CONNECTED("Binance WebSocket 연결 성공: {}"),
+    BINANCE_WS_CONNECT_FAILED("Binance WebSocket 연결 실패: {}"),
+    BINANCE_WS_CONNECTION_CLOSED("Binance WebSocket 연결 종료: status={}"),
+    BINANCE_WS_TRANSPORT_ERROR("Binance WebSocket 전송 오류: {}"),
+    BINANCE_WS_RECONNECT_SCHEDULED("Binance WebSocket 재연결 예약: {}ms 후"),
+    BINANCE_WS_SUBSCRIPTION_SENT("Binance WebSocket {} 요청: 스트림 {}개"),
+    BINANCE_WS_MESSAGE_PARSE_ERROR("Binance WebSocket 메시지 파싱 실패: {}"),
+    BINANCE_WS_MESSAGE_SEND_FAILED("Binance WebSocket 메시지 전송 실패: {}"),
+    BINANCE_WS_SESSION_CLOSE_ERROR("Binance WebSocket 세션 종료 중 오류: {}");
 
     private final String message; // 로그 메시지 템플릿
 

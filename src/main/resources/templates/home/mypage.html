@@ -19,6 +19,7 @@
     <div class="mypage-tabs">
         <button class="mypage-tab active" data-tab="patterns" onclick="switchTab('patterns')">등록된 패턴</button>
         <button class="mypage-tab" data-tab="history" onclick="switchTab('history')">히스토리</button>
+        <button class="mypage-tab" data-tab="exchange-keys" onclick="switchTab('exchange-keys')">거래소 API 키</button>
     </div>
 
     <!-- 패턴 탭 -->
@@ -48,6 +49,42 @@
         </div>
         <div id="pattern-container" class="mypage-scroll-wrapper"></div>
         <div id="pattern-scroll-loading" class="scroll-loading" style="display: none;">데이터 로딩 중...</div>
+    </div>
+
+    <!-- 거래소 API 키 탭 -->
+    <div id="tab-exchange-keys" class="mypage-tab-content" style="display: none;">
+        <div class="mypage-table-wrapper">
+            <table class="mypage-table">
+                <thead>
+                <tr>
+                    <th>거래소</th>
+                    <th>상태</th>
+                    <th>최종 등록·교체</th>
+                    <th>관리</th>
+                </tr>
+                </thead>
+                <tbody id="exchange-key-tbody"></tbody>
+            </table>
+        </div>
+
+        <!-- 등록·교체 입력 폼 ([등록]/[교체] 클릭 시 표시) -->
+        <div class="exchange-key-form" id="exchange-key-form" style="display: none;">
+            <h3 id="exchange-key-form-title"></h3>
+            <div class="trade-filter">
+                <div class="filter-group">
+                    <label for="exchange-api-key">API Key</label>
+                    <input type="text" id="exchange-api-key" autocomplete="off">
+                </div>
+                <div class="filter-group">
+                    <label for="exchange-api-secret">API Secret</label>
+                    <input type="password" id="exchange-api-secret" autocomplete="new-password">
+                </div>
+                <button class="filter-btn" id="exchange-key-save-btn">저장</button>
+                <button class="filter-btn filter-reset-btn" id="exchange-key-cancel-btn">취소</button>
+            </div>
+            <p class="exchange-key-help">거래소에서 키를 검증한 뒤 암호화해 저장하며, 저장된 키 값은 다시 표시되지 않습니다.
+                실전 자동매매가 실행 중인 거래소는 자동매매를 중지한 뒤 교체할 수 있습니다.</p>
+        </div>
     </div>
 
     <!-- 히스토리 탭 -->
@@ -253,6 +290,7 @@
         params.append('page', page);
         params.append('size', PAGE_SIZE);
         params.append('mode', getTradeMode());
+        params.append('exchange', getExchange());   // 헤더에서 선택한 거래소 기준 조회
         return params;
     }
 
@@ -503,7 +541,7 @@
                         html += '</tbody></table>';
 
                         // 펀딩비 별도 표시 (MAIN 모드에서만 채워짐)
-                        // Bybit fundingFee: 양수=지급(비용), 음수=수취(이익) → pnlImpact = -fundingFee
+                        // fundingFee: 양수=지급(비용), 음수=수취(이익) → pnlImpact = -fundingFee
                         if (fundingFeeNum !== null && !isNaN(fundingFeeNum) && fundingFeeNum !== 0) {
                             const pnlImpact = -fundingFeeNum;
                             const feeClass = pnlImpact >= 0 ? 'status-active' : 'status-failed';
@@ -736,7 +774,7 @@
         $.ajax({
             url: '/api/mypage/investments/all',
             type: 'DELETE',
-            data: { mode: getTradeMode() },
+            data: { mode: getTradeMode(), exchange: getExchange() },   // 선택한 거래소 데이터만 삭제
             success: function() { loadInvestments(0); },
             error: function(xhr) { alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText)); }
         });
@@ -758,6 +796,7 @@
         params.append('page', page);
         params.append('size', PAGE_SIZE);
         params.append('mode', getTradeMode());
+        params.append('exchange', getExchange());   // 헤더에서 선택한 거래소 기준 조회
         return params;
     }
 
@@ -801,7 +840,7 @@
                         section.setAttribute('data-symbol', sym);
                         section.innerHTML = `
                             <div class="mypage-section-header">
-                                <h3 class="mypage-section-title">${sym} <span class="exchange-badge">${items[0].exchangeType || 'BYBIT'}</span></h3>
+                                <h3 class="mypage-section-title">${sym}</h3>
                                 <a href="/chart?symbol=${sym}" class="chart-link-btn">차트로 이동 →</a>
                             </div>
                             <div class="mypage-table-wrapper">
@@ -850,7 +889,15 @@
                         let detailHtml = '<td colspan="4"><div class="pattern-detail">';
                         detailHtml += '<div class="pattern-detail-trigger"><span>기준 비율: ' + p.triggerRate + '%</span></div>';
 
-                        p.steps.forEach(step => {
+                        // 평평한 패턴 목록을 stepLevel별로 묶음 (응답은 stepLevel → patternOrder 순 정렬)
+                        const steps = [];
+                        p.patterns.forEach(pat => {
+                            const last = steps[steps.length - 1];
+                            if (last && last.stepLevel === pat.stepLevel) last.patterns.push(pat);
+                            else steps.push({ stepLevel: pat.stepLevel, patterns: [pat] });
+                        });
+
+                        steps.forEach(step => {
                             detailHtml += '<div class="pattern-detail-step"><div class="pattern-detail-step-header">단계 ' + step.stepLevel + '</div>';
                             step.patterns.forEach(pat => {
                                 detailHtml += '<div class="pattern-detail-pattern"><div class="pattern-detail-pattern-header">패턴 ' + pat.patternOrder + '</div>';
@@ -861,11 +908,13 @@
                                     '<span class="pattern-detail-meta-item sl">손절: ' + (pat.stopLossRate || '-') + '%</span>' +
                                     '</div>';
                                 detailHtml += '<div class="pattern-detail-blocks">';
-                                pat.blocks.forEach(b => {
-                                    if (b.leaf) detailHtml += '<span class="block-colon-display">:</span>';
-                                    const isLong = b.side === 'LONG';
-                                    detailHtml += '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
-                                });
+                                const blockTag = side => {
+                                    const isLong = side === 'LONG';
+                                    return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + '">' + (isLong ? 'L' : 'S') + '</span>';
+                                };
+                                // 조건 블록 → ':' → 리프 블록 순서로 표시
+                                pat.conditionBlocks.forEach(side => { detailHtml += blockTag(side); });
+                                detailHtml += '<span class="block-colon-display">:</span>' + blockTag(pat.leafBlock);
                                 detailHtml += '</div></div>';
                             });
                             detailHtml += '</div>';
@@ -908,7 +957,8 @@
     function deleteQueue(queueId, symbol) {
         if (!confirm('해당 큐를 삭제하시겠습니까?')) return;
         $.ajax({
-            url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol + '&mode=' + getTradeMode(),
+            url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol + '&mode=' + getTradeMode()
+                + '&exchange=' + getExchange(),
             type: 'DELETE',
             success: function() {
                 const summaryRow = document.querySelector('tr[data-queue-id="' + queueId + '"]');
@@ -968,17 +1018,109 @@
         }
     });
 
-    // 거래 모드 변경 시 데이터 재로드
-    $(document).on('tradeModeChanged', function() {
+    // 거래 모드·거래소 변경 시 데이터 재로드
+    $(document).on('tradeModeChanged exchangeChanged', function() {
         searchPatterns();
         searchHistory();
+    });
+
+    // ─────────────────────────────────────────────
+    // 거래소 API 키 탭
+    // ─────────────────────────────────────────────
+    let editingExchange = null;                     // 등록·교체 폼에서 편집 중인 거래소
+
+    /**
+     * 거래소별 키 등록 상태를 조회해 표로 렌더링한다. (키 값은 응답에 포함되지 않음)
+     */
+    function loadExchangeKeys() {
+        $.ajax({
+            url: '/api/exchange-keys',
+            method: 'GET',
+            success: function(statuses) {
+                const $tbody = $('#exchange-key-tbody').empty();
+                (statuses || []).forEach(function(s) {
+                    const label = s.displayName || s.exchangeType;   // 표시명은 서버(ExchangeType) 기준
+                    // 수정일시: ISO(2026-10-24T10:00:00.123) → 'YYYY-MM-DD HH:mm:ss'
+                    const updatedAt = s.updatedAt ? s.updatedAt.replace('T', ' ').substring(0, 19) : '-';
+                    $('<tr>')
+                        .append($('<td>').text(label))
+                        .append($('<td>').text(s.registered ? '등록됨' : '미등록'))
+                        .append($('<td>').text(updatedAt))
+                        .append($('<td>').append(
+                            $('<button class="filter-btn exchange-key-edit-btn">')
+                                .attr('data-exchange', s.exchangeType)
+                                .attr('data-label', label)
+                                .text(s.registered ? '교체' : '등록')))
+                        .appendTo($tbody);
+                });
+            },
+            error: function() {
+                $('#exchange-key-tbody').html('<tr><td colspan="4">거래소 키 상태를 불러오지 못했습니다.</td></tr>');
+            }
+        });
+    }
+
+    // [등록]/[교체] → 입력 폼 열기
+    $(document).on('click', '.exchange-key-edit-btn', function() {
+        editingExchange = $(this).attr('data-exchange');
+        $('#exchange-key-form-title').text($(this).attr('data-label') + ' API 키 ' + $(this).text());
+        $('#exchange-api-key, #exchange-api-secret').val('');
+        $('#exchange-key-form').show();
+    });
+
+    // 취소 → 입력값 비우고 폼 닫기
+    $(document).on('click', '#exchange-key-cancel-btn', function() {
+        editingExchange = null;
+        $('#exchange-api-key, #exchange-api-secret').val('');
+        $('#exchange-key-form').hide();
+    });
+
+    // 저장 → 서버에서 거래소 검증 후 암호화 저장
+    $(document).on('click', '#exchange-key-save-btn', function() {
+        const apiKey = $('#exchange-api-key').val().trim();
+        const apiSecret = $('#exchange-api-secret').val().trim();
+        if (!editingExchange || !apiKey || !apiSecret) {
+            alert('API Key와 API Secret을 모두 입력해주세요.');
+            return;
+        }
+
+        const $btn = $(this).prop('disabled', true); // 검증 중 중복 요청 방지
+        $.ajax({
+            url: '/api/exchange-keys/' + encodeURIComponent(editingExchange),
+            method: 'PUT',
+            contentType: 'application/json',
+            data: JSON.stringify({ apiKey: apiKey, apiSecret: apiSecret }),
+            success: function() {
+                alert('API 키가 저장되었습니다.');
+                $('#exchange-key-cancel-btn').trigger('click');
+                loadExchangeKeys();
+                // 헤더의 거래소 목록·미등록 안내·잔고 갱신
+                if (window.refreshExchangeKeys) window.refreshExchangeKeys();
+            },
+            error: function(xhr) {
+                // 키 무효(400), 자동매매 실행 중(409) 등 서버 안내 메시지 표시
+                alert('저장 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+            },
+            complete: function() {
+                $btn.prop('disabled', false);
+            }
+        });
     });
 
     // 페이지 로드 시 초기화 (날짜 기본값 먼저 세팅 후 로드)
     document.addEventListener('DOMContentLoaded', function() {
         setDefaultDateFilter();
-        loadPatterns(0);
-        loadInvestments(0);
+        // 패턴·히스토리는 선택 거래소 기준이라 거래소 확정 후 조회 (키 목록은 거래소 무관)
+        whenExchangeReady(function() {
+            loadPatterns(0);
+            loadInvestments(0);
+        });
+        loadExchangeKeys();
+
+        // 헤더 미등록 안내 링크(/mypage?tab=exchange-keys)로 들어오면 키 탭을 바로 표시
+        if (new URLSearchParams(location.search).get('tab') === 'exchange-keys') {
+            switchTab('exchange-keys');
+        }
     });
 </script>
 </body>

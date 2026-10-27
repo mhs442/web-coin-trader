@@ -1,0 +1,31 @@
+{
+  "retCode": 0,
+  "retMsg": "OK",
+  "result": {
+    "list": [
+      {
+        "accountType": "UNIFIED",
+        "totalEquity": "1300.00",
+        "totalWalletBalance": "1200.00",
+        "coin": [
+          {
+            "coin": "BTC",
+            "walletBalance": "0.001",
+            "equity": "0.001"
+          },
+          {
+            "coin": "USDT",
+            "walletBalance": "1200.00",
+            "equity": "1234.56",
+            "totalPositionIM": "80",
+            "totalOrderIM": "15.5",
+            "locked": "0",
+            "bonus": ""
+          }
+        ]
+      }
+    ]
+  },
+  "retExtInfo": {},
+  "time": 1760950000000
+}

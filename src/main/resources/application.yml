@@ -26,6 +26,15 @@ spring:
             connect-timeout: 3000
             read-timeout: 5000
 
+binance:
+  api:
+    url: https://fapi.binance.com   # 데모: https://demo-fapi.binance.com
+    recv-window: 5000
+  websocket:
+    url: wss://fstream.binance.com/market/ws   # 데모: wss://demo-fstream.binance.com/market/ws (경로 확인 필요)
+    reconnect-delay: 1000
+    reconnect-max-delay: 30000
+
 bybit:
   api:
     url: https://api.bybit.com

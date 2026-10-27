@@ -23,6 +23,15 @@ spring:
             connect-timeout: 3000
             read-timeout: 5000
 
+binance:
+  api:
+    url: http://localhost:${wiremock.server.port}
+    recv-window: 5000
+  websocket:
+    url: ws://localhost:0/mock-binance-ws
+    reconnect-delay: 1000
+    reconnect-max-delay: 30000
+
 bybit:
   api:
     url: http://localhost:${wiremock.server.port}

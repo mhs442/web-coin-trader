@@ -1,0 +1,36 @@
+{
+  "totalInitialMargin": "50.00000000",
+  "totalMaintMargin": "2.00000000",
+  "totalWalletBalance": "1000.25000000",
+  "totalUnrealizedProfit": "10.50000000",
+  "totalMarginBalance": "1010.75000000",
+  "availableBalance": "960.75000000",
+  "maxWithdrawAmount": "960.75000000",
+  "assets": [
+    {
+      "asset": "BNB",
+      "walletBalance": "0.10000000",
+      "unrealizedProfit": "0.00000000",
+      "marginBalance": "0.10000000",
+      "availableBalance": "0.10000000",
+      "maxWithdrawAmount": "0.10000000",
+      "updateTime": 1761526800000
+    },
+    {
+      "asset": "USDT",
+      "walletBalance": "1000.25000000",
+      "unrealizedProfit": "10.50000000",
+      "marginBalance": "1010.75000000",
+      "maintMargin": "2.00000000",
+      "initialMargin": "50.00000000",
+      "positionInitialMargin": "40.00000000",
+      "openOrderInitialMargin": "10.00000000",
+      "crossWalletBalance": "960.25000000",
+      "crossUnPnl": "0.00000000",
+      "availableBalance": "910.25000000",
+      "maxWithdrawAmount": "910.25000000",
+      "updateTime": 1761526800000
+    }
+  ],
+  "positions": []
+}

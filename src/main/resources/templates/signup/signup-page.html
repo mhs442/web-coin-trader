@@ -42,22 +42,27 @@
                 <input type="text" id="email" name="email"
                        placeholder="이메일" required>
             </div>
+            <!-- 거래소 목록·표시명은 구현이 끝난 거래소(컨트롤러 exchangeTypes) 기준 (최초 라벨은 첫 거래소, 선택값과 다르면 아래 스크립트가 맞춤) -->
             <div class="auth-field">
                 <label for="exchangeType">거래소</label>
                 <select id="exchangeType" name="exchangeType">
-                    <option value="BYBIT" th:selected="${request?.exchangeType == 'BYBIT' or request?.exchangeType == null}">Bybit</option>
+                    <option th:each="type, stat : ${exchangeTypes}"
+                            th:value="${type.name()}"
+                            th:attr="data-label=${type.displayName}"
+                            th:text="${type.displayName}"
+                            th:selected="${request?.exchangeType == type.name() or (request?.exchangeType == null and stat.first)}"></option>
                 </select>
             </div>
             <div class="auth-field">
-                <label for="apiKey"><span id="apiKeyLabel">Bybit</span> API Key</label>
+                <label for="apiKey"><span id="apiKeyLabel" th:text="${exchangeTypes[0].displayName}"></span> API Key</label>
                 <input type="text" id="apiKey" name="apiKey"
-                       placeholder="Bybit API Key" required
+                       th:placeholder="${exchangeTypes[0].displayName + ' API Key'}" required
                        th:value="${request?.apiKey}">
             </div>
             <div class="auth-field">
-                <label for="apiSecret"><span id="apiSecretLabel">Bybit</span> API Secret</label>
+                <label for="apiSecret"><span id="apiSecretLabel" th:text="${exchangeTypes[0].displayName}"></span> API Secret</label>
                 <input type="password" id="apiSecret" name="apiSecret"
-                       placeholder="Bybit API Secret" required>
+                       th:placeholder="${exchangeTypes[0].displayName + ' API Secret'}" required>
             </div>
             <div class="auth-buttons">
                 <button type="submit" class="auth-btn auth-btn-primary">가입하기</button>
@@ -67,15 +72,13 @@
     </div>
 </div>
 <script>
-    // 거래소 선택 시 API Key/Secret 라벨 및 플레이스홀더 동적 변경
-    const EXCHANGE_LABELS = { BYBIT: 'Bybit' };
-
+    // 거래소 선택 시 API Key/Secret 라벨 및 플레이스홀더 동적 변경 (표시명은 option 의 data-label)
     $('#exchangeType').on('change', function () {
-        const label = EXCHANGE_LABELS[$(this).val()] || $(this).val();
+        const label = $(this).find(':selected').data('label') || $(this).val();
         $('#apiKeyLabel, #apiSecretLabel').text(label);
         $('#apiKey').attr('placeholder', label + ' API Key');
         $('#apiSecret').attr('placeholder', label + ' API Secret');
-    });
+    }).trigger('change');   // 가입 실패로 다시 열린 경우 선택값 기준으로 라벨 동기화
 </script>
 </body>
 </html>

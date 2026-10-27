@@ -16,7 +16,7 @@ public class CustomException extends RuntimeException {
     }
 
     /**
-     * Bybit API 원본 에러 메시지 등 상세 정보를 포함하는 생성자.
+     * 거래소 API 원본 에러 메시지 등 상세 정보를 포함하는 생성자.
      * getMessage() 호출 시 "주문 실행 실패: Insufficient margin" 형태로 반환된다.
      */
     public CustomException(ExceptionMessage exceptionMessage, String detail) {

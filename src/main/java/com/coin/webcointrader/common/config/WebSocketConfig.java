@@ -11,7 +11,7 @@ import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 public class WebSocketConfig {
 
     /**
-     * Bybit WebSocket 연결에 사용할 StandardWebSocketClient 빈을 등록한다.
+     * 거래소 WebSocket 연결에 사용할 StandardWebSocketClient 빈을 등록한다.
      *
      * @return StandardWebSocketClient 인스턴스
      */

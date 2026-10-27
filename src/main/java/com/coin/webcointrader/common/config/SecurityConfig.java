@@ -1,6 +1,6 @@
 package com.coin.webcointrader.common.config;
 
-import com.coin.webcointrader.login.service.LoginService;
+import com.coin.webcointrader.common.login.service.LoginService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;

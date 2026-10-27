@@ -1,0 +1,428 @@
+package com.coin.webcointrader.bybit.market;
+
+import com.coin.webcointrader.bybit.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.bybit.market.dto.WebSocketRequest;
+import com.coin.webcointrader.bybit.market.dto.WebSocketTickerDTO;
+import com.coin.webcointrader.common.enums.LogMessage;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+
+import java.io.IOException;
+import java.net.URI;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+
+/**
+ * Bybit WebSocket 클라이언트.
+ * 실시간 티커 데이터를 수신하여 MarketService에 전달한다.
+ *
+ * 주요 기능:
+ * - Bybit WebSocket 연결 및 자동 재연결 (지수 백오프)
+ * - 20초 주기 heartbeat(ping) 전송
+ * - 심볼별 구독/구독해제 관리
+ * - 수신 메시지를 WebSocketTickerDTO로 파싱하여 콜백 호출
+ */
+@Component
+@Slf4j
+@RequiredArgsConstructor
+public class BybitWebSocketClient extends TextWebSocketHandler {
+
+    private final StandardWebSocketClient webSocketClient;
+    private final ObjectMapper objectMapper;
+
+    @Value("${bybit.websocket.url}")
+    private String websocketUrl;                // WebSocket 서버 URL
+
+    @Value("${bybit.websocket.ping-interval}")
+    private long pingInterval;                  // heartbeat 주기 (밀리초)
+
+    @Value("${bybit.websocket.reconnect-delay}")
+    private long reconnectDelay;                // 초기 재연결 대기 시간 (밀리초)
+
+    @Value("${bybit.websocket.reconnect-max-delay}")
+    private long reconnectMaxDelay;             // 최대 재연결 대기 시간 (밀리초)
+
+    private volatile WebSocketSession session;  // 현재 WebSocket 세션
+
+    // 현재 구독 중인 심볼 목록 (tickers 토픽)
+    private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
+
+    // 현재 kline.1 구독 중인 심볼 목록 (1분봉 봉 마감 알림용)
+    private final Set<String> subscribedKlineSymbols = ConcurrentHashMap.newKeySet();
+
+    // 티커 데이터 수신 콜백 목록 (여러 구독자 지원)
+    private final List<Consumer<WebSocketTickerDTO>> tickerCallbacks = new CopyOnWriteArrayList<>();
+
+    // Kline(봉) 데이터 수신 콜백 목록 (여러 구독자 지원)
+    private final List<Consumer<WebSocketKlineDTO>> klineCallbacks = new CopyOnWriteArrayList<>();
+
+    // heartbeat 스케줄러
+    private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> heartbeatTask;
+
+    // 재연결 스케줄러
+    private final ScheduledExecutorService reconnectScheduler = Executors.newSingleThreadScheduledExecutor();
+
+    // 현재 재연결 대기 시간 (지수 백오프)
+    private volatile long currentReconnectDelay;
+
+    // 연결 상태 플래그
+    private volatile boolean shouldConnect = true;
+
+    /**
+     * 애플리케이션 시작 시 Bybit WebSocket에 연결한다.
+     */
+    @PostConstruct
+    public void init() {
+        currentReconnectDelay = reconnectDelay;
+        connect();
+    }
+
+    /**
+     * 애플리케이션 종료 시 WebSocket 연결을 정리한다.
+     */
+    @PreDestroy
+    public void destroy() {
+        shouldConnect = false;
+        // heartbeat 스케줄러 종료
+        if (heartbeatTask != null) {
+            heartbeatTask.cancel(true);
+        }
+        heartbeatScheduler.shutdownNow();
+        reconnectScheduler.shutdownNow();
+
+        // WebSocket 세션 종료
+        if (session != null && session.isOpen()) {
+            try {
+                session.close();
+            } catch (IOException e) {
+                log.warn(LogMessage.WS_SESSION_CLOSE_ERROR.getMessage(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 티커 데이터 수신 콜백을 추가한다.
+     *
+     * @param callback WebSocketTickerDTO를 처리할 콜백
+     */
+    public void addTickerCallback(Consumer<WebSocketTickerDTO> callback) {
+        tickerCallbacks.add(callback);
+    }
+
+    /**
+     * Kline 데이터 수신 콜백을 추가한다.
+     *
+     * @param callback WebSocketKlineDTO를 처리할 콜백
+     */
+    public void addKlineCallback(Consumer<WebSocketKlineDTO> callback) {
+        klineCallbacks.add(callback);
+    }
+
+    /**
+     * 특정 심볼의 티커를 구독한다.
+     *
+     * @param symbol 구독할 심볼 (예: "BTCUSDT")
+     */
+    public void subscribe(String symbol) {
+        // 이미 구독 중이면 무시
+        if (!subscribedSymbols.add(symbol)) {
+            return;
+        }
+
+        String topic = "tickers." + symbol;
+        sendMessage(WebSocketRequest.subscribe(List.of(topic)));
+        log.info(LogMessage.WS_SUBSCRIBE.getMessage(), topic);
+    }
+
+    /**
+     * 특정 심볼의 티커 구독을 해제한다.
+     *
+     * @param symbol 구독 해제할 심볼 (예: "BTCUSDT")
+     */
+    public void unsubscribe(String symbol) {
+        // 구독 중이 아니면 무시
+        if (!subscribedSymbols.remove(symbol)) {
+            return;
+        }
+
+        String topic = "tickers." + symbol;
+        sendMessage(WebSocketRequest.unsubscribe(List.of(topic)));
+        log.info(LogMessage.WS_UNSUBSCRIBE.getMessage(), topic);
+    }
+
+    /**
+     * 특정 심볼의 1분봉 kline 토픽을 구독한다.
+     * confirm:true 메시지 수신 시 1분봉이 마감되었음을 의미한다.
+     *
+     * @param symbol 구독할 심볼 (예: "BTCUSDT")
+     */
+    public void subscribeKline(String symbol) {
+        if (!subscribedKlineSymbols.add(symbol)) {
+            return;
+        }
+        String topic = "kline.1." + symbol;
+        sendMessage(WebSocketRequest.subscribe(List.of(topic)));
+        log.info(LogMessage.WS_SUBSCRIBE.getMessage(), topic);
+    }
+
+    /**
+     * 특정 심볼의 1분봉 kline 토픽 구독을 해제한다.
+     */
+    public void unsubscribeKline(String symbol) {
+        if (!subscribedKlineSymbols.remove(symbol)) {
+            return;
+        }
+        String topic = "kline.1." + symbol;
+        sendMessage(WebSocketRequest.unsubscribe(List.of(topic)));
+        log.info(LogMessage.WS_UNSUBSCRIBE.getMessage(), topic);
+    }
+
+    /**
+     * 구독 목록(tickers + kline.1)을 주어진 심볼 집합과 동기화한다.
+     * 새로운 심볼은 두 토픽 모두 구독하고, 불필요한 심볼은 두 토픽 모두 해제한다.
+     *
+     * @param targetSymbols 활성 세션의 심볼 집합
+     */
+    public void syncSubscriptions(Set<String> targetSymbols) {
+        // 새로 추가된 심볼 구독 (tickers + kline)
+        for (String symbol : targetSymbols) {
+            if (!subscribedSymbols.contains(symbol)) {
+                subscribe(symbol);
+            }
+            if (!subscribedKlineSymbols.contains(symbol)) {
+                subscribeKline(symbol);
+            }
+        }
+
+        // 제거된 심볼 구독 해제 (tickers + kline)
+        for (String symbol : Set.copyOf(subscribedSymbols)) {
+            if (!targetSymbols.contains(symbol)) {
+                unsubscribe(symbol);
+            }
+        }
+        for (String symbol : Set.copyOf(subscribedKlineSymbols)) {
+            if (!targetSymbols.contains(symbol)) {
+                unsubscribeKline(symbol);
+            }
+        }
+    }
+
+    /**
+     * 현재 구독 중인 심볼 목록을 반환한다.
+     *
+     * @return 구독 중인 심볼 Set (읽기 전용 복사본)
+     */
+    public Set<String> getSubscribedSymbols() {
+        return Set.copyOf(subscribedSymbols);
+    }
+
+    /**
+     * 현재 kline.1 구독 중인 심볼 목록을 반환한다.
+     */
+    public Set<String> getSubscribedKlineSymbols() {
+        return Set.copyOf(subscribedKlineSymbols);
+    }
+
+    // ─────────────────────────────────────────────
+    // WebSocket 이벤트 핸들러
+    // ─────────────────────────────────────────────
+
+    /**
+     * WebSocket 연결 성공 시 호출된다.
+     * heartbeat를 시작하고, 기존 구독 토픽을 재구독한다.
+     */
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        this.session = session;
+        // 연결 성공 시 재연결 대기 시간 초기화
+        currentReconnectDelay = reconnectDelay;
+        log.info(LogMessage.WS_CONNECTED.getMessage(), websocketUrl);
+
+        // heartbeat 시작
+        startHeartbeat();
+
+        // 기존 구독 토픽 재구독
+        resubscribeAll();
+    }
+
+    /**
+     * WebSocket 메시지 수신 시 호출된다.
+     * 티커 데이터 메시지를 파싱하여 콜백으로 전달한다.
+     */
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        String payload = message.getPayload();
+
+        try {
+            // pong 응답이나 구독 확인 메시지는 무시
+            JsonNode node = objectMapper.readTree(payload);
+
+            if (node.has("op")) {
+                // op 필드가 있으면 제어 메시지 (pong, subscribe 응답 등)
+                return;
+            }
+
+            // topic 필드 분기
+            if (node.has("topic")) {
+                String topic = node.get("topic").asText();
+                if (topic.startsWith("tickers.")) {
+                    WebSocketTickerDTO dto = objectMapper.readValue(payload, WebSocketTickerDTO.class);
+                    for (Consumer<WebSocketTickerDTO> cb : tickerCallbacks) {
+                        cb.accept(dto);
+                    }
+                } else if (topic.startsWith("kline.")) {
+                    WebSocketKlineDTO dto = objectMapper.readValue(payload, WebSocketKlineDTO.class);
+                    for (Consumer<WebSocketKlineDTO> cb : klineCallbacks) {
+                        cb.accept(dto);
+                    }
+                }
+            }
+        } catch (JsonProcessingException e) {
+            log.warn(LogMessage.WS_MESSAGE_PARSE_ERROR.getMessage(), e.getMessage());
+        }
+    }
+
+    /**
+     * WebSocket 연결이 끊어졌을 때 호출된다.
+     * 지수 백오프 방식으로 재연결을 시도한다.
+     */
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        log.warn(LogMessage.WS_CONNECTION_CLOSED.getMessage(), status);
+
+        // heartbeat 중지
+        stopHeartbeat();
+
+        // 재연결 시도
+        if (shouldConnect) {
+            scheduleReconnect();
+        }
+    }
+
+    /**
+     * WebSocket 전송 오류 발생 시 호출된다.
+     */
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) {
+        log.error(LogMessage.WS_TRANSPORT_ERROR.getMessage(), exception.getMessage());
+    }
+
+    // ─────────────────────────────────────────────
+    // 내부 헬퍼 메서드
+    // ─────────────────────────────────────────────
+
+    /**
+     * Bybit WebSocket 서버에 연결한다.
+     * 핸드셰이크는 비동기라 실패해도 예외가 던져지지 않고 afterConnectionClosed도 호출되지 않으므로,
+     * future 실패 시 직접 재연결을 예약한다. (재연결 시도 자체가 실패해도 재시도가 끊기지 않도록)
+     */
+    private void connect() {
+        try {
+            log.info(LogMessage.WS_CONNECTING.getMessage(), websocketUrl);
+            webSocketClient.execute(this, null, URI.create(websocketUrl))
+                    .whenComplete((s, ex) -> {
+                        // 비동기 핸드셰이크 실패 (Bybit 점검·네트워크 순단 등)
+                        if (ex != null) onConnectFailed(ex);
+                    });
+        } catch (Exception e) {
+            // 요청 생성 단계의 동기 실패
+            onConnectFailed(e);
+        }
+    }
+
+    /**
+     * 연결 실패를 기록하고, 종료 중이 아니면 재연결을 예약한다.
+     */
+    private void onConnectFailed(Throwable e) {
+        log.error(LogMessage.WS_CONNECT_FAILED.getMessage(), e.getMessage());
+        if (shouldConnect) {
+            scheduleReconnect();
+        }
+    }
+
+    /**
+     * 지수 백오프 방식으로 재연결을 스케줄한다.
+     * 대기 시간: reconnectDelay → 2배 → 4배 → ... → reconnectMaxDelay
+     */
+    private void scheduleReconnect() {
+        long delay = currentReconnectDelay;
+        // 다음 재연결 대기 시간을 2배로 증가 (최대값 제한)
+        currentReconnectDelay = Math.min(currentReconnectDelay * 2, reconnectMaxDelay);
+
+        log.info(LogMessage.WS_RECONNECT_SCHEDULED.getMessage(), delay);
+        reconnectScheduler.schedule(this::connect, delay, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 주기적으로 ping 메시지를 전송하여 연결을 유지한다.
+     */
+    private void startHeartbeat() {
+        stopHeartbeat();
+        heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            sendMessage(WebSocketRequest.ping());
+        }, pingInterval, pingInterval, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * heartbeat 전송을 중지한다.
+     */
+    private void stopHeartbeat() {
+        if (heartbeatTask != null) {
+            heartbeatTask.cancel(true);
+            heartbeatTask = null;
+        }
+    }
+
+    /**
+     * 기존 구독 토픽을 모두 재구독한다. (재연결 시 사용)
+     * tickers.{symbol}와 kline.1.{symbol} 두 종류 모두 재구독한다.
+     */
+    private void resubscribeAll() {
+        if (subscribedSymbols.isEmpty() && subscribedKlineSymbols.isEmpty()) {
+            return;
+        }
+
+        List<String> topics = new java.util.ArrayList<>();
+        subscribedSymbols.forEach(s -> topics.add("tickers." + s));
+        subscribedKlineSymbols.forEach(s -> topics.add("kline.1." + s));
+
+        if (!topics.isEmpty()) {
+            sendMessage(WebSocketRequest.subscribe(topics));
+            log.info(LogMessage.WS_RESUBSCRIBE_COMPLETE.getMessage(), topics.size());
+        }
+    }
+
+    /**
+     * WebSocket 세션에 JSON 메시지를 전송한다.
+     *
+     * @param request 전송할 요청 객체
+     */
+    private void sendMessage(WebSocketRequest request) {
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+
+        try {
+            String json = objectMapper.writeValueAsString(request);
+            session.sendMessage(new TextMessage(json));
+        } catch (IOException e) {
+            log.error(LogMessage.WS_MESSAGE_SEND_FAILED.getMessage(), e.getMessage());
+        }
+    }
+}

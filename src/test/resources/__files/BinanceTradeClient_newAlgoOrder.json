@@ -1,0 +1,20 @@
+{
+  "algoId": 2146760,
+  "clientAlgoId": "q1-E-1761526800000-TP",
+  "algoType": "CONDITIONAL",
+  "orderType": "TAKE_PROFIT_MARKET",
+  "symbol": "BTCUSDT",
+  "side": "SELL",
+  "positionSide": "BOTH",
+  "timeInForce": "GTC",
+  "quantity": "0",
+  "algoStatus": "NEW",
+  "triggerPrice": "52000",
+  "price": "0",
+  "workingType": "CONTRACT_PRICE",
+  "closePosition": true,
+  "priceProtect": false,
+  "reduceOnly": false,
+  "createTime": 1761526800200,
+  "updateTime": 1761526800200
+}

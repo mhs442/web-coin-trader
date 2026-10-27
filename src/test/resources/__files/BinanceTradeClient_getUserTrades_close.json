@@ -1,0 +1,12 @@
+[
+  {
+    "buyer": false, "commission": "0.15000000", "commissionAsset": "USDT", "id": 698801, "maker": false,
+    "orderId": 22542200, "price": "50800.0", "qty": "0.006", "quoteQty": "304.8", "realizedPnl": "5.00000000",
+    "side": "SELL", "positionSide": "BOTH", "symbol": "BTCUSDT", "time": 1761530000000
+  },
+  {
+    "buyer": false, "commission": "0.10000000", "commissionAsset": "USDT", "id": 698802, "maker": false,
+    "orderId": 22542200, "price": "50810.0", "qty": "0.004", "quoteQty": "203.24", "realizedPnl": "3.00000000",
+    "side": "SELL", "positionSide": "BOTH", "symbol": "BTCUSDT", "time": 1761530000050
+  }
+]

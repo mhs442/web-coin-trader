@@ -92,6 +92,28 @@ body {
     margin-right: auto; /* 왼쪽 정렬 (잔고는 오른쪽 유지) */
 }
 
+/* 헤더 거래소 선택 */
+.exchange-select {
+    background-color: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #2a2a4a;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 13px;
+    margin-right: 8px;
+}
+
+/* 키 미등록 거래소 안내 (실전 모드) */
+.exchange-key-notice {
+    color: #ffb74d;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.exchange-key-notice:hover {
+    text-decoration: underline;
+}
+
 .trade-mode-label {
     font-size: 13px;
     font-weight: 600;
@@ -792,16 +814,6 @@ body {
     padding: 3px 8px;
     border-radius: 4px;
     font-weight: 600;
-}
-
-.exchange-badge {
-    font-size: 0.75rem;
-    color: #6f42c1;
-    background-color: #f3ecfc;
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-weight: 600;
-    margin-left: 6px;
 }
 
 /* 단계 카드 */
@@ -1560,6 +1572,22 @@ body {
 
 .chart-link-btn:hover {
     background-color: #0056b3;
+}
+
+/* 마이페이지 거래소 API 키 등록·교체 폼 */
+.exchange-key-form {
+    margin-top: 16px;
+}
+
+.exchange-key-form h3 {
+    margin: 0 0 8px 0;
+    font-size: 1rem;
+}
+
+.exchange-key-help {
+    margin: 8px 0 0 0;
+    font-size: 0.82rem;
+    color: #6c757d;
 }
 
 .mypage-table-wrapper {

@@ -1,25 +1,30 @@
 <!DOCTYPE html>
 <html lang="ko" xmlns:th="http://www.thymeleaf.org">
 <body>
-<!-- 공통 헤더: 거래 모드 토글 + 지갑 잔고 + 갱신 카운트다운 -->
+<!-- 공통 헤더: 거래소 선택 + 거래 모드 토글 + 지갑 잔고 + 갱신 카운트다운 -->
 <div th:fragment="walletHeader" class="wallet-header" id="wallet-header">
-    <!-- 실전/모의 모드 토글 -->
+    <!-- 거래소 선택 + 실전/모의 모드 토글 -->
     <div class="trade-mode-toggle">
+        <select class="exchange-select" id="exchange-select" title="거래소 선택"></select>
         <span class="trade-mode-label" id="trade-mode-label">실전</span>
         <label class="toggle-switch">
             <input type="checkbox" id="trade-mode-switch">
             <span class="toggle-slider"></span>
         </label>
     </div>
+    <!-- 실전 모드에서 선택 거래소의 API 키가 없을 때 잔고 대신 표시 -->
+    <a class="exchange-key-notice" id="exchange-key-notice" href="/mypage?tab=exchange-keys" style="display:none;">
+        API 키 미등록 · 마이페이지에서 등록
+    </a>
     <div class="wallet-info">
         <span class="wallet-label">총 자산</span>
         <span class="wallet-balance" id="wallet-total-equity">--</span>
-        <span class="wallet-unit">USDT</span>
+        <span class="wallet-unit">--</span>
     </div>
     <div class="wallet-info">
         <span class="wallet-label">사용 가능</span>
         <span class="wallet-balance" id="wallet-available">--</span>
-        <span class="wallet-unit">USDT</span>
+        <span class="wallet-unit">--</span>
     </div>
     <!-- 모의 모드 충전 버튼 (sim 모드일 때만 표시) -->
     <button class="sim-charge-btn" id="sim-charge-btn" style="display:none;" title="모의 지갑 충전">충전</button>
@@ -56,46 +61,138 @@
             return window.tradeMode;
         };
 
+        // 전역 선택 거래소 (예: 'BYBIT') — tradeMode와 같이 localStorage로 유지
+        // [사용자 정책 2026-10-27] 기본 거래소 없음 — 저장값이 없으면 거래소 목록 응답 후 결정
+        window.exchangeType = localStorage.getItem('exchangeType') || null;
+
+        // 거래소 확정 신호 (저장값이 있으면 즉시 확정, 없으면 /api/exchange-keys 응답 후 확정)
+        const exchangeReady = $.Deferred();
+        if (window.exchangeType) exchangeReady.resolve(window.exchangeType);
+
+        /**
+         * 거래소가 확정된 뒤 콜백을 실행한다. (이미 확정됐으면 즉시 실행)
+         * 거래소가 필요한 화면의 첫 API 호출은 이 안에서 시작한다.
+         * @param {function(string)} callback 확정된 거래소 타입을 받는 콜백
+         */
+        window.whenExchangeReady = function(callback) {
+            exchangeReady.done(callback);
+        };
+
+        /**
+         * 현재 선택 거래소를 반환한다.
+         * @returns {string} 거래소 타입 (예: 'BYBIT')
+         */
+        window.getExchange = function() {
+            return window.exchangeType;
+        };
+
         (function() {
             const POLL_INTERVAL = 5; // 초
             let countdown = POLL_INTERVAL;
             let countdownTimer = null;
+            let exchangeKeyStatuses = null;              // 거래소별 키 등록 상태 (조회 전 null)
+
+            /**
+             * 선택 거래소의 API 키 등록 여부를 반환한다.
+             * 등록 상태를 아직 못 받았으면 true로 간주해 잔고 조회를 막지 않는다.
+             */
+            function isExchangeKeyRegistered() {
+                if (!exchangeKeyStatuses) return true;
+                const status = exchangeKeyStatuses.find(function(s) { return s.exchangeType === window.exchangeType; });
+                return !!(status && status.registered);
+            }
+
+            /**
+             * 실전 모드 + 키 미등록이면 잔고 대신 등록 안내를 표시한다. (모의 모드는 키 없이 사용)
+             * @returns {boolean} 안내를 표시했으면 true
+             */
+            function updateKeyNotice() {
+                const showNotice = window.tradeMode === 'main' && !isExchangeKeyRegistered();
+                $('#exchange-key-notice').toggle(showNotice);
+                $('#wallet-header .wallet-info').toggle(!showNotice);
+                return showNotice;
+            }
+
+            /**
+             * 거래소별 키 등록 상태를 조회해 거래소 선택 목록과 안내를 갱신한다.
+             * 마이페이지에서 키를 저장한 뒤에도 호출한다.
+             */
+            window.refreshExchangeKeys = function() {
+                $.ajax({
+                    url: '/api/exchange-keys',
+                    method: 'GET',
+                    success: function(statuses) {
+                        exchangeKeyStatuses = statuses || [];
+
+                        // 선택값이 없거나 더 이상 지원되지 않으면 키 등록 거래소 우선, 없으면 첫 번째 거래소로 결정
+                        const types = exchangeKeyStatuses.map(function(s) { return s.exchangeType; });
+                        if (types.length && types.indexOf(window.exchangeType) < 0) {
+                            const registered = exchangeKeyStatuses.find(function(s) { return s.registered; });
+                            const hadSelection = !!window.exchangeType;
+                            window.exchangeType = registered ? registered.exchangeType : types[0];
+                            localStorage.setItem('exchangeType', window.exchangeType);
+                            // 이미 확정돼 화면이 옛 값으로 로딩됐으면 변경 이벤트로 다시 조회
+                            if (hadSelection) $(document).trigger('exchangeChanged', [window.exchangeType]);
+                        }
+                        exchangeReady.resolve(window.exchangeType);   // 확정 전 대기 중인 화면 로딩 시작
+
+                        const $select = $('#exchange-select').empty();
+                        exchangeKeyStatuses.forEach(function(s) {
+                            const label = s.displayName || s.exchangeType;   // 표시명은 서버(ExchangeType) 기준
+                            $('<option>').val(s.exchangeType)
+                                .text(s.registered ? label : label + ' (키 미등록)')
+                                .appendTo($select);
+                        });
+                        $select.val(window.exchangeType);
+
+                        fetchWalletBalance();
+                    }
+                });
+            };
 
             /**
              * 지갑 잔고 API를 호출하여 헤더에 표시한다.
              * 현재 거래 모드(main/sim)에 따라 실전 또는 가상 지갑 잔고를 조회한다.
              */
             function fetchWalletBalance() {
+                // 거래소 확정 전에는 조회하지 않음 (기본 거래소 없음)
+                if (!window.exchangeType) return;
+                // 키 미등록 실전 거래소는 조회하지 않음 (API_KEY_NOT_FOUND 방지)
+                if (updateKeyNotice()) return;
+
                 $.ajax({
                     url: '/api/wallet/balance',
                     method: 'GET',
-                    data: { mode: window.tradeMode },
+                    data: { mode: window.tradeMode, exchange: window.exchangeType },
                     success: function(data) {
-                        if (data && data.result && data.result.list && data.result.list.length > 0) {
-                            const account = data.result.list[0];
+                        if (data && data.totalEquity != null) {
                             // 총 자산 평가액
-                            const equity = parseFloat(account.totalEquity || 0);
+                            const equity = parseFloat(data.totalEquity);
                             $('#wallet-total-equity').text(equity.toLocaleString('en-US', {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2
                             }));
 
-                            // 출금 가능 금액 (USDT 기준, 없으면 0)
-                            const usdtCoin = (account.coin || []).find(c => c.coin === 'USDT');
-                            const available = usdtCoin ? parseFloat(usdtCoin.availableToWithdraw || 0) : 0;
+                            // 잔고 단위 (거래소가 알려준 값, 없으면 --)
+                            $('.wallet-unit').text(data.currency || '--');
+
+                            // 출금 가능 금액 (없으면 0)
+                            const available = parseFloat(data.availableBalance || 0);
                             $('#wallet-available').text(available.toLocaleString('en-US', {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2
                             }));
                         } else {
-                            // 계좌 목록이 비어있는 경우(예: 실전 계좌에 UNIFIED 지갑 없음) — 이전 모드의 잔액이 화면에 남지 않도록 초기화
+                            // 잔고 정보가 없는 경우(예: 실전 계좌에 UNIFIED 지갑 없음) — 이전 모드의 잔액이 화면에 남지 않도록 초기화
                             $('#wallet-total-equity').text('--');
                             $('#wallet-available').text('--');
+                            $('.wallet-unit').text('--');
                         }
                     },
                     error: function() {
                         $('#wallet-total-equity').text('--');
                         $('#wallet-available').text('--');
+                        $('.wallet-unit').text('--');
                     }
                 });
             }
@@ -148,7 +245,12 @@
 
             // 초기 로딩 + 카운트다운 시작
             $(document).ready(function() {
+                // 저장된 선택값이 있으면 목록을 먼저 채움 (등록 상태 응답 후 표시명 포함 전체 목록으로 교체)
+                if (window.exchangeType) {
+                    $('#exchange-select').append($('<option>').val(window.exchangeType).text(window.exchangeType));
+                }
                 fetchWalletBalance();
+                window.refreshExchangeKeys();
                 startCountdown();
                 toggleChargeButton();
 
@@ -185,6 +287,20 @@
 
                     // 모드 변경 이벤트 발행 (다른 페이지에서 수신 가능)
                     $(document).trigger('tradeModeChanged', [window.tradeMode]);
+                });
+
+                // 거래소 선택 변경 이벤트
+                $('#exchange-select').on('change', function() {
+                    window.exchangeType = $(this).val();
+
+                    // localStorage에 저장 (페이지 이동 시에도 유지)
+                    localStorage.setItem('exchangeType', window.exchangeType);
+
+                    // 즉시 잔고 갱신 (미등록이면 안내 표시)
+                    fetchWalletBalance();
+
+                    // 거래소 변경 이벤트 발행 (다른 페이지에서 수신 가능)
+                    $(document).trigger('exchangeChanged', [window.exchangeType]);
                 });
 
                 // 충전 버튼 클릭 → 모달 열기

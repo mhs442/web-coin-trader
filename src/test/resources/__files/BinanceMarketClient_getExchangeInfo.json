@@ -1,0 +1,48 @@
+{
+  "timezone": "UTC",
+  "serverTime": 1761526800000,
+  "symbols": [
+    {
+      "symbol": "BTCUSDT", "pair": "BTCUSDT", "contractType": "PERPETUAL", "status": "TRADING",
+      "baseAsset": "BTC", "quoteAsset": "USDT", "marginAsset": "USDT",
+      "filters": [
+        {"filterType": "PRICE_FILTER", "minPrice": "556.80", "maxPrice": "4529764", "tickSize": "0.10"},
+        {"filterType": "LOT_SIZE", "minQty": "0.001", "maxQty": "1000", "stepSize": "0.001"},
+        {"filterType": "MARKET_LOT_SIZE", "minQty": "0.002", "maxQty": "120", "stepSize": "0.002"},
+        {"filterType": "MIN_NOTIONAL", "notional": "100"}
+      ]
+    },
+    {
+      "symbol": "ETHUSDT", "pair": "ETHUSDT", "contractType": "PERPETUAL", "status": "TRADING",
+      "baseAsset": "ETH", "quoteAsset": "USDT", "marginAsset": "USDT",
+      "filters": [
+        {"filterType": "PRICE_FILTER", "minPrice": "39.86", "maxPrice": "306177", "tickSize": "0.01"},
+        {"filterType": "LOT_SIZE", "minQty": "0.001", "maxQty": "10000", "stepSize": "0.001"}
+      ]
+    },
+    {
+      "symbol": "BTCUSDT_251226", "pair": "BTCUSDT", "contractType": "CURRENT_QUARTER", "status": "TRADING",
+      "baseAsset": "BTC", "quoteAsset": "USDT", "marginAsset": "USDT",
+      "filters": [
+        {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+        {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"}
+      ]
+    },
+    {
+      "symbol": "BTCUSDC", "pair": "BTCUSDC", "contractType": "PERPETUAL", "status": "TRADING",
+      "baseAsset": "BTC", "quoteAsset": "USDC", "marginAsset": "USDC",
+      "filters": [
+        {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+        {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"}
+      ]
+    },
+    {
+      "symbol": "OLDUSDT", "pair": "OLDUSDT", "contractType": "PERPETUAL", "status": "SETTLING",
+      "baseAsset": "OLD", "quoteAsset": "USDT", "marginAsset": "USDT",
+      "filters": [
+        {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+        {"filterType": "LOT_SIZE", "minQty": "1", "stepSize": "1"}
+      ]
+    }
+  ]
+}
