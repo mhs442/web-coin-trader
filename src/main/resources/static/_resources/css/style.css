@@ -1251,6 +1251,23 @@ body {
     box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
 }
 
+/* 익절 지정가 체결 대기 중인 leaf 블록: 우측 상단 회전 스피너 */
+.block-order-pending {
+    position: relative;
+}
+.block-order-pending::after {
+    content: '';
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 8px;
+    height: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
 /* 매칭 완료된 블록 */
 .block-matched {
     opacity: 0.4;
@@ -2237,6 +2254,15 @@ body {
 
 .badge-off {
     background: #6c757d;
+    color: #fff;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+}
+
+/* 거래소 뱃지 (큐 가져오기 목록 원본 거래소) */
+.badge-exchange {
+    background: #0d6efd;
     color: #fff;
     padding: 2px 7px;
     border-radius: 4px;

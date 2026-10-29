@@ -4,6 +4,9 @@ import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.login.dto.UserDTO;
 import com.coin.webcointrader.common.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.common.autotrade.service.AutoTradeService;
+import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.exception.CustomException;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,10 +18,19 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.contract.wiremock.AutoConfigureWireMock;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
@@ -36,6 +48,10 @@ class AutoTradeControllerTest {
 
     @Autowired
     private PatternQueueRepository patternQueueRepository;
+
+    // 큐 끄기·삭제 시 포지션 청산 호출 검증·실패 재현용 (나머지 동작은 실제 빈 그대로)
+    @MockitoSpyBean
+    private AutoTradeService autoTradeService;
 
     // 다른 테스트 클래스와 충돌하지 않도록 고유 userId 사용
     private static final Long USER_ID = 100L;
@@ -118,6 +134,22 @@ class AutoTradeControllerTest {
                         .param("exchange", "UNKNOWN")
                         .with(authentication(auth)))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /api/autotrade/patterns/all: exchange 미지정이면 모든 거래소의 큐를 거래소 타입과 함께 반환한다")
+    void getAllPatterns_withoutExchange_returnsAllExchanges() throws Exception {
+        patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
+        PatternQueue binance = makePatternQueue(USER_ID, "ETHUSDT");
+        binance.setExchangeType(ExchangeType.BINANCE);
+        patternQueueRepository.save(binance);
+
+        mockMvc.perform(get("/api/autotrade/patterns/all")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].exchangeType").value("BYBIT"))
+                .andExpect(jsonPath("$[1].exchangeType").value("BINANCE"));
     }
 
     @Test
@@ -229,6 +261,91 @@ class AutoTradeControllerTest {
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ok"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/autotrade/patterns/{id}: 삭제 전에 보유 포지션 청산을 먼저 호출한다")
+    void deletePattern_closesPositionBeforeDelete() throws Exception {
+        PatternQueue q = patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
+
+        mockMvc.perform(delete("/api/autotrade/patterns/" + q.getId()).param("exchange", "BYBIT")
+                        .param("symbol", "BTCUSDT")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk());
+
+        verify(autoTradeService).closeQueuePosition(USER_ID, q.getId());
+        assertThat(patternQueueRepository.findById(q.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("DELETE /api/autotrade/patterns/{id}: 포지션 청산 실패 시 400을 반환하고 큐를 삭제하지 않는다")
+    void deletePattern_closeFailed_keepsQueue() throws Exception {
+        PatternQueue q = patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
+        doThrow(new CustomException(ExceptionMessage.QUEUE_POSITION_CLOSE_FAILED, "청산 주문 실패"))
+                .when(autoTradeService).closeQueuePosition(USER_ID, q.getId());
+
+        mockMvc.perform(delete("/api/autotrade/patterns/" + q.getId()).param("exchange", "BYBIT")
+                        .param("symbol", "BTCUSDT")
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("포지션 청산에 실패해 큐를 유지합니다: 청산 주문 실패"));
+
+        assertThat(patternQueueRepository.findById(q.getId())).isPresent();
+    }
+
+    // ─────────────────────────────────────────────
+    // PATCH /api/autotrade/patterns/{id}/toggle
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("PATCH toggle: 켜진 큐를 끄면 보유 포지션 청산 후 비활성화한다")
+    void togglePattern_off_closesPositionThenDeactivates() throws Exception {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        q = patternQueueRepository.save(q);
+        doNothing().when(autoTradeService).syncSession(anyLong(), any(), any(), any());
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+
+        var order = inOrder(autoTradeService);
+        order.verify(autoTradeService).closeQueuePosition(USER_ID, q.getId());
+        order.verify(autoTradeService).syncSession(USER_ID, ExchangeType.BYBIT, "BTCUSDT", q.getTradeMode());
+        assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isFalse();
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 꺼진 큐를 켤 때는 청산을 호출하지 않는다")
+    void togglePattern_on_doesNotClose() throws Exception {
+        PatternQueue q = patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
+        doNothing().when(autoTradeService).syncSession(anyLong(), any(), any(), any());
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 끄기 전 포지션 청산 실패 시 400을 반환하고 큐를 켜진 채로 유지한다")
+    void togglePattern_off_closeFailed_keepsActive() throws Exception {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        q = patternQueueRepository.save(q);
+        doThrow(new CustomException(ExceptionMessage.QUEUE_POSITION_CLOSE_FAILED, "익절 지정가 취소 실패"))
+                .when(autoTradeService).closeQueuePosition(USER_ID, q.getId());
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("포지션 청산에 실패해 큐를 유지합니다: 익절 지정가 취소 실패"));
+
+        assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isTrue();
+        verify(autoTradeService, never()).syncSession(anyLong(), any(), any(), any());
     }
 
     // ─────────────────────────────────────────────

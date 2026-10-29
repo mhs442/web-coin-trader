@@ -4,6 +4,8 @@ import com.coin.webcointrader.bybit.trade.PositionClient;
 import com.coin.webcointrader.bybit.stream.BybitExecutionWaiter;
 import com.coin.webcointrader.bybit.stream.BybitPrivateWebSocketClient;
 import com.coin.webcointrader.bybit.stream.dto.WebSocketExecutionDTO;
+import com.coin.webcointrader.bybit.trade.dto.CancelOrderRequest;
+import com.coin.webcointrader.bybit.trade.dto.CancelOrderResponse;
 import com.coin.webcointrader.bybit.trade.dto.CreateOrderRequest;
 import com.coin.webcointrader.bybit.trade.dto.SetLeverageRequest;
 import com.coin.webcointrader.bybit.trade.dto.SetMarginModeRequest;
@@ -19,6 +21,7 @@ import com.coin.webcointrader.common.enums.Category;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.LogMessage;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.enums.PositionCloseType;
 import com.coin.webcointrader.common.exception.CustomException;
@@ -69,9 +72,13 @@ public class BybitTradeClient extends AbstractExchangeTradeClient {
     private static final String RET_CODE_MARGIN_NOT_MODIFIED = "110026";
     // 이미 같은 레버리지 (정상 처리)
     private static final String RET_CODE_LEVERAGE_NOT_MODIFIED = "110043";
+    // 주문 없음 (이미 전부 체결·취소되어 취소 불가)
+    private static final String RET_CODE_ORDER_NOT_EXISTS = "110001";
     // 포지션을 줄일 수 있는 체결 유형 (Trade: 일반, BustTrade: 강제청산, AdlTrade: ADL / Funding 등은 제외)
     // Linear(USDT 선물) 시장가 주문 taker 수수료율 (기본 등급 0.055%)
     private static final BigDecimal TAKER_FEE_RATE = new BigDecimal("0.00055");
+    // Linear(USDT 선물) 지정가 주문 maker 수수료율 (기본 등급 0.02%)
+    private static final BigDecimal MAKER_FEE_RATE = new BigDecimal("0.0002");
     private static final Set<String> CLOSE_EXEC_TYPES = Set.of("Trade", "BustTrade", "AdlTrade");
 
     private final TradeClient tradeClient;
@@ -108,6 +115,11 @@ public class BybitTradeClient extends AbstractExchangeTradeClient {
         return TAKER_FEE_RATE;
     }
 
+    @Override
+    public BigDecimal getMakerFeeRate() {
+        return MAKER_FEE_RATE;
+    }
+
     // ─── API 키 바인딩 ───
 
     @Override
@@ -123,7 +135,8 @@ public class BybitTradeClient extends AbstractExchangeTradeClient {
     // ─── 주문 ───
 
     /**
-     * 공통 주문을 Bybit 시장가 주문으로 전송한다. (POST /v5/order/create)
+     * 공통 주문을 Bybit 시장가/지정가 주문으로 전송한다. (POST /v5/order/create)
+     * price가 있으면 지정가(Limit, GTC), 없으면 시장가로 보낸다.
      * TP/SL이 있으면 시장가·최종 체결가(LastPrice) 트리거·포지션 전체(Full) 모드로 동봉한다.
      *
      * @param request 주문 요청 (clientOrderId → orderLinkId)
@@ -136,10 +149,14 @@ public class BybitTradeClient extends AbstractExchangeTradeClient {
                 .category(Category.LINEAR.getCategory())
                 .symbol(request.getSymbol())
                 .side(toBybitSide(request.getSide()))
-                .orderType("Market")
+                .orderType(request.getPrice() != null ? "Limit" : "Market")
                 .qty(request.getQty())
                 .positionIdx(0) // 단방향 모드 명시 (헤지 모드 계정은 거래소가 거부)
                 .orderLinkId(request.getClientOrderId());
+        // 지정가: 가격 + GTC (취소·체결 전까지 호가창에 유지)
+        if (request.getPrice() != null) {
+            builder.price(request.getPrice()).timeInForce("GTC");
+        }
         // 청산 주문만 reduceOnly 지정 (진입 주문은 필드 생략)
         if (request.isReduceOnly()) {
             builder.reduceOnly(true);
@@ -165,6 +182,28 @@ public class BybitTradeClient extends AbstractExchangeTradeClient {
                 .orderId(response.getResult() != null ? response.getResult().getOrderId() : null)
                 .clientOrderId(request.getClientOrderId())
                 .build();
+    }
+
+    /**
+     * 주문을 orderLinkId로 취소한다. (POST /v5/order/cancel)
+     *
+     * @param symbol        종목 심볼
+     * @param clientOrderId 취소할 주문의 orderLinkId
+     * @return retCode 0 → CANCELLED, 110001(주문 없음·이미 체결) → NOT_FOUND, 그 외·응답 없음 → FAILED
+     */
+    @Override
+    protected OrderCancelResult doCancelOrder(String symbol, String clientOrderId) {
+        CancelOrderResponse response = tradeClient.cancelOrder(CancelOrderRequest.builder()
+                .category(Category.LINEAR.getCategory())
+                .symbol(symbol)
+                .orderLinkId(clientOrderId)
+                .build()).getBody();
+        if (response == null) return OrderCancelResult.FAILED;
+        // retCode로 결과 판정
+        if ("0".equals(response.getRetCode())) return OrderCancelResult.CANCELLED;
+        if (RET_CODE_ORDER_NOT_EXISTS.equals(response.getRetCode())) return OrderCancelResult.NOT_FOUND;
+        log.warn("[BYBIT 주문 취소] 거부 orderLinkId={}: [{}] {}", clientOrderId, response.getRetCode(), response.getRetMsg());
+        return OrderCancelResult.FAILED;
     }
 
     /**

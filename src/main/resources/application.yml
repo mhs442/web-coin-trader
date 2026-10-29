@@ -32,6 +32,12 @@ binance:
     recv-window: 5000
   websocket:
     url: wss://fstream.binance.com/market/ws   # 데모: wss://demo-fstream.binance.com/market/ws (경로 확인 필요)
+    # 개인(user data) 스트림 접속 주소. {listenKey} 자리에 발급받은 키가 들어감 (데모: wss://demo-fstream.binance.com/private/ws/{listenKey})
+    # ※ 공식 문서상 형식이 두 가지라 실제 접속 주소 형식이 다를 수 있음 → 이벤트가 오지 않으면 아래 형식으로 교체
+    #   wss://fstream.binance.com/private/ws?listenKey={listenKey}&events=ORDER_TRADE_UPDATE/listenKeyExpired
+    private-url: wss://fstream.binance.com/private/ws/{listenKey}
+    # [사용자 정책 2026-10-28] listenKey 연장 주기 30분 (유효기간 60분)
+    listen-key-keepalive: 1800000
     reconnect-delay: 1000
     reconnect-max-delay: 30000
 

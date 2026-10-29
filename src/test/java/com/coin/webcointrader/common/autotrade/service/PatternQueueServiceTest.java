@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.autotrade.service;
 
 import com.coin.webcointrader.common.autotrade.entity.Pattern;
 import com.coin.webcointrader.common.autotrade.entity.PatternQueue;
+import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.common.autotrade.dto.AddPatternRequest;
@@ -11,6 +12,7 @@ import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.market.service.MarketService;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -25,6 +27,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,6 +38,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 class PatternQueueServiceTest {
@@ -121,11 +125,11 @@ class PatternQueueServiceTest {
     @Test
     @DisplayName("addQueue: 조건 블록은 배열 순서 그대로 저장되고 리프 블록이 마지막에 붙는다")
     void addQueue_blocksKeepArrayOrderWithLeafLast() {
-        // given - 조건 블록 순서 = 배열 순서
+        // given - 조건 블록 순서 = 배열 순서 (시작 블록은 LONG 유지 — 같은 단계 SHORT 시작 패턴과 겹치지 않도록)
         Long userId = 1L;
         AddPatternRequest request = makeFullRequest("BTCUSDT");
         AddPatternRequest.PatternRequest longPattern = request.getPatterns().get(0);
-        longPattern.setConditionBlocks(List.of("SHORT", "LONG", "LONG"));
+        longPattern.setConditionBlocks(List.of("LONG", "SHORT", "SHORT"));
         longPattern.setLeafBlock("SHORT");
 
         given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(userId, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
@@ -136,7 +140,7 @@ class PatternQueueServiceTest {
 
         // then
         assertThat(result.getPatterns().get(0).getBlocks())
-                .containsExactly(Side.SHORT, Side.LONG, Side.LONG, Side.SHORT);
+                .containsExactly(Side.LONG, Side.SHORT, Side.SHORT, Side.SHORT);
     }
 
     @Test
@@ -162,21 +166,29 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("addQueue: 조건 블록이 없으면(null) 리프 블록만 저장된다")
+    @DisplayName("addQueue: 조건 블록이 없으면(null) CustomException 발생 — 엔진은 조건 블록 없는 패턴을 선택할 수 없음")
     void addQueue_nullConditionBlocks() {
         // given
-        Long userId = 1L;
         AddPatternRequest request = makeFullRequest("BTCUSDT");
         request.getPatterns().get(0).setConditionBlocks(null);
 
-        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(userId, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
-        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.EMPTY_CONDITION_BLOCKS.getMessage());
+    }
 
-        // when
-        PatternQueue result = patternQueueService.addQueue(userId, request);
+    @Test
+    @DisplayName("addQueue: 조건 블록이 빈 배열이면 CustomException 발생")
+    void addQueue_emptyConditionBlocks() {
+        // given
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.getPatterns().get(0).setConditionBlocks(List.of());
 
-        // then
-        assertThat(result.getPatterns().get(0).getBlocks()).containsExactly(Side.LONG);
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.EMPTY_CONDITION_BLOCKS.getMessage());
     }
 
     // ─────────────────────────────────────────────
@@ -433,6 +445,79 @@ class PatternQueueServiceTest {
     }
 
     @Test
+    @DisplayName("addQueue: 조건 블록에 null이 섞여 있으면 NPE가 아닌 INVALID_SIDE 예외")
+    void addQueue_nullSideInConditionBlocks() {
+        // given - List.of는 null을 허용하지 않아 Arrays.asList 사용
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.getPatterns().get(0).setConditionBlocks(Arrays.asList("LONG", null));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.INVALID_SIDE.getMessage());
+    }
+
+    @Test
+    @DisplayName("addQueue: 같은 단계 두 패턴의 시작 블록이 같으면 CustomException 발생")
+    void addQueue_duplicateStartBlock() {
+        // given - L:L 과 L:S → 둘 다 LONG 시작 (SHORT 신호 시 선택할 패턴 없음)
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        AddPatternRequest.PatternRequest secondLong = makePatternRequest();
+        secondLong.setLeafBlock("SHORT");
+        request.setPatterns(List.of(makePatternRequest(), secondLong));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.DUPLICATE_START_BLOCK.getMessage());
+    }
+
+    @Test
+    @DisplayName("addQueue: 단계 번호 중간이 비면({1, 3}) CustomException 발생")
+    void addQueue_stepLevelGap() {
+        // given
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.setPatterns(List.of(
+                makePatternRequest(1), makeShortPatternRequest(1),
+                makePatternRequest(3), makeShortPatternRequest(3)));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.NON_CONSECUTIVE_STEP_LEVEL.getMessage());
+    }
+
+    @Test
+    @DisplayName("addQueue: 1단계가 없으면({2, 3}) CustomException 발생")
+    void addQueue_stepLevelMissingFirst() {
+        // given
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.setPatterns(List.of(
+                makePatternRequest(2), makeShortPatternRequest(2),
+                makePatternRequest(3), makeShortPatternRequest(3)));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.NON_CONSECUTIVE_STEP_LEVEL.getMessage());
+    }
+
+    @Test
+    @DisplayName("addQueue: 동시 요청으로 유니크 제약에 걸리면 500이 아닌 EXCEED_MAX_QUEUES 예외")
+    void addQueue_uniqueConstraintConflict() {
+        // given - 개수 검사는 통과했지만 저장 시점에 다른 요청이 먼저 저장한 상황
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(userId, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willThrow(new DataIntegrityViolationException("uk_pattern_queue_user_exchange_symbol_mode"));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.EXCEED_MAX_QUEUES.getMessage());
+    }
+
+    @Test
     @DisplayName("addQueue: 심볼에 큐가 이미 1개 이상 존재하면 CustomException 발생")
     void addQueue_maxQueueLimit() {
         // given
@@ -479,6 +564,24 @@ class PatternQueueServiceTest {
                 .containsExactlyInAnyOrder("BTCUSDT", "ETHUSDT");
     }
 
+    @Test
+    @DisplayName("getAllQueues: 거래소 미지정(null)이면 모든 거래소의 큐 목록을 반환한다")
+    void getAllQueues_withoutExchange_returnAllExchanges() {
+        Long userId = 1L;
+        PatternQueue btc = makePatternQueue(1L, userId, "BTCUSDT");
+        PatternQueue eth = makePatternQueue(2L, userId, "ETHUSDT");
+        eth.setExchangeType(ExchangeType.BINANCE);
+        given(patternQueueRepository.findByUserIdAndTradeModeOrderByCreatedAtAsc(userId, TradeMode.MAIN))
+                .willReturn(List.of(btc, eth));
+
+        List<PatternQueue> result = patternQueueService.getAllQueues(userId, null, TradeMode.MAIN);
+
+        assertThat(result).extracting(PatternQueue::getExchangeType)
+                .containsExactly(ExchangeType.BYBIT, ExchangeType.BINANCE);
+        then(patternQueueRepository).should(never())
+                .findByUserIdAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(any(), any(), any());
+    }
+
     // ─────────────────────────────────────────────
     // copyQueue
     // ─────────────────────────────────────────────
@@ -510,6 +613,34 @@ class PatternQueueServiceTest {
         assertThat(copied.getBlocks()).containsExactly(Side.LONG, Side.LONG);
         // 블록 목록은 원본과 별도 인스턴스여야 한다 (원본 수정이 복사본에 전파되지 않음)
         assertThat(copied.getBlocks()).isNotSameAs(origin.getPatterns().get(0).getBlocks());
+    }
+
+    @Test
+    @DisplayName("copyQueue: 원본의 사이클(cycle) 설정을 복사한다")
+    void copyQueue_copiesCycle() {
+        Long userId = 1L;
+        PatternQueue origin = makePatternQueueWithSteps(1L, userId, "ETHUSDT");
+        origin.setCycle(true);
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(userId, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        PatternQueue result = patternQueueService.copyQueue(userId, 1L, "BTCUSDT", null, TradeMode.MAIN);
+
+        assertThat(result.isCycle()).isTrue();
+    }
+
+    @Test
+    @DisplayName("copyQueue: 동시 요청으로 유니크 제약에 걸리면 500이 아닌 EXCEED_MAX_QUEUES 예외")
+    void copyQueue_uniqueConstraintConflict() {
+        PatternQueue origin = makePatternQueueWithSteps(1L, 1L, "ETHUSDT");
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(1L, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willThrow(new DataIntegrityViolationException("uk_pattern_queue_user_exchange_symbol_mode"));
+
+        assertThatThrownBy(() -> patternQueueService.copyQueue(1L, 1L, "BTCUSDT", null, TradeMode.MAIN))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.EXCEED_MAX_QUEUES.getMessage());
     }
 
     @Test

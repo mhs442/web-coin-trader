@@ -3,6 +3,7 @@ package com.coin.webcointrader.common.trade.client;
 import com.coin.webcointrader.common.trade.dto.PositionCloseDTO;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.util.MutableClock;
@@ -89,6 +90,34 @@ class AbstractExchangeTradeClientTest {
         client.submitError = new CustomException(ExceptionMessage.ORDER_FAILED, "rejected");
 
         assertThatThrownBy(() -> client.placeOrder(order("c1"), 1L)).isInstanceOf(CustomException.class);
+        assertThat(client.bound).isNull();
+    }
+
+    // ─── 주문 취소 ───
+
+    @Test
+    @DisplayName("cancelOrder - 키를 바인딩해 거래소 취소를 호출하고 결과를 그대로 반환, 끝나면 키 해제")
+    void cancelOrder_bindsKeyAndReturnsResult() {
+        givenKey();
+        client.cancelResult = OrderCancelResult.NOT_FOUND;
+
+        OrderCancelResult result = client.cancelOrder(1L, "BTCUSDT", "q1-T-1");
+
+        assertThat(result).isEqualTo(OrderCancelResult.NOT_FOUND);
+        assertThat(client.boundDuringCancel).isEqualTo("plain-encK/plain-encS");
+        assertThat(client.lastCancel).isEqualTo("BTCUSDT:q1-T-1");
+        assertThat(client.bound).isNull();
+    }
+
+    @Test
+    @DisplayName("cancelOrder - 예외(네트워크·키 없음 등)는 던지지 않고 FAILED 반환, 키 해제")
+    void cancelOrder_exception_returnsFailed() {
+        givenKey();
+        client.cancelError = new RuntimeException("timeout");
+
+        OrderCancelResult result = client.cancelOrder(1L, "BTCUSDT", "q1-T-1");
+
+        assertThat(result).isEqualTo(OrderCancelResult.FAILED);
         assertThat(client.bound).isNull();
     }
 
@@ -312,6 +341,10 @@ class AbstractExchangeTradeClientTest {
         int executionFetchCount;
         Deque<ClosedPnlDTO> closedPnls = new LinkedList<>();
         int closedPnlFetchCount;
+        OrderCancelResult cancelResult;
+        RuntimeException cancelError;
+        String boundDuringCancel;
+        String lastCancel;
 
         FakeTradeClient(ExchangeKeyService keyService, AesEncryptor encryptor, MutableClock clock) {
             super(keyService, encryptor, clock);
@@ -321,6 +354,7 @@ class AbstractExchangeTradeClientTest {
 
         @Override public ExchangeType getExchangeType() { return ExchangeType.BYBIT; }
         @Override public BigDecimal getTakerFeeRate() { return new BigDecimal("0.00055"); }
+        @Override public BigDecimal getMakerFeeRate() { return new BigDecimal("0.0002"); }
 
         @Override protected void bindApiKey(String apiKey, String apiSecret) { bound = apiKey + "/" + apiSecret; }
         @Override protected void unbindApiKey() { bound = null; }
@@ -357,6 +391,13 @@ class AbstractExchangeTradeClientTest {
         @Override protected ClosedPnlDTO fetchClosedPnl(ClosedPnlQueryDTO query) {
             closedPnlFetchCount++;
             return closedPnls.isEmpty() ? null : closedPnls.poll();
+        }
+
+        @Override protected OrderCancelResult doCancelOrder(String symbol, String clientOrderId) {
+            boundDuringCancel = bound;
+            lastCancel = symbol + ":" + clientOrderId;
+            if (cancelError != null) throw cancelError;
+            return cancelResult;
         }
 
         @Override public boolean expectExecution(Long userId, String clientOrderId) { return false; }

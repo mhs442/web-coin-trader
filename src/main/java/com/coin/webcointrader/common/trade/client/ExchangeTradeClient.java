@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.trade.client;
 
 import com.coin.webcointrader.common.trade.dto.PositionCloseDTO;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.trade.dto.ClosedPnlDTO;
 import com.coin.webcointrader.common.trade.dto.ClosedPnlQueryDTO;
 import com.coin.webcointrader.common.trade.dto.ExecutionDTO;
@@ -30,6 +31,13 @@ public interface ExchangeTradeClient {
     BigDecimal getTakerFeeRate();
 
     /**
+     * 지정가 주문이 호가창에 걸려 있다가 체결될 때(maker)의 수수료율을 반환한다. (추정 수수료·SIM 계산용)
+     *
+     * @return maker 수수료율 (예: 0.0002 = 0.02%)
+     */
+    BigDecimal getMakerFeeRate();
+
+    /**
      * 주문을 실행한다.
      * 타임아웃 등으로 결과가 불명확하면 clientOrderId로 실제 접수 여부를 확인해 복구한다.
      *
@@ -39,6 +47,17 @@ public interface ExchangeTradeClient {
      * @throws com.coin.webcointrader.common.exception.CustomException 거래소가 주문을 거부한 경우 (ORDER_FAILED), 키 없음 (API_KEY_NOT_FOUND)
      */
     OrderResultDTO placeOrder(OrderRequestDTO request, Long userId);
+
+    /**
+     * 미체결 주문을 clientOrderId로 취소한다. (익절 지정가 취소용)
+     * 예외를 던지지 않고 결과로 반환한다.
+     *
+     * @param userId        API 키를 조회할 사용자 ID
+     * @param symbol        종목 심볼
+     * @param clientOrderId 취소할 주문의 사용자 지정 ID
+     * @return CANCELLED: 취소 성공 / NOT_FOUND: 이미 전부 체결·취소된 주문 / FAILED: 그 외 실패 (상태 불명)
+     */
+    OrderCancelResult cancelOrder(Long userId, String symbol, String clientOrderId);
 
     /**
      * 심볼의 마진 모드를 격리(Isolated)로 전환한다. 이미 격리 모드면 성공으로 처리한다.

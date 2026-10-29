@@ -79,6 +79,8 @@ public class AutoTradeController {
                                              @AuthenticationPrincipal UserDTO user) {
         TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
         ExchangeType exchangeType = ExchangeType.from(exchange);
+        // [사용자 정책 2026-10-29] 삭제 전 보유 포지션 청산 (실패 시 예외 → 삭제하지 않고 큐 유지)
+        autoTradeService.closeQueuePosition(user.getId(), id);
         patternQueueService.deleteQueue(user.getId(), id);
         // 삭제 후 해당 거래소 세션 동기화
         autoTradeService.syncSession(user.getId(), exchangeType, symbol, tradeMode);
@@ -95,7 +97,13 @@ public class AutoTradeController {
     @PatchMapping("/patterns/{id}/toggle")
     public PatternQueueResponse togglePattern(@PathVariable Long id,
                                               @AuthenticationPrincipal UserDTO user) {
-        PatternQueue toggled = patternQueueService.toggleActive(user.getId(), id);
+        PatternQueue queue = patternQueueService.getQueue(user.getId(), id);
+        boolean turnOn = !queue.isActive();
+        // [사용자 정책 2026-10-29] 끄기 전 보유 포지션 청산 (실패 시 예외 → 끄지 않고 큐 유지)
+        if (!turnOn) {
+            autoTradeService.closeQueuePosition(user.getId(), id);
+        }
+        PatternQueue toggled = patternQueueService.setActive(user.getId(), id, turnOn);
         autoTradeService.syncSession(user.getId(), toggled.getExchangeType(), toggled.getSymbol(), toggled.getTradeMode());
         return toResponse(toggled);
     }
@@ -104,7 +112,7 @@ public class AutoTradeController {
      * 전체 큐 목록 조회 (심볼 무관 - 큐 가져오기 모달용)
      *
      * @param mode     거래 모드 ("main" 또는 "sim", 기본값 "main")
-     * @param exchange 거래소 (필수, 대소문자 무시 — 미전달 시 EXCHANGE_TYPE_REQUIRED)
+     * @param exchange 거래소 (대소문자 무시, 미전달 시 모든 거래소 — 조회 전용이라 기본 거래소 정책과 무관)
      * @param user     로그인 사용자
      * @return 전체 패턴 큐 목록
      */
@@ -113,7 +121,9 @@ public class AutoTradeController {
                                                      @RequestParam(required = false) String exchange,
                                                      @AuthenticationPrincipal UserDTO user) {
         TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
-        return patternQueueService.getAllQueues(user.getId(), ExchangeType.from(exchange), tradeMode).stream()
+        // 큐 가져오기: 거래소 미지정이면 전체 거래소 조회 (조회 전용 — 등록·복사·주문은 거래소 필수 유지)
+        ExchangeType exchangeType = (exchange == null || exchange.isBlank()) ? null : ExchangeType.from(exchange);
+        return patternQueueService.getAllQueues(user.getId(), exchangeType, tradeMode).stream()
                 .map(this::toResponse)
                 .toList();
     }

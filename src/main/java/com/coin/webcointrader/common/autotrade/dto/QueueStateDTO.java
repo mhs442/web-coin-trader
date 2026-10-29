@@ -1,6 +1,8 @@
 package com.coin.webcointrader.common.autotrade.dto;
 
 import com.coin.webcointrader.common.enums.Side;
+import com.coin.webcointrader.common.enums.TradeOrderType;
+import com.coin.webcointrader.common.trade.dto.TradeHistoryDTO;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -42,6 +44,20 @@ public class QueueStateDTO {
     private BigDecimal tpPrice;        // 익절가 (POSITION_HOLDING 매도 트리거 기준, 진입 시점 계산)
     private BigDecimal slPrice;        // 손절가 (POSITION_HOLDING 청산 트리거 기준, 진입 시점 계산)
 
+    // 익절 지정가 (MAIN: 진입 확인 직후 TP가에 거는 reduceOnly 지정가 GTC, SIM은 null)
+    private String tpOrderLinkId;      // 익절 지정가 사용자 지정 주문 ID (q{큐ID}-T-{ms}, null = 미등록)
+    private String tpOrderId;          // 익절 지정가 거래소 주문 ID (null 가능)
+    private BigDecimal tpOrderPrice;   // 익절 지정가 주문 가격 (tick 반올림 후, 부분 익절 손익 계산용)
+    private int tpCancelFailCount;     // 손절 전 익절 지정가 취소 연속 실패 횟수 (5회면 큐 비활성화)
+
+    // 거래소 완료 확인 대기 (진입: 포지션 보유 확인 / 청산: 포지션 0 확인 전까지 다음 동작 보류)
+    private TradeOrderType pendingConfirmType; // 확인 대기 중인 주문 종류 (ENTRY/SELL/LIQUIDATION, null = 대기 없음)
+    private TradeHistoryDTO pendingEntryHistory; // 진입 확인 대기 중 저장을 보류한 진입 이력 (확인 결과로 SUCCESS/FAILED 저장)
+    private Side pendingCloseSignal;         // 손절 확인 후 다음 단계 진입 방향 (SELL이면 null)
+    private int closeConfirmFailCount;       // 완료 미확인 연속 횟수 (5회 시 큐 비활성화)
+    private long closeConfirmCheckedAt;      // 마지막 포지션 확인 시각 (epoch ms, 재확인 간격 제한용)
+    private boolean stopRequested;           // 큐 종료(끄기·삭제) 청산 요청됨 — 청산 확인 시 다음 단계 대신 큐 비활성화
+
     /**
      * 초기 상태로 생성한다. (TRIGGER_WAIT 페이즈)
      *
@@ -80,5 +96,15 @@ public class QueueStateDTO {
         entrySkipCount = 0;
         tpPrice = null;
         slPrice = null;
+        tpOrderLinkId = null;
+        tpOrderId = null;
+        tpOrderPrice = null;
+        tpCancelFailCount = 0;
+        pendingConfirmType = null;
+        pendingEntryHistory = null;
+        pendingCloseSignal = null;
+        closeConfirmFailCount = 0;
+        closeConfirmCheckedAt = 0L;
+        stopRequested = false;
     }
 }

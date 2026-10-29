@@ -115,6 +115,22 @@ public final class TradeCalculator {
     }
 
     /**
+     * 익절 지정가를 tickSize 단위로 맞춘다.
+     * 목표가보다 불리하지 않게 LONG(매도 지정가)은 올림, SHORT(매수 지정가)는 내림한다.
+     *
+     * @param side     포지션 방향 (LONG/SHORT)
+     * @param tpPrice  익절 목표가 (calcTpPrice 결과)
+     * @param tickSize 가격 단위
+     * @return tick 단위 익절 지정가, 0 이하가 되면 null (주문 불가)
+     */
+    public static BigDecimal roundTpLimitPrice(Side side, BigDecimal tpPrice, BigDecimal tickSize) {
+        RoundingMode mode = side == Side.LONG ? RoundingMode.CEILING : RoundingMode.FLOOR;
+        BigDecimal rounded = roundToTick(tpPrice, tickSize, mode);
+        // SHORT 고배율 익절 등으로 0 이하가 되면 지정가를 낼 수 없음
+        return rounded.signum() > 0 ? rounded : null;
+    }
+
+    /**
      * 익절(TP) 가격을 계산한다.
      * LONG: entryPrice × (1 + rate / (100 × leverage))
      * SHORT: entryPrice × (1 - rate / (100 × leverage))

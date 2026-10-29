@@ -29,6 +29,8 @@ binance:
     recv-window: 5000
   websocket:
     url: ws://localhost:0/mock-binance-ws
+    private-url: ws://localhost:0/mock-binance-private-ws/{listenKey}
+    listen-key-keepalive: 1800000
     reconnect-delay: 1000
     reconnect-max-delay: 30000
 

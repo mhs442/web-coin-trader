@@ -162,6 +162,24 @@ class PatternQueueServiceUpdateTest {
                 .hasMessageContaining(ExceptionMessage.EMPTY_STEPS.getMessage());
     }
 
+    @Test
+    @DisplayName("updateQueue: 같은 단계 두 패턴의 시작 블록이 같으면 DUPLICATE_START_BLOCK 예외 (addQueue와 동일 검증)")
+    void updateQueue_duplicateStartBlock() {
+        PatternQueue existing = makeInactiveQueue(10L, 1L, "BTCUSDT", new BigDecimal("1.0"));
+        given(patternQueueRepository.findById(10L)).willReturn(Optional.of(existing));
+
+        // L:L 과 L:S → 둘 다 LONG 시작
+        AddPatternRequest.PatternRequest secondLong = makePatternRequest(1);
+        secondLong.setLeafBlock("SHORT");
+        UpdatePatternRequest request = new UpdatePatternRequest();
+        request.setTriggerRate(new BigDecimal("1.0"));
+        request.setPatterns(List.of(makePatternRequest(1), secondLong));
+
+        assertThatThrownBy(() -> patternQueueService.updateQueue(1L, 10L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.DUPLICATE_START_BLOCK.getMessage());
+    }
+
     // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────

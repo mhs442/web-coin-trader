@@ -1,5 +1,6 @@
 package com.coin.webcointrader.common.trade.client;
 
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.trade.dto.PositionCloseDTO;
 import com.coin.webcointrader.common.trade.dto.ClosedPnlDTO;
 import com.coin.webcointrader.common.trade.dto.ClosedPnlQueryDTO;
@@ -106,6 +107,15 @@ public abstract class AbstractExchangeTradeClient implements ExchangeTradeClient
      * @return 주문 상태, 아직 조회되지 않으면 null
      */
     protected abstract OrderLookupDTO lookupOrder(OrderRequestDTO request);
+
+    /**
+     * clientOrderId로 주문을 취소한다. (키 바인딩 상태에서 호출됨)
+     *
+     * @param symbol        종목 심볼
+     * @param clientOrderId 취소할 주문의 사용자 지정 ID
+     * @return 취소 결과 (거래소 응답 코드로 CANCELLED / NOT_FOUND / FAILED 판정)
+     */
+    protected abstract OrderCancelResult doCancelOrder(String symbol, String clientOrderId);
 
     /**
      * 마진 모드를 격리로 전환한다. 이미 격리 모드면 정상 반환한다.
@@ -221,6 +231,20 @@ public abstract class AbstractExchangeTradeClient implements ExchangeTradeClient
         }
         log.warn("[{} 주문 결과 확인] 주문을 찾을 수 없음 clientOrderId={} — 실패로 처리", getExchangeType(), clientOrderId);
         return null;
+    }
+
+    /**
+     * {@inheritDoc}
+     * 키 조회 실패·네트워크 오류 등 예외는 경고 로그 후 FAILED로 반환한다. (호출 측이 결과로 분기)
+     */
+    @Override
+    public OrderCancelResult cancelOrder(Long userId, String symbol, String clientOrderId) {
+        try {
+            return withApiKey(userId, () -> doCancelOrder(symbol, clientOrderId));
+        } catch (RuntimeException e) {
+            log.warn("[{} 주문 취소] 실패 clientOrderId={}: {}", getExchangeType(), clientOrderId, e.getMessage());
+            return OrderCancelResult.FAILED;
+        }
     }
 
     /**

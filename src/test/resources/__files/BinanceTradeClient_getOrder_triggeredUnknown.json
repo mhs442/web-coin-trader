@@ -1,0 +1,19 @@
+{
+  "orderId": 22542200,
+  "symbol": "BTCUSDT",
+  "status": "FILLED",
+  "clientOrderId": "x-Wd9kPq2M",
+  "price": "0",
+  "avgPrice": "50804.0",
+  "origQty": "0.010",
+  "executedQty": "0.010",
+  "cumQuote": "508.04",
+  "reduceOnly": true,
+  "closePosition": true,
+  "side": "SELL",
+  "positionSide": "BOTH",
+  "type": "MARKET",
+  "origType": "MARKET",
+  "time": 1761530000000,
+  "updateTime": 1761530000050
+}

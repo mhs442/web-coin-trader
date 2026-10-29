@@ -165,7 +165,7 @@
                     </div>
                     <div class="step-action-buttons">
                         <button onclick="addStepToQueue()" class="trade-btn btn-outline" style="flex:1;">단계 추가</button>
-                        <button onclick="saveQueue()" class="trade-btn queue-save-btn" style="flex:1;">큐 저장</button>
+                        <button id="btn-save-queue" onclick="saveQueue()" class="trade-btn queue-save-btn" style="flex:1;">큐 저장</button>
                     </div>
                 </div>
             </div>
@@ -204,7 +204,7 @@
                 <button onclick="addEditStep()" class="trade-btn btn-outline" style="width:100%; margin-top:8px;">+ 단계 추가</button>
             </div>
             <div style="padding:12px 20px; border-top:1px solid #dee2e6; display:flex; gap:8px;">
-                <button onclick="saveEditQueue()" class="trade-btn queue-save-btn" style="flex:1;">큐 수정</button>
+                <button id="btn-save-edit-queue" onclick="saveEditQueue()" class="trade-btn queue-save-btn" style="flex:1;">큐 수정</button>
                 <button onclick="cancelEditQueue()" class="trade-btn btn-outline" style="flex:1;">취소</button>
             </div>
         </div>
@@ -246,6 +246,8 @@
         let localEntryPrice = null;          // 진입가 (POSITION_HOLDING 텍스트 갱신용)
         let localTpPrice = null;             // 익절가 (POSITION_HOLDING 텍스트 갱신용)
         let localSlPrice = null;             // 손절가 (POSITION_HOLDING 텍스트 갱신용)
+        let localTpOrderPending = false;     // 익절 지정가 체결 대기 중 여부 (POSITION_HOLDING 텍스트 갱신용)
+        let holdingQueueIds = [];            // 포지션 보유 중인 큐 ID 목록 (끄기·삭제 시 청산 확인 팝업 판단용)
 
         /** 로컬 카운터 타이머를 시작한다. 기존 타이머가 있으면 먼저 정리한다. */
         function startStatusTimer() {
@@ -294,6 +296,8 @@
                     var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
                     parts.push('변동률: ' + rateStr + '%');
                 }
+                // 익절 지정가가 거래소에 걸려 체결 대기 중 (MAIN)
+                if (localTpOrderPending && localTpPrice !== null) parts.push('익절 지정가 대기: ' + localTpPrice);
                 text = parts.join(' / ');
             }
             if (text) $info.text(text);
@@ -417,6 +421,13 @@
                     events: {
                         zoomed: function(chartContext, { xaxis }) {
                             // 사용자 줌 상태 저장
+                            isUserZoomed = true;
+                            zoomedMinX = xaxis.min;
+                            zoomedMaxX = xaxis.max;
+                        },
+                        scrolled: function(chartContext, { xaxis }) {
+                            // 이동(pan) 시에는 zoomed가 아닌 scrolled 이벤트가 발생
+                            // → 이동한 범위를 저장하지 않으면 1초 갱신 때 이전 줌 범위로 되돌아감
                             isUserZoomed = true;
                             zoomedMinX = xaxis.min;
                             zoomedMaxX = xaxis.max;
@@ -804,6 +815,11 @@
                     html += '<br><span class="sl-limit-warn">이 레버리지에서는 손절률을 반드시 입력해주세요.</span>';
                 }
             }
+            // 바이낸스 실거래: 조건부 주문 이력 조회 범위(7일) 한계 안내
+            if (getExchange() === 'BINANCE' && getTradeMode() === 'main') {
+                html += '<br><span class="sl-limit-warn">바이낸스: 포지션을 7일 넘게 보유한 뒤 거래소 안전 손절/익절이 발동하면 '
+                    + '청산 방식을 판별하지 못해 큐가 중단될 수 있습니다. (손익은 정상 기록)</span>';
+            }
             return html;
         }
 
@@ -812,6 +828,10 @@
             $('#pattern-sl-hint').html(stopLossHintHtml(1));
             $(document).on('input', '#pattern-leverage', function () {
                 $('#pattern-sl-hint').html(stopLossHintHtml(parseInt($(this).val())));
+            });
+            // 거래소 변경 시 거래소별 안내 갱신
+            $(document).on('exchangeChanged', function () {
+                $('#pattern-sl-hint').html(stopLossHintHtml(parseInt($('#pattern-leverage').val())));
             });
             $(document).on('input', '#inline-leverage', function () {
                 $('#inline-sl-hint').html(stopLossHintHtml(parseInt($(this).val())));
@@ -1276,7 +1296,7 @@
         }
 
         /**
-         * 큐 저장 (현재는 데이터 구성만, API 연동은 다음 작업)
+         * 큐 신규 등록 (POST /api/autotrade/patterns)
          */
         function saveQueue() {
             if (queueSteps.length === 0) {
@@ -1311,6 +1331,8 @@
                 cycle: document.getElementById('cycle-toggle').checked,
                 patterns: patternsData
             };
+            // 응답 전까지 버튼 비활성화 (중복 클릭으로 같은 큐가 두 번 등록 요청되는 것 방지)
+            var $saveBtn = $('#btn-save-queue').prop('disabled', true);
             $.ajax({
                 url: '/api/autotrade/patterns',
                 type: 'POST',
@@ -1323,6 +1345,9 @@
                 },
                 error: function(xhr) {
                     alert('큐 등록 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                },
+                complete: function() {
+                    $saveBtn.prop('disabled', false);
                 }
             });
         }
@@ -1747,6 +1772,8 @@
             // 평평한 patterns 데이터 구성 (단계 인덱스 + 1 = stepLevel)
             var patternsData = toPatternsRequest(editSteps);
 
+            // 응답 전까지 버튼 비활성화 (중복 클릭 방지)
+            var $saveBtn = $('#btn-save-edit-queue').prop('disabled', true);
             $.ajax({
                 url: '/api/autotrade/patterns/' + editQueueId,
                 type: 'PUT',
@@ -1759,14 +1786,34 @@
                 },
                 error: function(xhr) {
                     alert('큐 수정 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                },
+                complete: function() {
+                    $saveBtn.prop('disabled', false);
                 }
             });
+        }
+
+        /**
+         * 포지션 보유 중인 큐를 끄거나 삭제하기 전에 청산 여부를 확인한다.
+         * (서버는 확인과 무관하게 항상 청산 후 진행 — 청산 실패 시 큐 유지 + 에러 응답)
+         *
+         * @param id     큐 ID
+         * @param action 진행할 동작 이름 ("비활성화" / "삭제")
+         * @returns {boolean} 진행하면 true (보유 중이 아니면 묻지 않고 true)
+         */
+        function confirmCloseHolding(id, action) {
+            if (holdingQueueIds.indexOf(id) < 0) return true;
+            return confirm('이 큐는 포지션을 보유 중입니다.\n계속하면 보유 포지션을 시장가로 전부 청산한 뒤 ' + action
+                + '합니다. 진행하시겠습니까?');
         }
 
         /**
          * 큐 활성화/비활성화 토글
          */
         function toggleQueue(id) {
+            // 켜진 큐를 끌 때 포지션 보유 중이면 청산 확인 (취소 시 요청 안 보냄)
+            var isActive = $('.server-queue-card[data-queue-id="' + id + '"]').hasClass('queue-active');
+            if (isActive && !confirmCloseHolding(id, '비활성화')) return;
             $.ajax({
                 url: '/api/autotrade/patterns/' + id + '/toggle',
                 type: 'PATCH',
@@ -1784,6 +1831,8 @@
          * 패턴 큐 삭제
          */
         function deletePattern(id) {
+            // 포지션 보유 중이면 청산 확인 (취소 시 요청 안 보냄)
+            if (!confirmCloseHolding(id, '삭제')) return;
             $.ajax({
                 url: '/api/autotrade/patterns/' + id,
                 type: 'DELETE',
@@ -1838,7 +1887,8 @@
             $.ajax({
                 url: '/api/autotrade/patterns/all',
                 type: 'GET',
-                data: { exchange: getExchange(), mode: getTradeMode() },
+                // 거래소 미지정 → 모든 거래소의 큐 조회 (다른 거래소 큐도 가져오기 가능)
+                data: { mode: getTradeMode() },
                 success: function(queues) {
                     renderImportQueueList(queues);
                 },
@@ -1877,13 +1927,16 @@
                 var stepCount = importSteps.length;
 
                 // 요약 행 (클릭 시 상세 드롭다운 토글)
+                // 원본 거래소 뱃지 (어느 거래소 큐인지 구분)
+                var exchangeBadge = '<span class="badge-exchange">' + getExchangeName(q.exchangeType) + '</span>';
+
                 html += '<tr class="import-summary-row" onclick="toggleImportDetail(\'' + rowId + '\')">' +
                     '<td><span class="import-toggle-icon" id="icon-' + rowId + '">▶</span></td>' +
-                    '<td><strong>' + q.symbol + '</strong></td>' +
+                    '<td>' + exchangeBadge + ' <strong>' + q.symbol + '</strong></td>' +
                     '<td>' + q.triggerRate + '%</td>' +
                     '<td>' + stepCount + '단계</td>' +
                     '<td>' + statusLabel + '</td>' +
-                    '<td><button class="import-select-btn" onclick="event.stopPropagation(); selectImportQueue(' + q.id + ')">선택</button></td>' +
+                    '<td><button class="import-select-btn" onclick="event.stopPropagation(); selectImportQueue(' + q.id + ', \'' + q.exchangeType + '\')">선택</button></td>' +
                     '</tr>';
 
                 // 상세 드롭다운 행 (패턴을 단계별로 묶어 표시)
@@ -1936,11 +1989,18 @@
         }
 
         /**
-         * 선택한 큐를 현재 코인 심볼로 복사한다.
-         * @param queueId 복사할 원본 큐 ID
+         * 선택한 큐를 현재 거래소의 현재 코인 심볼로 복사한다.
+         * @param queueId        복사할 원본 큐 ID
+         * @param originExchange 원본 큐의 거래소 타입
          */
-        function selectImportQueue(queueId) {
-            if (!confirm('선택한 큐를 현재 코인(' + symbol + ')에 복사하시겠습니까?')) return;
+        function selectImportQueue(queueId, originExchange) {
+            let message = '선택한 큐를 현재 코인(' + symbol + ')에 복사하시겠습니까?';
+            // 다른 거래소 큐 → 복사 방향 안내 (원본 큐는 그대로 유지)
+            if (originExchange && originExchange !== getExchange()) {
+                message = getExchangeName(originExchange) + ' 큐를 ' + getExchangeName(getExchange())
+                    + '(현재 거래소)의 ' + symbol + '에 복사합니다. 진행하시겠습니까?';
+            }
+            if (!confirm(message)) return;
 
             $.ajax({
                 url: '/api/autotrade/patterns/' + queueId + '/copy',
@@ -2294,6 +2354,8 @@
                 localEntryPrice = null;
                 localTpPrice = null;
                 localSlPrice = null;
+                localTpOrderPending = false;
+                holdingQueueIds = [];
                 return;
             }
 
@@ -2306,6 +2368,8 @@
             localEntryPrice = data.entryPrice;
             localTpPrice = data.tpPrice;
             localSlPrice = data.slPrice;
+            localTpOrderPending = data.tpOrderPending === true;
+            holdingQueueIds = data.holdingQueueIds || []; // 비활성 응답은 null → 보유 없음
 
             // 현재 실행 중인 큐 카드 찾기
             var $queueCard = $('.server-queue-card[data-queue-id="' + data.currentQueueId + '"]');
@@ -2320,7 +2384,7 @@
             $queueCard.find('.step-card').removeClass('step-active');
             $queueCard.find('.step-active-badge').remove();
             $queueCard.find('.trigger-state-info').remove();
-            $queueCard.find('.block-tag').removeClass('block-current block-matched');
+            $queueCard.find('.block-tag').removeClass('block-current block-matched block-order-pending');
 
             var $activeStep = $queueCard.find('.step-card[data-step-level="' + data.currentStepLevel + '"]');
             $activeStep.addClass('step-active');
@@ -2337,6 +2401,8 @@
                     var $leaf = $patternRow.find('.step-pattern-blocks').last().find('.block-tag');
                     $patternRow.find('.block-tag').not($leaf).addClass('block-matched');
                     $leaf.addClass('block-current');
+                    // 익절 지정가 체결 대기 중이면 leaf에 스피너 표시
+                    if (data.tpOrderPending) $leaf.addClass('block-order-pending');
                 } else {
                     // BLOCK_MATCHING: 이전 블록은 완료, 현재 블록만 깜빡임
                     $patternRow.find('.block-tag').each(function() {
@@ -2375,6 +2441,8 @@
                     var rateStr = localChangeRate >= 0 ? '+' + localChangeRate.toFixed(2) : localChangeRate.toFixed(2);
                     parts.push('변동률: ' + rateStr + '%');
                 }
+                // 익절 지정가가 거래소에 걸려 체결 대기 중 (MAIN)
+                if (localTpOrderPending && localTpPrice !== null) parts.push('익절 지정가 대기: ' + localTpPrice);
                 triggerHtml = '<div class="trigger-state-info">' + parts.join(' / ') + '</div>';
                 // 차트 가로선 갱신 (TP=초록 / SL=빨강 점선)
                 if (data.entryPrice !== null) {

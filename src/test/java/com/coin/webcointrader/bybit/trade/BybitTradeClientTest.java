@@ -4,6 +4,8 @@ import com.coin.webcointrader.bybit.trade.PositionClient;
 import com.coin.webcointrader.bybit.stream.BybitExecutionWaiter;
 import com.coin.webcointrader.bybit.stream.BybitPrivateWebSocketClient;
 import com.coin.webcointrader.bybit.stream.dto.WebSocketExecutionDTO;
+import com.coin.webcointrader.bybit.trade.dto.CancelOrderRequest;
+import com.coin.webcointrader.bybit.trade.dto.CancelOrderResponse;
 import com.coin.webcointrader.bybit.trade.dto.CreateOrderRequest;
 import com.coin.webcointrader.bybit.trade.dto.SetLeverageRequest;
 import com.coin.webcointrader.bybit.trade.dto.SetMarginModeRequest;
@@ -16,6 +18,7 @@ import com.coin.webcointrader.bybit.trade.dto.SetLeverageResponse;
 import com.coin.webcointrader.bybit.trade.dto.SetMarginModeResponse;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.enums.PositionCloseType;
 import com.coin.webcointrader.common.exception.CustomException;
@@ -147,6 +150,85 @@ class BybitTradeClientTest {
         CreateOrderRequest sent = capturedOrder();
         assertThat(sent.getSide()).isEqualTo("Sell");
         assertThat(sent.getReduceOnly()).isTrue();
+    }
+
+    @Test
+    @DisplayName("placeOrder: price가 있으면 지정가(Limit)·가격·GTC로 변환한다 (익절 지정가)")
+    void placeOrder_mapsLimitOrder() {
+        stubApiKey(1L);
+        given(tradeClient.createOrder(any())).willReturn(ResponseEntity.ok(makeCreateOrderResponse("0", "order-1")));
+
+        client.placeOrder(OrderRequestDTO.builder()
+                .symbol("BTCUSDT").side(OrderSide.SELL).qty("0.01").reduceOnly(true)
+                .price("52000.5").clientOrderId("q1-T-1").build(), 1L);
+
+        CreateOrderRequest sent = capturedOrder();
+        assertThat(sent.getOrderType()).isEqualTo("Limit");
+        assertThat(sent.getPrice()).isEqualTo("52000.5");
+        assertThat(sent.getTimeInForce()).isEqualTo("GTC");
+        assertThat(sent.getReduceOnly()).isTrue();
+        assertThat(sent.getOrderLinkId()).isEqualTo("q1-T-1");
+    }
+
+    // ─────────────────────────────────────────────
+    // cancelOrder: 주문 취소 (POST /v5/order/cancel)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("cancelOrder: linear·심볼·orderLinkId로 취소하고 retCode 0이면 CANCELLED")
+    void cancelOrder_success() {
+        stubApiKey(1L);
+        given(tradeClient.cancelOrder(any())).willReturn(ResponseEntity.ok(makeCancelOrderResponse("0")));
+
+        OrderCancelResult result = client.cancelOrder(1L, "BTCUSDT", "q1-T-1");
+
+        ArgumentCaptor<CancelOrderRequest> captor = ArgumentCaptor.forClass(CancelOrderRequest.class);
+        then(tradeClient).should().cancelOrder(captor.capture());
+        assertThat(captor.getValue().getCategory()).isEqualTo("linear");
+        assertThat(captor.getValue().getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(captor.getValue().getOrderLinkId()).isEqualTo("q1-T-1");
+        assertThat(result).isEqualTo(OrderCancelResult.CANCELLED);
+    }
+
+    @Test
+    @DisplayName("cancelOrder: retCode 110001(주문 없음·이미 체결)이면 NOT_FOUND")
+    void cancelOrder_notFound() {
+        stubApiKey(1L);
+        given(tradeClient.cancelOrder(any())).willReturn(ResponseEntity.ok(makeCancelOrderResponse("110001")));
+
+        assertThat(client.cancelOrder(1L, "BTCUSDT", "q1-T-1")).isEqualTo(OrderCancelResult.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("cancelOrder: 그 외 retCode면 FAILED")
+    void cancelOrder_otherRetCode_failed() {
+        stubApiKey(1L);
+        given(tradeClient.cancelOrder(any())).willReturn(ResponseEntity.ok(makeCancelOrderResponse("10006")));
+
+        assertThat(client.cancelOrder(1L, "BTCUSDT", "q1-T-1")).isEqualTo(OrderCancelResult.FAILED);
+    }
+
+    @Test
+    @DisplayName("cancelOrder: 타임아웃 등 예외는 FAILED (예외 전파 안 함)")
+    void cancelOrder_exception_failed() {
+        stubApiKey(1L);
+        given(tradeClient.cancelOrder(any())).willThrow(makeTimeoutException());
+
+        assertThat(client.cancelOrder(1L, "BTCUSDT", "q1-T-1")).isEqualTo(OrderCancelResult.FAILED);
+    }
+
+    @Test
+    @DisplayName("placeOrder: price가 없으면 시장가로 보내고 가격·timeInForce는 생략한다")
+    void placeOrder_marketOmitsPrice() {
+        stubApiKey(1L);
+        given(tradeClient.createOrder(any())).willReturn(ResponseEntity.ok(makeCreateOrderResponse("0", "order-1")));
+
+        client.placeOrder(order("q1-E-1"), 1L);
+
+        CreateOrderRequest sent = capturedOrder();
+        assertThat(sent.getOrderType()).isEqualTo("Market");
+        assertThat(sent.getPrice()).isNull();
+        assertThat(sent.getTimeInForce()).isNull();
     }
 
     @Test
@@ -783,6 +865,13 @@ class BybitTradeClientTest {
         return d;
     }
 
+    private CancelOrderResponse makeCancelOrderResponse(String retCode) {
+        CancelOrderResponse response = new CancelOrderResponse();
+        response.setRetCode(retCode);
+        response.setRetMsg("0".equals(retCode) ? "OK" : "error");
+        return response;
+    }
+
     private CreateOrderResponse makeCreateOrderResponse(String retCode, String orderId) {
         CreateOrderResponse response = new CreateOrderResponse();
         response.setRetCode(retCode);
@@ -951,5 +1040,11 @@ class BybitTradeClientTest {
     @DisplayName("getTakerFeeRate: Bybit Linear(USDT 선물) taker 수수료율 0.055%")
     void takerFeeRate() {
         assertThat(client.getTakerFeeRate()).isEqualByComparingTo("0.00055");
+    }
+
+    @Test
+    @DisplayName("getMakerFeeRate: Bybit Linear(USDT 선물) maker 수수료율 0.02%")
+    void makerFeeRate() {
+        assertThat(client.getMakerFeeRate()).isEqualByComparingTo("0.0002");
     }
 }

@@ -16,6 +16,7 @@ public class CreateOrderRequest {
     private String orderType;   // 주문 유형 (Market / Limit)
     private String qty;         // 주문 수량
     private String price;       // 주문 가격 (Limit 주문 시 필수)
+    private String timeInForce; // 주문 유효 방식 (GTC: 취소·체결 전까지 유효, Limit 주문용)
     private String marketUnit;  // 수량 단위 (baseCoin: 코인 수량, quoteCoin: USDT 금액)
     private Integer positionIdx; // 포지션 인덱스 (0: 단방향 모드, 1: 헤지 Buy, 2: 헤지 Sell)
     private Boolean reduceOnly; // true: 포지션 축소/청산 전용 주문 (새 포지션 열림 방지)

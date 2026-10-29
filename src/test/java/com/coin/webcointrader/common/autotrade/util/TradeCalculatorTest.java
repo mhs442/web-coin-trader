@@ -144,4 +144,41 @@ class TradeCalculatorTest {
                     .isEqualByComparingTo("0.0556");
         }
     }
+
+    @Nested
+    @DisplayName("roundTpLimitPrice (익절 지정가 tick 맞춤)")
+    class RoundTpLimitPriceTest {
+
+        private final BigDecimal tick = new BigDecimal("0.1");
+
+        @Test
+        @DisplayName("LONG(매도 지정가): 목표가보다 낮아지지 않게 올림")
+        void longCeiling() {
+            assertThat(TradeCalculator.roundTpLimitPrice(Side.LONG, new BigDecimal("100.123"), tick))
+                    .isEqualByComparingTo("100.2");
+        }
+
+        @Test
+        @DisplayName("SHORT(매수 지정가): 목표가보다 높아지지 않게 내림")
+        void shortFloor() {
+            assertThat(TradeCalculator.roundTpLimitPrice(Side.SHORT, new BigDecimal("99.987"), tick))
+                    .isEqualByComparingTo("99.9");
+        }
+
+        @Test
+        @DisplayName("이미 tick 배수면 그대로")
+        void alreadyOnTick() {
+            assertThat(TradeCalculator.roundTpLimitPrice(Side.LONG, new BigDecimal("100.3"), tick))
+                    .isEqualByComparingTo("100.3");
+            assertThat(TradeCalculator.roundTpLimitPrice(Side.SHORT, new BigDecimal("100.3"), tick))
+                    .isEqualByComparingTo("100.3");
+        }
+
+        @Test
+        @DisplayName("0 이하가 되면 null (SHORT 고배율 익절 등)")
+        void nonPositive_null() {
+            assertThat(TradeCalculator.roundTpLimitPrice(Side.SHORT, new BigDecimal("0.05"), tick)).isNull();
+            assertThat(TradeCalculator.roundTpLimitPrice(Side.SHORT, new BigDecimal("-3"), tick)).isNull();
+        }
+    }
 }

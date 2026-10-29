@@ -28,6 +28,9 @@ import com.coin.webcointrader.common.autotrade.util.TradeCalculator;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.TradeMode;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
+import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeOrderType;
 import com.coin.webcointrader.common.market.service.MarketService;
@@ -46,7 +49,11 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
@@ -89,6 +96,15 @@ public class AutoTradeService {
     private static final long EXTERNAL_CLOSE_RECONCILE_INTERVAL_MS = 30_000L;
     // 진입 시각이 없는 상태(재시작 직후 등)의 청산 내역 검색 범위: 거래소 청산 손익 최대 조회 범위(7일, Bybit closed-pnl 기준)
     private static final long RECONCILE_FALLBACK_LOOKBACK_MS = 7L * 24 * 60 * 60 * 1000L;
+    // [사용자 정책 2026-10-29] 청산 주문 접수 후 거래소 포지션 0 확인: 재확인 간격 1초, 5회 연속 미확인 시 큐 비활성화
+    private static final long CLOSE_CONFIRM_INTERVAL_MS = 1000L;
+    private static final int CLOSE_CONFIRM_MAX_FAILS = 5;
+    // 큐 종료 청산 대기 한도 (초): 레인이 주문·확인 중이면 그만큼 기다림, 초과 시 실패 응답
+    private static final long QUEUE_CLOSE_TIMEOUT_SEC = 30L;
+    // 익절 지정가 등록 실패 이력의 오류 메시지 접두어
+    private static final String TP_LIMIT_FAILED_PREFIX = "[익절 지정가 등록 실패] ";
+    // 이력 저장 실패 fallback 이력의 오류 메시지 접두어 (실제 주문 실패와 구분)
+    private static final String HISTORY_SAVE_FAILED_PREFIX = "[이력 저장 실패] 체결은 완료됨 — ";
     // 앱이 보낸 매도/청산 주문의 orderLinkId (q{큐ID}-S/L-{millis}) — 외부 청산 판단에서 제외
     // (진입 E는 거래소 TP/SL 발동 주문이 원주문 링크를 이어받을 가능성이 있어 제외 대상에 넣지 않음)
     private static final java.util.regex.Pattern OWN_CLOSE_LINK_ID = java.util.regex.Pattern.compile("^q\\d+-[SL]-\\d+$");
@@ -209,6 +225,8 @@ public class AutoTradeService {
                     session.getPendingCloses().clear();
                     session.getPendingKlines().clear();
                     session.getLatestPrice().set(null);
+                    // 사용자 명령은 응답을 기다리는 요청이 있으므로 실행해 완료시킴 (보유 큐가 없으면 즉시 끝남)
+                    runPendingCommands(session);
                     return;
                 }
 
@@ -221,6 +239,12 @@ public class AutoTradeService {
                         log.error(LogMessage.AUTO_TRADE_WS_ERROR.getMessage(), session.getSymbol(), e.getMessage());
                         session.addLog(now() + " [오류] " + e.getMessage());
                     }
+                    pushAutoTradeStatus(session);
+                }
+
+                // 0-1) 사용자 명령 (큐 종료 청산 등) — 외부 청산 반영 후, 다음 가격 처리 전에 실행
+                if (!session.getPendingCommands().isEmpty()) {
+                    runPendingCommands(session);
                     pushAutoTradeStatus(session);
                 }
 
@@ -254,9 +278,17 @@ public class AutoTradeService {
             session.getLaneScheduled().set(false);
             // 플래그 해제 직전에 들어온 값은 WS 스레드가 제출하지 못했으므로 재제출 (처리 누락 방지)
             if (session.getLatestPrice().get() != null || !session.getPendingKlines().isEmpty()
-                    || !session.getPendingCloses().isEmpty()) {
+                    || !session.getPendingCloses().isEmpty() || !session.getPendingCommands().isEmpty()) {
                 scheduleLane(session);
             }
+        }
+    }
+
+    /** 세션 레인에 쌓인 사용자 명령을 순서대로 실행한다. (명령이 자체적으로 결과를 호출 측에 전달) */
+    private void runPendingCommands(AutoTradeSessionDTO session) {
+        Runnable command;
+        while ((command = session.getPendingCommands().poll()) != null) {
+            command.run();
         }
     }
 
@@ -502,6 +534,17 @@ public class AutoTradeService {
         BigDecimal tpPrice = null; // 익절가 (POSITION_HOLDING 시 노출)
         BigDecimal slPrice = null; // 손절가 (POSITION_HOLDING 시 노출)
 
+        // 포지션 보유 여부·익절 지정가 대기는 시세와 무관하게 상태로 판단
+        List<Long> holdingQueueIds = session.getQueues().stream()
+                .map(PatternQueue::getId)
+                .filter(id -> {
+                    QueueStateDTO s = session.getQueueStates().get(id);
+                    return s != null && s.getPhase() == TradePhase.POSITION_HOLDING;
+                })
+                .toList();
+        boolean tpOrderPending = state != null && state.getPhase() == TradePhase.POSITION_HOLDING
+                && state.getTpOrderLinkId() != null;
+
         TickerDTO wsTicker = marketService.getTicker(exchangeType, symbol);
         String currentPrice = wsTicker != null ? wsTicker.getLastPrice() : null;
 
@@ -562,6 +605,8 @@ public class AutoTradeService {
                 .entryPrice(entryPrice)
                 .tpPrice(tpPrice)
                 .slPrice(slPrice)
+                .tpOrderPending(tpOrderPending)
+                .holdingQueueIds(holdingQueueIds)
                 .build();
     }
 
@@ -986,8 +1031,33 @@ public class AutoTradeService {
 
             history.setExecutedPrice(new BigDecimal(actualEntryPrice));
             history.setFee(actualEntryFee);
-            history.setOrderResult(OrderResult.SUCCESS);
-            saveTradeHistory(history, session.getTradeMode());
+            history.setOrderId(orderId);
+
+            // [사용자 정책 2026-10-29] 실체결 조회 실패(MAIN) 시 거래소 포지션으로 진입 체결을 확인한 뒤에만 보유 전환
+            boolean confirmPending = false;
+            if (exec == null && session.getTradeMode() != TradeMode.SIM) {
+                BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+                if (positionSize != null && positionSize.signum() == 0) {
+                    // 포지션 0 → 진입 미체결
+                    failUnfilledEntry(queue, state, session, history);
+                    return;
+                }
+                // 조회 실패 → 확인 대기 (이력 저장 보류)
+                confirmPending = positionSize == null;
+            }
+
+            if (confirmPending) {
+                state.setPendingConfirmType(TradeOrderType.ENTRY);
+                state.setPendingEntryHistory(history);
+                state.setCloseConfirmFailCount(1);
+                state.setCloseConfirmCheckedAt(System.currentTimeMillis());
+                log.warn(LogMessage.ENTRY_NOT_CONFIRMED.getMessage(), queue.getId(), null, 1);
+                session.addLog(now() + " [진입 확인 대기] 거래소 포지션 확인 전까지 익절·손절 판단을 보류합니다 (큐 #" + queue.getId() + ")");
+            } else {
+                history.setOrderResult(OrderResult.SUCCESS);
+                // [사용자 정책 2026-10-29] 거래소 체결이 완료됐으므로 이력 저장 실패로 진입을 실패 처리하지 않는다 (fallback 이력만 남김)
+                saveTradeHistoryOrFallback(history, orderId, session.getTradeMode(), queue.getId());
+            }
 
             // 실체결가 / 실수수료를 state에 저장 (TP/SL 기준 및 InvestmentHistory 저장에 사용)
             state.setEntryPrice(actualEntryPrice);
@@ -1019,6 +1089,11 @@ public class AutoTradeService {
 
             // POSITION_HOLDING 페이즈로 전환 (이후 실시간 가격 vs TP/SL 비교)
             state.setPhase(TradePhase.POSITION_HOLDING);
+
+            // 진입이 확인된 경우에만 익절 지정가 등록 (확인 대기면 확인 완료 시 등록)
+            if (!confirmPending) {
+                placeTpLimitOrder(queue, state, session, currentPrice);
+            }
 
         } catch (Exception e) {
             state.setEntryPrice(null);
@@ -1119,6 +1194,14 @@ public class AutoTradeService {
      */
     void processPositionHolding(PatternQueue queue, QueueStateDTO state,
                                 AutoTradeSessionDTO session, String currentPrice) {
+        // 진입·청산 주문 접수 후 완료 확인 대기 중 → 신규 주문 없이 포지션만 재확인 (간격 제한)
+        if (state.getPendingConfirmType() != null) {
+            if (System.currentTimeMillis() - state.getCloseConfirmCheckedAt() >= CLOSE_CONFIRM_INTERVAL_MS) {
+                checkPendingConfirm(queue, state, session);
+            }
+            return;
+        }
+
         // 방어 코드: TP/SL 미세팅 (정상 흐름에서는 발생하지 않음)
         if (state.getTpPrice() == null || state.getSlPrice() == null) {
             log.warn("[POSITION_HOLDING] TP/SL 미설정 - queueId={}", queue.getId());
@@ -1129,24 +1212,29 @@ public class AutoTradeService {
         if (pattern == null) return;
 
         BigDecimal current = new BigDecimal(currentPrice);
+        boolean tpLimitPending = state.getTpOrderLinkId() != null;
 
         if (state.getDirection() == Side.LONG) {
-            // LONG 익절: 가격 상승해 TP 도달
+            // LONG 익절: 가격 상승해 TP 도달 (익절 지정가가 걸려 있으면 거래소 체결 이벤트로 처리)
             if (current.compareTo(state.getTpPrice()) >= 0) {
+                if (tpLimitPending) return;
                 handleSellSuccess(queue, state, session, pattern, currentPrice);
             }
             // LONG 손절: 가격 하락해 SL 도달 → 반대(SHORT) 방향 신호로 다음 단계 이동
             else if (current.compareTo(state.getSlPrice()) <= 0) {
-                handleLiquidation(queue, state, session, pattern, Side.SHORT, currentPrice);
+                if (tpLimitPending) handleStopLossWithTpLimit(queue, state, session, pattern, Side.SHORT, currentPrice);
+                else handleLiquidation(queue, state, session, pattern, Side.SHORT, currentPrice);
             }
         } else {
-            // SHORT 익절: 가격 하락해 TP 도달
+            // SHORT 익절: 가격 하락해 TP 도달 (익절 지정가가 걸려 있으면 거래소 체결 이벤트로 처리)
             if (current.compareTo(state.getTpPrice()) <= 0) {
+                if (tpLimitPending) return;
                 handleSellSuccess(queue, state, session, pattern, currentPrice);
             }
             // SHORT 손절: 가격 상승해 SL 도달 → 반대(LONG) 방향 신호로 다음 단계 이동
             else if (current.compareTo(state.getSlPrice()) >= 0) {
-                handleLiquidation(queue, state, session, pattern, Side.LONG, currentPrice);
+                if (tpLimitPending) handleStopLossWithTpLimit(queue, state, session, pattern, Side.LONG, currentPrice);
+                else handleLiquidation(queue, state, session, pattern, Side.LONG, currentPrice);
             }
         }
     }
@@ -1191,9 +1279,19 @@ public class AutoTradeService {
             history.setOrderType(TradeOrderType.SELL.getTradeOrderType());
             history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
 
+            // [사용자 정책 2026-10-29] SIM 익절은 실거래 익절 지정가와 같게: 체결가 = 지정가, 수수료 = maker
+            //   (지정가는 진입 시 미리 계산, 없으면 익절가). MAIN은 기존대로 현재가·taker
+            String closePrice = currentPrice;
+            BigDecimal exitFeeRate = takerFeeRate(session.getExchangeType());
+            if (session.getTradeMode() == TradeMode.SIM) {
+                BigDecimal simTpPrice = state.getTpOrderPrice() != null ? state.getTpOrderPrice() : state.getTpPrice();
+                closePrice = simTpPrice.toPlainString();
+                exitFeeRate = adapterRegistry.trade(session.getExchangeType()).getMakerFeeRate();
+            }
+
             // 추정 수수료: 주문 실패 시 TradeFacade가 이 값으로 이력을 저장하므로 fallback용으로 먼저 세팅
             BigDecimal estimatedExitFee = TradeCalculator.calcFee(
-                    new BigDecimal(currentPrice), new BigDecimal(closeQty), takerFeeRate(session.getExchangeType()));
+                    new BigDecimal(closePrice), new BigDecimal(closeQty), exitFeeRate);
             history.setFee(estimatedExitFee);
 
             String orderLinkId = newOrderLinkId(queue, "S");
@@ -1210,14 +1308,15 @@ public class AutoTradeService {
 
             // 체결 조회·이력 저장은 후처리 실행기에 위임 (상태 리셋 전에 진입 정보 스냅샷)
             submitCloseRecord(CloseRecord.of(orderResult, orderLinkId, history, "매도", queue, state, session,
-                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee), session);
+                    pattern, closeSide, closeQty, closePrice, estimatedExitFee), session);
 
-            // 즉시 로그는 현재가 기준 추정 금액 (실체결가는 후처리 완료 시 [체결 확정] 로그로 표시)
+            // 즉시 로그는 체결 기준가 추정 금액 (실체결가는 후처리 완료 시 [체결 확정] 로그로 표시)
             session.addLog(now() + " [매도 성공] " + closeSide + " "
-                    + estimateCloseValue(closeQty, currentPrice) + "$ (추정)"
+                    + estimateCloseValue(closeQty, closePrice) + "$ (추정)"
                     + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
 
-            resetToFirstStepAfterSell(queue, state, session);
+            // 거래소 청산 완료 확인 후에만 1단계 리셋
+            awaitCloseConfirmed(queue, state, session, TradeOrderType.SELL, null);
 
         } catch (Exception e) {
             // 주문 실패 (TradeFacade에서 이미 history 저장 완료) → 이미 닫힌 포지션인지 확인 후 처리
@@ -1255,6 +1354,10 @@ public class AutoTradeService {
         state.setEntryTime(null);
         state.setTpPrice(null);
         state.setSlPrice(null);
+        state.setTpOrderLinkId(null);
+        state.setTpOrderId(null);
+        state.setTpOrderPrice(null);
+        state.setTpCancelFailCount(0);
         state.setBlockBaseTime(null);
         state.setBlockBasePrice(null);
         state.setPhase(TradePhase.BLOCK_MATCHING);
@@ -1274,6 +1377,26 @@ public class AutoTradeService {
     private void handleLiquidation(PatternQueue queue, QueueStateDTO state,
                                    AutoTradeSessionDTO session, Pattern currentPattern,
                                    Side liquidationDirection, String currentPrice) {
+        closeForStopLoss(queue, state, session, currentPattern, liquidationDirection, currentPrice, null, null, false);
+    }
+
+    /**
+     * 손절 시장가 청산 본문. 부분 익절 후 손절(D1)이면 잔여 수량만 청산하고, 합산 손익 부호에 따라 전환 경로를 정한다.
+     *
+     * @param queue                현재 큐
+     * @param state                큐 런타임 상태
+     * @param session              세션
+     * @param currentPattern       현재 활성 패턴
+     * @param liquidationDirection 청산을 유발한 신호 방향 (손절 경로의 다음 단계 진입 방향)
+     * @param currentPrice         현재가
+     * @param closeQtyOverride     청산 수량 (null이면 진입 수량 전량)
+     * @param partialTp            부분 익절 체결 정보 (없으면 null)
+     * @param takeProfitPath       true면 청산 확인 후 익절 경로(1단계·같은 방향), false면 손절 경로(다음 단계·반대 방향)
+     */
+    private void closeForStopLoss(PatternQueue queue, QueueStateDTO state,
+                                  AutoTradeSessionDTO session, Pattern currentPattern,
+                                  Side liquidationDirection, String currentPrice,
+                                  String closeQtyOverride, PartialTpFill partialTp, boolean takeProfitPath) {
         session.addLog(now() + " [청산] " + liquidationDirection + " 발생"
                 + " (큐 #" + queue.getId() + ", " + state.getCurrentStepLevel() + "단계)");
 
@@ -1281,8 +1404,8 @@ public class AutoTradeService {
         OrderSide closeSide = state.getDirection() == Side.LONG ? OrderSide.SELL : OrderSide.BUY;
 
         try {
-            // 진입 시 저장한 qty 사용 (현재가 재계산 시 포지션 일부만 청산되는 문제 방지)
-            String closeQty = state.getEntryQty();
+            // 진입 시 저장한 qty 사용 (현재가 재계산 시 포지션 일부만 청산되는 문제 방지), 부분 익절 후면 잔여 수량
+            String closeQty = closeQtyOverride != null ? closeQtyOverride : state.getEntryQty();
             if (closeQty == null || "0".equals(closeQty)) {
                 // 진입 수량 정보 없음 → 스킵 횟수 제한 적용
                 int skipCount = state.getCloseSkipCount() + 1;
@@ -1304,7 +1427,10 @@ public class AutoTradeService {
             history.setExchangeType(session.getExchangeType()); // 세션 거래소 기록
             history.setSide(state.getDirection());
             history.setOrderType(TradeOrderType.LIQUIDATION.getTradeOrderType());
-            history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
+            // 마진(실제 투자금) 저장, 부분 익절 후면 잔여 수량 비율만큼
+            history.setAmount(partialTp != null
+                    ? proportionalMargin(state.getEntryMargin(), closeQty, state.getEntryQty())
+                    : state.getEntryMargin());
 
             // 추정 수수료: 주문 실패 시 TradeFacade가 이 값으로 이력을 저장하므로 fallback용으로 먼저 세팅
             BigDecimal estimatedExitFee = TradeCalculator.calcFee(
@@ -1324,7 +1450,7 @@ public class AutoTradeService {
 
             // 체결 조회·이력 저장은 후처리 실행기에 위임 (상태 이동 전에 진입 정보 스냅샷)
             submitCloseRecord(CloseRecord.of(orderResult, orderLinkId, history, "청산", queue, state, session,
-                    currentPattern, closeSide, closeQty, currentPrice, estimatedExitFee), session);
+                    currentPattern, closeSide, closeQty, currentPrice, estimatedExitFee).withPartialTp(partialTp), session);
             state.setEntryMargin(null); // 포지션 리셋 시 초기화
 
             // 즉시 로그는 현재가 기준 추정 금액 (실체결가는 후처리 완료 시 [체결 확정] 로그로 표시)
@@ -1339,7 +1465,232 @@ public class AutoTradeService {
             return;
         }
 
-        moveToNextStepAfterLiquidation(queue, state, session, liquidationDirection);
+        // 거래소 청산 완료 확인 후에만 상태 전환 (부분 익절 합산 손익 ≥ 0이면 익절 경로)
+        if (takeProfitPath) {
+            awaitCloseConfirmed(queue, state, session, TradeOrderType.SELL, null);
+        } else {
+            awaitCloseConfirmed(queue, state, session, TradeOrderType.LIQUIDATION, liquidationDirection);
+        }
+    }
+
+    /**
+     * 익절 지정가가 걸린 상태의 손절 처리 (2-2).
+     * 익절 지정가를 먼저 취소하고 거래소 잔여 포지션으로 익절 체결 수량을 판단한다.
+     * - 취소 실패·포지션 조회 실패(④): 이번 틱 손절 보류, 1초 간격 재시도, 5회 연속이면 큐 비활성화
+     * - 잔여 0: 익절 전량 체결 또는 거래소 청산 → 시장가 손절 생략, 거래소 청산 내역 기준으로 전환
+     * - 체결 없음: 전량 시장가 손절 (기존과 동일)
+     * - 부분 체결(D1): 잔여만 시장가 청산, 합산 추정 손익 ≥ 0이면 익절 경로 / < 0이면 손절 경로
+     *
+     * @param queue                현재 큐
+     * @param state                큐 런타임 상태 (tpOrderLinkId 설정됨)
+     * @param session              세션
+     * @param pattern              현재 활성 패턴
+     * @param liquidationDirection 손절 경로의 다음 단계 진입 방향
+     * @param currentPrice         현재가
+     */
+    private void handleStopLossWithTpLimit(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                           Pattern pattern, Side liquidationDirection, String currentPrice) {
+        // 재시도 중이면 1초 간격으로만 시도
+        long nowMs = System.currentTimeMillis();
+        if (state.getTpCancelFailCount() > 0 && nowMs - state.getCloseConfirmCheckedAt() < CLOSE_CONFIRM_INTERVAL_MS) return;
+        state.setCloseConfirmCheckedAt(nowMs);
+
+        // 1) 익절 지정가 취소 — NOT_FOUND(이미 전량 체결·취소)도 주문이 없다는 뜻이므로 진행
+        OrderCancelResult cancelResult = tradeFacade.cancelOrder(session.getUserId(), session.getSymbol(),
+                state.getTpOrderLinkId(), session.getExchangeType(), session.getTradeMode());
+        if (cancelResult != OrderCancelResult.CANCELLED && cancelResult != OrderCancelResult.NOT_FOUND) {
+            holdStopLossForTpCancel(queue, state, session, "익절 지정가 취소 실패");
+            return;
+        }
+
+        // 2) 취소 후 잔여 포지션 확인
+        BigDecimal remaining = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+        if (remaining == null) {
+            holdStopLossForTpCancel(queue, state, session, "익절 지정가 취소 후 포지션 조회 실패");
+            return;
+        }
+        state.setTpCancelFailCount(0);
+
+        if (remaining.signum() == 0) {
+            // 포지션 이미 0 → 시장가 손절 생략, 거래소 청산 내역(익절 체결 등) 기준으로 전환
+            session.addLog(now() + " [손절 생략] 포지션이 이미 닫혀 있어 거래소 청산 내역 기준으로 처리합니다 (큐 #" + queue.getId() + ")");
+            handleCloseOrderFailure(queue, state, session, "손절 전 포지션 0 확인 후 청산 내역 처리 실패");
+            return;
+        }
+
+        // 익절 지정가는 더 이상 없음 → 상태 정리 (부분 체결 이력용 값은 지역 변수로 보관)
+        String tpOrderId = state.getTpOrderId();
+        BigDecimal tpPrice = state.getTpOrderPrice() != null ? state.getTpOrderPrice() : state.getTpPrice();
+        state.setTpOrderLinkId(null);
+        state.setTpOrderId(null);
+        state.setTpOrderPrice(null);
+
+        BigDecimal entryQty = new BigDecimal(state.getEntryQty());
+        BigDecimal filled = entryQty.subtract(remaining);
+        if (filled.signum() <= 0) {
+            // 익절 체결 없음 → 전량 손절 (기존 흐름)
+            handleLiquidation(queue, state, session, pattern, liquidationDirection, currentPrice);
+            return;
+        }
+
+        // 3) 부분 익절 후 손절 (D1): 레인 안에서 추정 손익으로 즉시 판단 (실값은 후처리 이력에 기록)
+        // [사용자 정책 2026-10-29] 합산 손익 ≥ 0 → 익절 경로(1단계·같은 방향), < 0 → 손절 경로(다음 단계·반대 방향)
+        BigDecimal entry = new BigDecimal(state.getEntryPrice());
+        BigDecimal current = new BigDecimal(currentPrice);
+        BigDecimal sign = state.getDirection() == Side.LONG ? BigDecimal.ONE : BigDecimal.ONE.negate();
+        BigDecimal tpFee = TradeCalculator.calcFee(tpPrice, filled,
+                adapterRegistry.trade(session.getExchangeType()).getMakerFeeRate());
+        BigDecimal tpPnl = tpPrice.subtract(entry).multiply(filled).multiply(sign).subtract(tpFee);
+        BigDecimal slPnl = current.subtract(entry).multiply(remaining).multiply(sign)
+                .subtract(TradeCalculator.calcFee(current, remaining, takerFeeRate(session.getExchangeType())));
+        BigDecimal sumPnl = tpPnl.add(slPnl);
+        boolean takeProfitPath = sumPnl.signum() >= 0;
+
+        BigDecimal tpPercent = filled.multiply(BigDecimal.valueOf(100)).divide(entryQty, 0, RoundingMode.HALF_UP);
+        session.addLog(now() + " [부분 익절 후 손절] 부분 익절 " + tpPercent + "% / 손절 " + BigDecimal.valueOf(100).subtract(tpPercent)
+                + "%, 합산 손익 " + (sumPnl.signum() >= 0 ? "+" : "") + sumPnl.setScale(2, RoundingMode.HALF_UP).toPlainString()
+                + "$ (추정) → " + (takeProfitPath ? "익절 처리" : "손절 처리") + " (큐 #" + queue.getId() + ")");
+
+        // 부분 익절분 거래 이력 (지정가 체결가·maker 추정 수수료)
+        PartialTpFill partialTp = recordPartialTpFill(queue, state, session, filled, tpPrice, tpOrderId);
+
+        // 잔여 수량만 시장가 청산, 투자 이력은 두 주문 합산 1건
+        closeForStopLoss(queue, state, session, pattern, liquidationDirection, currentPrice,
+                remaining.toPlainString(), partialTp, takeProfitPath);
+    }
+
+    /**
+     * 취소한 익절 지정가의 부분 체결분 거래 이력(SELL)을 저장한다. (지정가 체결가·maker 추정 수수료)
+     *
+     * @param queue     현재 큐
+     * @param state     큐 런타임 상태 (진입 정보)
+     * @param session   세션
+     * @param filled    익절 체결 수량 (진입 수량 − 취소 후 잔여 포지션)
+     * @param tpPrice   익절 지정가 (체결가)
+     * @param tpOrderId 익절 지정가 거래소 주문 ID
+     * @return 투자 이력 합산용 부분 익절 정보
+     */
+    private PartialTpFill recordPartialTpFill(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                              BigDecimal filled, BigDecimal tpPrice, String tpOrderId) {
+        BigDecimal tpFee = TradeCalculator.calcFee(tpPrice, filled,
+                adapterRegistry.trade(session.getExchangeType()).getMakerFeeRate());
+        TradeHistoryDTO tpHistory = new TradeHistoryDTO();
+        tpHistory.setPatternId(state.getActivePatternId());
+        tpHistory.setUserId(session.getUserId());
+        tpHistory.setSymbol(session.getSymbol());
+        tpHistory.setExchangeType(session.getExchangeType());
+        tpHistory.setSide(state.getDirection());
+        tpHistory.setOrderType(TradeOrderType.SELL.getTradeOrderType());
+        tpHistory.setAmount(proportionalMargin(state.getEntryMargin(), filled.toPlainString(), state.getEntryQty()));
+        tpHistory.setExecutedPrice(tpPrice);
+        tpHistory.setFee(tpFee);
+        tpHistory.setOrderId(tpOrderId);
+        tpHistory.setOrderResult(OrderResult.SUCCESS);
+        saveTradeHistoryOrFallback(tpHistory, tpOrderId, session.getTradeMode(), queue.getId());
+        return new PartialTpFill(filled.toPlainString(), tpPrice, tpFee);
+    }
+
+    /**
+     * 손절 전 익절 지정가 취소(또는 취소 후 포지션 조회) 실패 시 이번 틱 손절을 보류한다. (④)
+     * 5회 연속 실패하면 큐를 비활성화하고 수동 확인을 안내한다.
+     */
+    private void holdStopLossForTpCancel(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session, String reason) {
+        int fails = state.getTpCancelFailCount() + 1;
+        state.setTpCancelFailCount(fails);
+        log.warn(LogMessage.TP_CANCEL_FAILED.getMessage(), queue.getId(), reason, fails);
+        if (fails >= CLOSE_CONFIRM_MAX_FAILS) {
+            session.addLog(now() + " [손절 중단] " + reason + " " + CLOSE_CONFIRM_MAX_FAILS
+                    + "회 연속 — 큐를 비활성화합니다. 거래소 주문·포지션을 수동으로 확인해 주세요. (큐 #" + queue.getId() + ")");
+            deactivateQueue(queue, state, session, reason + " " + CLOSE_CONFIRM_MAX_FAILS + "회");
+        } else if (fails == 1) {
+            session.addLog(now() + " [손절 보류] " + reason + " — 잠시 후 다시 시도합니다 (큐 #" + queue.getId() + ")");
+        }
+    }
+
+    /** 마진을 수량 비율로 나눈다 (부분 체결 이력의 주문 금액). */
+    private BigDecimal proportionalMargin(BigDecimal margin, String qty, String totalQty) {
+        if (margin == null) return null;
+        return margin.multiply(new BigDecimal(qty)).divide(new BigDecimal(totalQty), 8, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * 손절 전 취소한 익절 지정가의 부분 체결 정보. 투자 이력을 두 주문 합산 1건으로 기록할 때 사용한다.
+     */
+    private record PartialTpFill(
+            String qty,       // 익절 체결 수량
+            BigDecimal price, // 익절 지정가 (체결가)
+            BigDecimal fee    // 익절분 maker 추정 수수료
+    ) {}
+
+    /**
+     * 청산 주문 접수 직후 확인 대기를 등록하고 즉시 1회 확인한다.
+     * [사용자 정책 2026-10-29] 다음 동작은 이전 동작이 거래소에서 완료 확인된 뒤에만 시작한다.
+     *
+     * @param queue      청산한 큐
+     * @param state      큐 런타임 상태 (POSITION_HOLDING 유지)
+     * @param session    세션
+     * @param closeType  청산 종류 (SELL: 1단계 리셋, LIQUIDATION: 다음 단계 이동)
+     * @param nextSignal 손절 후 다음 단계 진입 방향 (SELL이면 null)
+     */
+    private void awaitCloseConfirmed(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                     TradeOrderType closeType, Side nextSignal) {
+        state.setPendingConfirmType(closeType);
+        state.setPendingCloseSignal(nextSignal);
+        state.setCloseConfirmFailCount(0);
+        checkPendingConfirm(queue, state, session);
+    }
+
+    /**
+     * 거래소 포지션 수량으로 대기 중인 주문의 완료를 확인하고, 확인되면 상태를 전환한다.
+     * - 진입(ENTRY): 포지션 있음 → 보류한 진입 이력 SUCCESS 저장 / 포지션 0 → 미체결로 FAILED 저장 후 큐 비활성화
+     * - 청산(SELL/LIQUIDATION): SIM은 즉시 완료, 포지션 0 → SELL은 1단계 리셋, LIQUIDATION은 다음 단계 이동
+     * - 조회 실패(청산은 포지션 잔존 포함): 보유 상태 유지, 5회 연속이면 큐 비활성화 + 수동 확인 안내
+     *
+     * @param queue   대상 큐
+     * @param state   큐 런타임 상태 (pendingConfirmType 설정됨)
+     * @param session 세션
+     */
+    private void checkPendingConfirm(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        if (state.getPendingConfirmType() == TradeOrderType.ENTRY) {
+            checkPendingEntry(queue, state, session);
+            return;
+        }
+        if (session.getTradeMode() != TradeMode.SIM) {
+            state.setCloseConfirmCheckedAt(System.currentTimeMillis());
+            BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+            // 조회 실패(null) 또는 포지션 잔존 → 미확인
+            if (positionSize == null || positionSize.signum() > 0) {
+                int fails = state.getCloseConfirmFailCount() + 1;
+                state.setCloseConfirmFailCount(fails);
+                log.warn(LogMessage.CLOSE_NOT_CONFIRMED.getMessage(), queue.getId(), positionSize, fails);
+                if (fails >= CLOSE_CONFIRM_MAX_FAILS) {
+                    session.addLog(now() + " [청산 확인 실패] 거래소 포지션 청산을 " + CLOSE_CONFIRM_MAX_FAILS
+                            + "회 연속 확인하지 못해 큐를 비활성화합니다. 거래소 포지션을 수동으로 확인해 주세요. (큐 #" + queue.getId() + ")");
+                    deactivateQueue(queue, state, session, "청산 완료 확인 실패 " + CLOSE_CONFIRM_MAX_FAILS + "회");
+                } else if (fails == 1) {
+                    session.addLog(now() + " [청산 확인 대기] 거래소 포지션 청산 확인 전까지 다음 동작을 보류합니다 (큐 #" + queue.getId() + ")");
+                }
+                return;
+            }
+        }
+
+        // 청산 완료 확인 → 대기 해제 후 상태 전환
+        TradeOrderType closeType = state.getPendingConfirmType();
+        Side nextSignal = state.getPendingCloseSignal();
+        state.setPendingConfirmType(null);
+        state.setPendingCloseSignal(null);
+        state.setCloseConfirmFailCount(0);
+        // 큐 종료 청산이 확인 대기 중이었으면 다음 단계로 가지 않고 큐 비활성화 (사용자가 끄기·삭제를 요청함)
+        if (state.isStopRequested()) {
+            session.addLog(now() + " [큐 종료 청산] 포지션 청산이 확인되어 큐를 비활성화합니다 (큐 #" + queue.getId() + ")");
+            deactivateQueue(queue, state, session, "큐 종료 요청 — 포지션 청산 확인");
+            return;
+        }
+        if (closeType == TradeOrderType.SELL) {
+            resetToFirstStepAfterSell(queue, state, session);
+        } else {
+            moveToNextStepAfterLiquidation(queue, state, session, nextSignal);
+        }
     }
 
     /**
@@ -1384,6 +1735,10 @@ public class AutoTradeService {
         state.setEntryTime(null);
         state.setTpPrice(null);
         state.setSlPrice(null);
+        state.setTpOrderLinkId(null);
+        state.setTpOrderId(null);
+        state.setTpOrderPrice(null);
+        state.setTpCancelFailCount(0);
         state.setBlockBaseTime(null);
         state.setBlockBasePrice(null);
         state.setPhase(TradePhase.BLOCK_MATCHING);
@@ -1449,7 +1804,9 @@ public class AutoTradeService {
         List<PatternQueue> holdingQueues = session.getQueues().stream()
                 .filter(q -> {
                     QueueStateDTO st = session.getQueueStates().get(q.getId());
-                    return st != null && st.getPhase() == TradePhase.POSITION_HOLDING;
+                    // 앱 진입·청산 확인 대기 중인 큐는 확인 로직이 전환하므로 제외
+                    return st != null && st.getPhase() == TradePhase.POSITION_HOLDING
+                            && st.getPendingConfirmType() == null;
                 })
                 .toList();
         if (holdingQueues.isEmpty()) return;
@@ -1477,10 +1834,29 @@ public class AutoTradeService {
 
         for (PatternQueue queue : holdingQueues) {
             QueueStateDTO state = session.getQueueStates().get(queue.getId());
-            log.info(LogMessage.EXTERNAL_CLOSE_DETECTED.getMessage(),
-                    queue.getId(), session.getSymbol(), closeType, event.getOrderId());
-            session.addLog(now() + " [외부 청산] " + closeType.getExplain() + " 감지 (큐 #" + queue.getId()
-                    + ", " + state.getCurrentStepLevel() + "단계)");
+            // 우리 익절 지정가의 체결: 일반 지정가라 거래소 분류가 OTHER일 수 있어 orderLinkId로 익절 확정
+            boolean ownTpFill = state.getTpOrderLinkId() != null
+                    && state.getTpOrderLinkId().equals(event.getOrderLinkId());
+            PositionCloseType queueCloseType = ownTpFill ? PositionCloseType.TAKE_PROFIT : closeType;
+            if (ownTpFill) {
+                log.info(LogMessage.TP_LIMIT_FILLED.getMessage(), queue.getId(), session.getSymbol(), event.getOrderId());
+                session.addLog(now() + " [익절 체결] 익절 지정가 체결 (큐 #" + queue.getId()
+                        + ", " + state.getCurrentStepLevel() + "단계)");
+            } else {
+                log.info(LogMessage.EXTERNAL_CLOSE_DETECTED.getMessage(),
+                        queue.getId(), session.getSymbol(), closeType, event.getOrderId());
+                session.addLog(now() + " [외부 청산] " + closeType.getExplain() + " 감지 (큐 #" + queue.getId()
+                        + ", " + state.getCurrentStepLevel() + "단계)");
+            }
+
+            // ③ 익절 지정가 외의 청산으로 포지션이 닫혔는데 지정가가 남아 있으면 취소
+            //    (남겨 두면 다음 진입 포지션을 reduceOnly로 줄일 수 있음 → 취소 실패 시 큐 비활성화)
+            boolean tpCancelFailed = false;
+            if (!ownTpFill && state.getTpOrderLinkId() != null) {
+                OrderCancelResult cancelResult = tradeFacade.cancelOrder(session.getUserId(), session.getSymbol(),
+                        state.getTpOrderLinkId(), session.getExchangeType(), session.getTradeMode());
+                tpCancelFailed = cancelResult != OrderCancelResult.CANCELLED && cancelResult != OrderCancelResult.NOT_FOUND;
+            }
 
             // 이력 저장 (상태 전환 전에 진입 정보 스냅샷)
             Pattern pattern = findPatternById(queue, state.getActivePatternId());
@@ -1494,15 +1870,20 @@ public class AutoTradeService {
                 history.setExchangeType(session.getExchangeType()); // 세션 거래소 기록
                 history.setSide(state.getDirection());
                 // 익절은 매도, 그 외(손절·강제청산·수동)는 청산으로 기록
-                history.setOrderType(closeType == PositionCloseType.TAKE_PROFIT
+                history.setOrderType(queueCloseType == PositionCloseType.TAKE_PROFIT
                         ? TradeOrderType.SELL.getTradeOrderType()
                         : TradeOrderType.LIQUIDATION.getTradeOrderType());
                 history.setAmount(state.getEntryMargin()); // 마진(실제 투자금) 저장
+                // 추정 수수료: 익절 지정가 체결은 maker, 그 외는 taker
+                BigDecimal feeRate = ownTpFill
+                        ? adapterRegistry.trade(session.getExchangeType()).getMakerFeeRate()
+                        : takerFeeRate(session.getExchangeType());
                 BigDecimal estimatedExitFee = TradeCalculator.calcFee(
-                        new BigDecimal(priceForRecord), new BigDecimal(closeQty), takerFeeRate(session.getExchangeType()));
+                        new BigDecimal(priceForRecord), new BigDecimal(closeQty), feeRate);
                 history.setFee(estimatedExitFee);
                 OrderSide closeSide = state.getDirection() == Side.LONG ? OrderSide.SELL : OrderSide.BUY;
-                submitCloseRecord(CloseRecord.of(recordOrderId, null, history, closeType.getExplain(),
+                submitCloseRecord(CloseRecord.of(recordOrderId, null, history,
+                        ownTpFill ? "익절(지정가)" : closeType.getExplain(),
                         queue, state, session, pattern, closeSide, closeQty, priceForRecord, estimatedExitFee), session);
             } else {
                 // 방어 코드: 진입 정보가 없어 이력을 남길 수 없음 (상태 전환은 계속)
@@ -1511,8 +1892,13 @@ public class AutoTradeService {
                 session.addLog(now() + " [경고] 외부 청산 이력을 저장할 수 없습니다 (진입 정보 없음, 큐 #" + queue.getId() + ")");
             }
 
+            if (tpCancelFailed) {
+                deactivateQueue(queue, state, session, "외부 청산 후 남은 익절 지정가 취소 실패 — 거래소 미체결 주문을 수동으로 확인해 주세요");
+                continue;
+            }
+
             // 청산 방식별 상태 전환
-            switch (closeType) {
+            switch (queueCloseType) {
                 case TAKE_PROFIT -> resetToFirstStepAfterSell(queue, state, session);
                 case STOP_LOSS, LIQUIDATION -> {
                     state.setEntryMargin(null); // 포지션 리셋 시 초기화 (앱 청산과 동일)
@@ -1554,8 +1940,16 @@ public class AutoTradeService {
             OrderSide closeSide,        // 청산 주문 방향 (SELL/BUY)
             String closeQty,            // 청산 수량
             String currentPrice,        // 청산 판단 시점 현재가 (실체결 조회 실패 시 fallback)
-            BigDecimal estimatedExitFee // 추정 청산 수수료 (실체결 조회 실패 시 fallback)
+            BigDecimal estimatedExitFee, // 추정 청산 수수료 (실체결 조회 실패 시 fallback)
+            PartialTpFill partialTp      // 손절 전 부분 익절 체결분 (없으면 null, 있으면 투자 이력 합산)
     ) {
+        /** 부분 익절 정보를 붙인 복사본 */
+        CloseRecord withPartialTp(PartialTpFill p) {
+            return new CloseRecord(orderId, orderLinkId, history, label, queueId, userId, symbol, tradeMode, exchangeType,
+                    patternId, direction, entryPrice, entryQty, entryMargin, entryFee, entryTime,
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee, p);
+        }
+
         static CloseRecord of(OrderResultDTO orderResult, String orderLinkId,
                               TradeHistoryDTO history, String label,
                               PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
@@ -1576,7 +1970,7 @@ public class AutoTradeService {
                     session.getUserId(), session.getSymbol(), session.getTradeMode(), session.getExchangeType(),
                     state.getActivePatternId(), state.getDirection(),
                     state.getEntryPrice(), state.getEntryQty(), state.getEntryMargin(), state.getEntryFee(), state.getEntryTime(),
-                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee);
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee, null);
         }
     }
 
@@ -1617,6 +2011,8 @@ public class AutoTradeService {
                 log.error("청산 후처리 실패: queueId={}, orderId={}", record.queueId(), record.orderId(), e);
                 session.addLog(now() + " [경고] " + record.label() + " 이력 저장 실패 (큐 #"
                         + record.queueId() + "): " + e.getMessage() + " — 거래소 내역을 확인해 주세요.");
+                // [사용자 정책 2026-10-29] 후처리 실패도 거래 이력에 실패 행으로 남긴다
+                saveFallbackHistory(record.history(), record.orderId(), record.tradeMode(), e, record.queueId());
             }
         });
     }
@@ -1666,7 +2062,8 @@ public class AutoTradeService {
 
             // 실손익 + 펀딩비 조회 (MAIN 모드만, SIM은 null → 계산식 fallback)
             // 직접 계산하는 거래소를 위해 진입 시각·진입 수수료까지 조회 조건에 담음
-            ClosedPnlDTO pnlInfo = r.orderId() != null
+            // 부분 익절 합산은 주문 1건의 거래소 손익으로 표현할 수 없어 계산식 사용
+            ClosedPnlDTO pnlInfo = r.orderId() != null && r.partialTp() == null
                     ? tradeFacade.getClosedPnl(ClosedPnlQueryDTO.builder()
                             .exchangeType(exchangeType).orderId(r.orderId()).symbol(r.symbol())
                             .entryTime(r.entryTime()).entryFee(actualEntryFee)
@@ -1675,9 +2072,20 @@ public class AutoTradeService {
             BigDecimal actualPnl = parseSafeBD(pnlInfo != null ? pnlInfo.getClosedPnl() : null);
             BigDecimal actualFundingFee = parseSafeBD(pnlInfo != null ? pnlInfo.getFundingFee() : null);
 
+            // 부분 익절 후 손절: 청산가 = 수량 가중 평균, 청산 수수료 = 익절분 + 손절분
+            String investExitPrice = actualExitPrice;
+            BigDecimal investExitFee = actualExitFee;
+            if (r.partialTp() != null) {
+                BigDecimal tpQty = new BigDecimal(r.partialTp().qty());
+                BigDecimal slQty = new BigDecimal(r.closeQty());
+                investExitPrice = r.partialTp().price().multiply(tpQty)
+                        .add(new BigDecimal(actualExitPrice).multiply(slQty))
+                        .divide(tpQty.add(slQty), 8, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+                investExitFee = actualExitFee.add(r.partialTp().fee());
+            }
             BigDecimal profitLoss = saveInvestmentHistory(r.userId(), r.patternId(), r.symbol(), r.direction(),
-                    r.entryPrice(), actualExitPrice, r.entryMargin(), r.pattern(),
-                    actualEntryFee, actualExitFee, actualPnl, actualFundingFee, r.tradeMode(), r.exchangeType());
+                    r.entryPrice(), investExitPrice, r.entryMargin(), r.pattern(),
+                    actualEntryFee, investExitFee, actualPnl, actualFundingFee, r.tradeMode(), r.exchangeType());
             pnlText = profitLoss.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + "$";
         }
 
@@ -1730,6 +2138,285 @@ public class AutoTradeService {
     private void saveTradeHistory(TradeHistoryDTO history, TradeMode tradeMode) {
         // 모드별 테이블 분기는 TradeFacade → HistoryService 가 담당
         tradeFacade.saveTradeHistory(history, tradeMode);
+    }
+
+    /**
+     * 익절가에 reduceOnly 지정가(GTC)를 걸어 둔다. (MAIN 전용 — SIM은 앱이 현재가로 익절 감시)
+     * [사용자 정책 2026-10-28] 익절은 maker 체결로 수수료를 줄이기 위해 지정가로 미리 건다.
+     * 가격은 tick 단위로 목표가보다 불리하지 않게 맞춘다 (LONG 매도 = 올림, SHORT 매수 = 내림).
+     * 등록 실패 시 D2: FAILED 이력 → 시장가 청산 → 큐 비활성화 ({@link #failTpLimitOrder})
+     *
+     * @param queue        진입한 큐
+     * @param state        큐 런타임 상태 (POSITION_HOLDING, entryQty·tpPrice 설정됨)
+     * @param session      세션
+     * @param currentPrice 실패 시 청산 추정 수수료 계산용 가격
+     */
+    private void placeTpLimitOrder(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                   String currentPrice) {
+        // SIM: 주문 없이 실거래와 같은 지정가만 미리 계산 (익절 시 체결가로 사용 — 익절 순간 조회 지연 없음)
+        if (session.getTradeMode() == TradeMode.SIM) {
+            String tickSizeStr = marketService.getTickSize(session.getExchangeType(), session.getSymbol());
+            // tickSize 조회 실패 시 null → 익절 시 익절가 그대로 사용 (SIM은 거래소 거부가 없으므로 진입 유지)
+            state.setTpOrderPrice(tickSizeStr == null ? null
+                    : TradeCalculator.roundTpLimitPrice(state.getDirection(), state.getTpPrice(), new BigDecimal(tickSizeStr)));
+            return;
+        }
+        try {
+            doPlaceTpLimitOrder(queue, state, session, currentPrice);
+        } catch (Exception e) {
+            // 예상치 못한 예외도 진입 실패로 번지지 않게 D2로 처리 (진입은 이미 거래소에서 완료됨)
+            log.error("익절 지정가 처리 중 예외: queueId={}", queue.getId(), e);
+            if (state.getTpOrderLinkId() == null && session.getQueueStates().containsKey(queue.getId())) {
+                failTpLimitOrder(queue, state, session, null, currentPrice, e.getMessage());
+            }
+        }
+    }
+
+    // 익절 지정가 등록 본문 (placeTpLimitOrder에서 예외 보호)
+    private void doPlaceTpLimitOrder(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                     String currentPrice) {
+
+        OrderSide closeSide = state.getDirection() == Side.LONG ? OrderSide.SELL : OrderSide.BUY;
+        TradeHistoryDTO history = new TradeHistoryDTO();
+        history.setPatternId(state.getActivePatternId());
+        history.setUserId(session.getUserId());
+        history.setSymbol(session.getSymbol());
+        history.setExchangeType(session.getExchangeType());
+        history.setSide(state.getDirection());
+        history.setOrderType(TradeOrderType.SELL.getTradeOrderType());
+        history.setAmount(state.getEntryMargin());
+
+        // 지정가 산출: tickSize 조회 실패 또는 0 이하 가격이면 주문 불가
+        String tickSizeStr = marketService.getTickSize(session.getExchangeType(), session.getSymbol());
+        BigDecimal limitPrice = tickSizeStr == null ? null
+                : TradeCalculator.roundTpLimitPrice(state.getDirection(), state.getTpPrice(), new BigDecimal(tickSizeStr));
+        if (limitPrice == null) {
+            String reason = "익절 지정가 산출 불가 (tickSize=" + tickSizeStr + ", tpPrice=" + state.getTpPrice() + ")";
+            history.setOrderResult(OrderResult.FAILED);
+            history.setExecutedPrice(BigDecimal.ZERO);
+            history.setErrorMessage(TP_LIMIT_FAILED_PREFIX + reason);
+            saveTradeHistoryOrFallback(history, null, session.getTradeMode(), queue.getId());
+            failTpLimitOrder(queue, state, session, null, currentPrice, reason);
+            return;
+        }
+
+        String orderLinkId = newOrderLinkId(queue, "T");
+        OrderRequestDTO request = OrderRequestDTO.builder()
+                .symbol(session.getSymbol())
+                .side(closeSide)
+                .qty(state.getEntryQty())
+                .price(limitPrice.toPlainString()) // 지정가 GTC
+                .reduceOnly(true) // 포지션 청산 전용
+                .clientOrderId(orderLinkId) // 체결 이벤트 매칭·취소 키
+                .build();
+        history.setFee(TradeCalculator.calcFee(limitPrice, new BigDecimal(state.getEntryQty()),
+                adapterRegistry.trade(session.getExchangeType()).getMakerFeeRate()));
+        try {
+            OrderResultDTO result = tradeFacade.placeOrder(request, session.getUserId(), history,
+                    session.getExchangeType(), session.getTradeMode());
+            state.setTpOrderLinkId(orderLinkId);
+            state.setTpOrderId(result != null ? result.getOrderId() : null);
+            state.setTpOrderPrice(limitPrice);
+            session.addLog(now() + " [익절 지정가 등록] " + closeSide + " " + state.getEntryQty()
+                    + " @ " + limitPrice.toPlainString() + " (큐 #" + queue.getId() + ")");
+        } catch (Exception e) {
+            // 거래소 거부(ORDER_FAILED)는 TradeFacade가 FAILED 이력 저장, 그 외 예외는 여기서 저장
+            boolean recorded = e instanceof CustomException ce && ce.getExceptionMessage() == ExceptionMessage.ORDER_FAILED;
+            if (!recorded) {
+                history.setOrderResult(OrderResult.FAILED);
+                history.setExecutedPrice(BigDecimal.ZERO);
+                history.setErrorMessage(TP_LIMIT_FAILED_PREFIX + e.getMessage());
+                saveTradeHistoryOrFallback(history, null, session.getTradeMode(), queue.getId());
+            }
+            failTpLimitOrder(queue, state, session, orderLinkId, currentPrice, e.getMessage());
+        }
+    }
+
+    /**
+     * 익절 지정가 등록 실패 처리 (D2): 남은 지정가 취소 시도 → 보유 포지션 시장가 청산 → 큐 비활성화.
+     * 응답 불명확(네트워크 오류 등)으로 지정가가 실제 접수됐을 수 있으므로 취소를 먼저 시도한다.
+     * 청산 주문 실패 시 기존 청산 실패 규칙({@link #handleCloseOrderFailure})을 따른다.
+     *
+     * @param queue        대상 큐
+     * @param state        큐 런타임 상태 (POSITION_HOLDING)
+     * @param session      세션
+     * @param tpLinkId     취소할 익절 지정가 주문 ID (주문 전 실패면 null)
+     * @param currentPrice 청산 추정 수수료 계산용 가격
+     * @param reason       실패 사유
+     */
+    private void failTpLimitOrder(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                  String tpLinkId, String currentPrice, String reason) {
+        log.error(LogMessage.TP_LIMIT_ORDER_FAILED.getMessage(), queue.getId(), reason);
+        session.addLog(now() + " [익절 지정가 등록 실패] " + reason + " — 포지션을 시장가로 청산하고 큐를 비활성화합니다 (큐 #"
+                + queue.getId() + ")");
+        if (tpLinkId != null) {
+            tradeFacade.cancelOrder(session.getUserId(), session.getSymbol(), tpLinkId,
+                    session.getExchangeType(), session.getTradeMode());
+        }
+
+        Pattern pattern = findPatternById(queue, state.getActivePatternId());
+        OrderSide closeSide = state.getDirection() == Side.LONG ? OrderSide.SELL : OrderSide.BUY;
+        String closeQty = state.getEntryQty();
+        TradeHistoryDTO history = new TradeHistoryDTO();
+        history.setPatternId(state.getActivePatternId());
+        history.setUserId(session.getUserId());
+        history.setSymbol(session.getSymbol());
+        history.setExchangeType(session.getExchangeType());
+        history.setSide(state.getDirection());
+        history.setOrderType(TradeOrderType.LIQUIDATION.getTradeOrderType());
+        history.setAmount(state.getEntryMargin());
+        BigDecimal estimatedExitFee = TradeCalculator.calcFee(
+                new BigDecimal(currentPrice), new BigDecimal(closeQty), takerFeeRate(session.getExchangeType()));
+        history.setFee(estimatedExitFee);
+
+        String orderLinkId = newOrderLinkId(queue, "L");
+        OrderRequestDTO closeRequest = OrderRequestDTO.builder()
+                .symbol(session.getSymbol())
+                .side(closeSide)
+                .qty(closeQty)
+                .reduceOnly(true)
+                .clientOrderId(orderLinkId)
+                .build();
+        try {
+            OrderResultDTO orderResult = placeCloseOrder(closeRequest, session, history, orderLinkId);
+            submitCloseRecord(CloseRecord.of(orderResult, orderLinkId, history, "청산(익절 지정가 등록 실패)", queue, state, session,
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee), session);
+        } catch (Exception e) {
+            session.addLog(now() + " [청산 실패] " + e.getMessage());
+            handleCloseOrderFailure(queue, state, session, "익절 지정가 등록 실패 후 청산 실패: " + e.getMessage());
+            return;
+        }
+
+        // 청산 완료 확인 (큐는 어차피 비활성화되므로 1회 확인 후 결과를 사유에 남김)
+        BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+        String closeStatus = positionSize != null && positionSize.signum() == 0
+                ? "포지션 청산 완료"
+                : "포지션 청산 미확인 — 거래소 포지션을 수동으로 확인해 주세요";
+        deactivateQueue(queue, state, session, "익절 지정가 등록 실패 (" + reason + "), " + closeStatus);
+    }
+
+    /**
+     * 진입 확인 대기 중인 큐의 거래소 포지션을 재확인한다. (MAIN 전용 — SIM은 대기에 들어가지 않음)
+     *
+     * @param queue   대상 큐
+     * @param state   큐 런타임 상태 (pendingConfirmType = ENTRY)
+     * @param session 세션
+     */
+    private void checkPendingEntry(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        state.setCloseConfirmCheckedAt(System.currentTimeMillis());
+        TradeHistoryDTO history = state.getPendingEntryHistory();
+        BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+
+        // 조회 실패 → 미확인 누적, 5회 연속이면 큐 비활성화
+        if (positionSize == null) {
+            int fails = state.getCloseConfirmFailCount() + 1;
+            state.setCloseConfirmFailCount(fails);
+            log.warn(LogMessage.ENTRY_NOT_CONFIRMED.getMessage(), queue.getId(), null, fails);
+            if (fails >= CLOSE_CONFIRM_MAX_FAILS) {
+                session.addLog(now() + " [진입 확인 실패] 거래소 포지션을 " + CLOSE_CONFIRM_MAX_FAILS
+                        + "회 연속 확인하지 못해 큐를 비활성화합니다. 거래소 포지션을 수동으로 확인해 주세요. (큐 #" + queue.getId() + ")");
+                if (history != null) {
+                    history.setOrderResult(OrderResult.FAILED);
+                    history.setErrorMessage("[진입 확인 실패] 거래소 포지션 조회 " + CLOSE_CONFIRM_MAX_FAILS + "회 실패 — 거래소 내역을 확인해 주세요");
+                    saveTradeHistoryOrFallback(history, history.getOrderId(), session.getTradeMode(), queue.getId());
+                }
+                deactivateQueue(queue, state, session, "진입 완료 확인 실패 " + CLOSE_CONFIRM_MAX_FAILS + "회");
+            }
+            return;
+        }
+
+        // 포지션 0 → 진입 미체결
+        if (positionSize.signum() == 0) {
+            failUnfilledEntry(queue, state, session, history);
+            return;
+        }
+
+        // 포지션 확인 → 보류한 진입 이력 저장 후 대기 해제
+        state.setPendingConfirmType(null);
+        state.setPendingEntryHistory(null);
+        state.setCloseConfirmFailCount(0);
+        if (history != null) {
+            history.setOrderResult(OrderResult.SUCCESS);
+            saveTradeHistoryOrFallback(history, history.getOrderId(), session.getTradeMode(), queue.getId());
+        }
+        session.addLog(now() + " [진입 확인] 거래소 포지션 확인 완료 (큐 #" + queue.getId() + ")");
+        placeTpLimitOrder(queue, state, session, state.getEntryPrice());
+    }
+
+    /**
+     * 진입 주문 접수 후 거래소 포지션이 0이면 미체결로 보고 FAILED 이력 저장 후 큐를 비활성화한다.
+     *
+     * @param queue   대상 큐
+     * @param state   큐 런타임 상태
+     * @param session 세션
+     * @param history 진입 이력 (null이면 저장 생략)
+     */
+    private void failUnfilledEntry(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session,
+                                   TradeHistoryDTO history) {
+        if (history != null) {
+            history.setOrderResult(OrderResult.FAILED);
+            history.setExecutedPrice(BigDecimal.ZERO); // 미체결 (실패 이력 공통 규칙)
+            history.setErrorMessage("[진입 미체결] 주문 접수 후 거래소 포지션 0");
+            saveTradeHistoryOrFallback(history, history.getOrderId(), session.getTradeMode(), queue.getId());
+        }
+        state.setEntryPrice(null);
+        session.addLog(now() + " [진입 실패] 주문은 접수됐으나 거래소 포지션이 없습니다 (큐 #" + queue.getId() + ")");
+        log.error(LogMessage.POSITION_ENTRY_FAILED.getMessage(), queue.getId(), "진입 미체결 (포지션 0)");
+        deactivateQueue(queue, state, session, "진입 미체결: 거래소 포지션 0");
+    }
+
+    /**
+     * 거래 이력을 저장하고, 실패하면 예외 로그와 함께 실패 이력(FAILED)을 fallback 저장한다.
+     * 거래소 체결은 이미 완료된 상태이므로 예외를 호출 측으로 전파하지 않는다.
+     *
+     * @param history   저장할 거래 이력
+     * @param orderId   거래소 주문 ID (fallback 이력에 기록, null 가능)
+     * @param tradeMode 거래 모드
+     * @param queueId   큐 ID (로그용)
+     */
+    private void saveTradeHistoryOrFallback(TradeHistoryDTO history, String orderId, TradeMode tradeMode, Long queueId) {
+        try {
+            saveTradeHistory(history, tradeMode);
+        } catch (Exception e) {
+            log.error("거래 이력 저장 실패: queueId={}, orderId={}", queueId, orderId, e);
+            saveFallbackHistory(history, orderId, tradeMode, e, queueId);
+        }
+    }
+
+    /**
+     * 이력 저장 실패 시 원본 이력을 복사해 실패 이력(FAILED)으로 저장한다.
+     * 원본 객체는 이미 저장 시도에 쓰였으므로 새 객체를 만든다. fallback 저장마저 실패하면 에러 로그만 남긴다.
+     *
+     * @param source    저장에 실패한 원본 이력 (null이면 생략)
+     * @param orderId   거래소 주문 ID (원본에 없으면 이 값 사용, null 가능)
+     * @param tradeMode 거래 모드
+     * @param cause     원래 저장 실패 원인
+     * @param queueId   큐 ID (로그용)
+     */
+    private void saveFallbackHistory(TradeHistoryDTO source, String orderId, TradeMode tradeMode,
+                                     Exception cause, Long queueId) {
+        if (source == null) return;
+        try {
+            TradeHistoryDTO fallback = TradeHistoryDTO.builder()
+                    .patternId(source.getPatternId())
+                    .userId(source.getUserId())
+                    .symbol(source.getSymbol())
+                    .exchangeType(source.getExchangeType())
+                    .side(source.getSide())
+                    .amount(source.getAmount())
+                    // 체결가가 아직 없으면 0 (실패 이력 공통 규칙)
+                    .executedPrice(source.getExecutedPrice() != null ? source.getExecutedPrice() : BigDecimal.ZERO)
+                    .orderId(source.getOrderId() != null ? source.getOrderId() : orderId)
+                    .fee(source.getFee())
+                    .orderType(source.getOrderType())
+                    .orderResult(OrderResult.FAILED)
+                    // 실제 주문 실패와 구분되도록 접두어 표시
+                    .errorMessage(HISTORY_SAVE_FAILED_PREFIX + cause.getMessage())
+                    .build();
+            saveTradeHistory(fallback, tradeMode);
+        } catch (Exception e) {
+            log.error("실패 이력(fallback) 저장도 실패: queueId={}, orderId={}", queueId, orderId, e);
+        }
     }
 
     /**
@@ -1848,6 +2535,224 @@ public class AutoTradeService {
 
         session.addLog(now() + " [사이클 재시작] 모든 단계 소진 → 1단계 재시작 (큐 #" + queue.getId() + ")");
         log.info("자동매매 사이클 재시작: queueId={}, symbol={}", queue.getId(), session.getSymbol());
+    }
+
+    /**
+     * 큐 끄기·삭제 전에 그 큐의 보유 포지션을 청산한다. (D4)
+     * [사용자 정책 2026-10-29] 보유 중인 큐를 끄거나 삭제하면 익절 지정가 취소 → 시장가 전량 청산 → 이력 기록 후 진행한다.
+     * 틱 처리와 경쟁하지 않도록 세션 레인에서 실행하고 완료까지 기다린다.
+     * 청산이 거래소에서 확인되면 큐를 세션에서 분리한다. (DB 변경·세션 동기화는 호출 측이 수행)
+     * 실행 중인 세션에 큐가 없거나(비활성) 포지션을 보유하지 않았으면 아무것도 하지 않는다.
+     *
+     * @param userId  사용자 ID
+     * @param queueId 끄거나 삭제할 큐 ID
+     * @throws CustomException QUEUE_POSITION_CLOSE_FAILED — 취소·청산 실패, 청산 미확인, 처리 대기 시간 초과 (큐 유지)
+     */
+    public void closeQueuePosition(Long userId, Long queueId) {
+        AutoTradeSessionDTO session = activeSessions.values().stream()
+                .filter(s -> s.getUserId().equals(userId)
+                        && s.getQueues().stream().anyMatch(q -> q.getId().equals(queueId)))
+                .findFirst()
+                .orElse(null);
+        // 실행 중이 아닌 큐 → 엔진이 보유한 포지션 없음
+        if (session == null) return;
+
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        session.getPendingCommands().add(() -> {
+            // 대기 시간 초과로 이미 실패 응답한 명령은 실행하지 않음
+            if (done.isDone()) return;
+            try {
+                closeQueuePositionInLane(session, queueId);
+                done.complete(null);
+            } catch (Exception e) {
+                done.completeExceptionally(e);
+            }
+        });
+        scheduleLane(session);
+
+        try {
+            done.get(QUEUE_CLOSE_TIMEOUT_SEC, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            // 레인이 아직 명령을 꺼내지 않았으면 실행되지 않도록 완료 처리
+            done.completeExceptionally(e);
+            throw queueCloseFailed("처리 대기 시간 초과");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            done.completeExceptionally(e);
+            throw queueCloseFailed("처리 대기 중단");
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof CustomException ce) throw ce;
+            throw queueCloseFailed(String.valueOf(e.getCause().getMessage()));
+        }
+    }
+
+    /**
+     * 큐 종료 청산 본문 (레인 스레드에서 실행).
+     * - 진입 확인 대기 중: 포지션 상태가 불확실하므로 실패 (잠시 후 재시도)
+     * - 청산 확인 대기 중: 새 주문 없이 포지션 0만 확인
+     * - 익절 지정가 취소 실패: 청산하지 않고 실패
+     * - 취소 후 포지션 0 (익절 전량 체결·거래소 청산): 거래소 청산 내역 기준으로 처리 후 분리
+     * - 부분 익절: 체결분 SELL 이력 기록 후 잔여 수량만 시장가 청산
+     *
+     * @param session 큐가 속한 세션
+     * @param queueId 대상 큐 ID
+     */
+    private void closeQueuePositionInLane(AutoTradeSessionDTO session, Long queueId) {
+        PatternQueue queue = session.getQueues().stream()
+                .filter(q -> q.getId().equals(queueId))
+                .findFirst()
+                .orElse(null);
+        QueueStateDTO state = queue == null ? null : session.getQueueStates().get(queueId);
+        // 대기 중 비활성화됐거나 포지션 미보유 → 청산할 것 없음
+        if (state == null || state.getPhase() != TradePhase.POSITION_HOLDING) return;
+
+        // 이미 거래소 확인 대기 중인 주문이 있으면 새 주문을 내지 않음
+        if (state.getPendingConfirmType() == TradeOrderType.ENTRY) {
+            throw queueCloseFailed("진입 체결 확인 중 — 잠시 후 다시 시도해 주세요");
+        }
+        if (state.getPendingConfirmType() != null) {
+            confirmQueueClosed(queue, state, session);
+            return;
+        }
+
+        // 1) 익절 지정가 취소 (MAIN만 존재) — NOT_FOUND(이미 전량 체결·취소)도 주문이 없다는 뜻이므로 진행
+        boolean hadTpOrder = state.getTpOrderLinkId() != null;
+        if (hadTpOrder) {
+            OrderCancelResult cancelResult = tradeFacade.cancelOrder(session.getUserId(), session.getSymbol(),
+                    state.getTpOrderLinkId(), session.getExchangeType(), session.getTradeMode());
+            if (cancelResult != OrderCancelResult.CANCELLED && cancelResult != OrderCancelResult.NOT_FOUND) {
+                session.addLog(now() + " [큐 종료 청산 실패] 익절 지정가 취소 실패 — 큐를 유지합니다 (큐 #" + queue.getId() + ")");
+                throw queueCloseFailed("익절 지정가 취소 실패");
+            }
+        }
+
+        // 2) 청산 수량: MAIN은 거래소 잔여 포지션, SIM은 진입 수량
+        BigDecimal remaining;
+        if (session.getTradeMode() == TradeMode.SIM) {
+            remaining = new BigDecimal(state.getEntryQty());
+        } else {
+            remaining = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+            if (remaining == null) {
+                throw queueCloseFailed("거래소 포지션 조회 실패");
+            }
+            if (remaining.signum() == 0) {
+                // 포지션 이미 0 → 시장가 청산 생략, 거래소 청산 내역(익절 체결 등) 기준으로 전환한 뒤 분리
+                session.addLog(now() + " [큐 종료 청산] 포지션이 이미 닫혀 있어 거래소 청산 내역 기준으로 처리합니다 (큐 #" + queue.getId() + ")");
+                handleCloseOrderFailure(queue, state, session, "큐 종료 전 포지션 0 확인 후 청산 내역 처리 실패");
+                // 청산 내역을 찾지 못해 보유 상태가 유지되면 실패 (재조정 주기에 다시 확인됨)
+                QueueStateDTO after = session.getQueueStates().get(queueId);
+                if (after != null && after.getPhase() == TradePhase.POSITION_HOLDING) {
+                    throw queueCloseFailed("거래소 청산 내역 확인 실패 — 잠시 후 다시 시도해 주세요");
+                }
+                detachQueue(session, queueId);
+                return;
+            }
+        }
+
+        String currentPrice = currentPriceOf(session);
+        if (currentPrice == null) {
+            throw queueCloseFailed("현재가 조회 실패");
+        }
+
+        // 익절 지정가는 더 이상 없음 → 상태 정리 (부분 체결 이력용 값은 지역 변수로 보관)
+        String tpOrderId = state.getTpOrderId();
+        BigDecimal tpPrice = state.getTpOrderPrice() != null ? state.getTpOrderPrice() : state.getTpPrice();
+        state.setTpOrderLinkId(null);
+        state.setTpOrderId(null);
+        state.setTpOrderPrice(null);
+
+        // 익절 지정가가 일부 체결됐으면 체결분 익절 이력 기록 (투자 이력은 청산과 합산 1건)
+        String closeQty = remaining.stripTrailingZeros().toPlainString();
+        BigDecimal filled = new BigDecimal(state.getEntryQty()).subtract(remaining);
+        PartialTpFill partialTp = hadTpOrder && filled.signum() > 0
+                ? recordPartialTpFill(queue, state, session, filled, tpPrice, tpOrderId)
+                : null;
+
+        // 3) 잔여 포지션 시장가 전량 청산 (진입 방향의 반대, reduceOnly)
+        Pattern pattern = findPatternById(queue, state.getActivePatternId());
+        OrderSide closeSide = state.getDirection() == Side.LONG ? OrderSide.SELL : OrderSide.BUY;
+        TradeHistoryDTO history = new TradeHistoryDTO();
+        history.setPatternId(state.getActivePatternId());
+        history.setUserId(session.getUserId());
+        history.setSymbol(session.getSymbol());
+        history.setExchangeType(session.getExchangeType());
+        history.setSide(state.getDirection());
+        history.setOrderType(TradeOrderType.LIQUIDATION.getTradeOrderType());
+        // 마진(실제 투자금) 저장, 부분 익절 후면 잔여 수량 비율만큼
+        history.setAmount(partialTp != null
+                ? proportionalMargin(state.getEntryMargin(), closeQty, state.getEntryQty())
+                : state.getEntryMargin());
+        BigDecimal estimatedExitFee = TradeCalculator.calcFee(
+                new BigDecimal(currentPrice), remaining, takerFeeRate(session.getExchangeType()));
+        history.setFee(estimatedExitFee);
+
+        String orderLinkId = newOrderLinkId(queue, "L");
+        OrderRequestDTO closeRequest = OrderRequestDTO.builder()
+                .symbol(session.getSymbol())
+                .side(closeSide)
+                .qty(closeQty)
+                .reduceOnly(true) // 포지션 청산 전용
+                .clientOrderId(orderLinkId)
+                .build();
+        try {
+            OrderResultDTO orderResult = placeCloseOrder(closeRequest, session, history, orderLinkId);
+            submitCloseRecord(CloseRecord.of(orderResult, orderLinkId, history, "청산(큐 종료)", queue, state, session,
+                    pattern, closeSide, closeQty, currentPrice, estimatedExitFee).withPartialTp(partialTp), session);
+        } catch (Exception e) {
+            session.addLog(now() + " [큐 종료 청산 실패] " + e.getMessage() + " — 큐를 유지합니다 (큐 #" + queue.getId() + ")");
+            throw queueCloseFailed("청산 주문 실패: " + e.getMessage());
+        }
+        state.setEntryMargin(null); // 포지션 리셋 시 초기화
+        session.addLog(now() + " [큐 종료 청산] " + closeSide + " " + estimateCloseValue(closeQty, currentPrice)
+                + "$ (추정) (큐 #" + queue.getId() + ")");
+
+        // 4) 거래소 청산 완료 확인 후 분리
+        state.setPendingConfirmType(TradeOrderType.LIQUIDATION);
+        state.setPendingCloseSignal(null);
+        state.setCloseConfirmFailCount(0);
+        confirmQueueClosed(queue, state, session);
+    }
+
+    /**
+     * 큐 종료 청산의 거래소 포지션 0을 확인하고, 확인되면 큐를 세션에서 분리한다. (SIM은 즉시 분리)
+     * 미확인이면 종료 요청을 표시하고 실패시킨다 → 이후 틱의 확인 로직이 청산을 확인하면 큐를 비활성화한다.
+     */
+    private void confirmQueueClosed(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        if (session.getTradeMode() != TradeMode.SIM) {
+            state.setCloseConfirmCheckedAt(System.currentTimeMillis());
+            BigDecimal positionSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(), session.getExchangeType(), session.getTradeMode());
+            if (positionSize == null || positionSize.signum() > 0) {
+                state.setStopRequested(true);
+                session.addLog(now() + " [큐 종료 청산 확인 대기] 거래소 포지션 청산을 아직 확인하지 못했습니다"
+                        + " — 확인되면 큐를 비활성화합니다 (큐 #" + queue.getId() + ")");
+                throw queueCloseFailed("거래소 포지션 청산 미확인 — 확인되면 큐가 자동으로 비활성화됩니다");
+            }
+        }
+        session.addLog(now() + " [큐 종료 청산] 포지션 청산 확인 — 큐를 종료합니다 (큐 #" + queue.getId() + ")");
+        detachQueue(session, queue.getId());
+    }
+
+    /** 세션의 현재가 (시세 캐시 기준, 없으면 null) */
+    private String currentPriceOf(AutoTradeSessionDTO session) {
+        TickerDTO ticker = marketService.getTicker(session.getExchangeType(), session.getSymbol());
+        return ticker != null ? ticker.getLastPrice() : null;
+    }
+
+    private CustomException queueCloseFailed(String detail) {
+        return new CustomException(ExceptionMessage.QUEUE_POSITION_CLOSE_FAILED, detail);
+    }
+
+    /**
+     * 큐를 세션에서만 분리한다. (DB 활성 상태는 호출 측이 변경)
+     * 세션에 큐가 남지 않으면 세션도 정리한다.
+     */
+    private void detachQueue(AutoTradeSessionDTO session, Long queueId) {
+        session.getQueues().removeIf(q -> q.getId().equals(queueId));
+        session.getQueueStates().remove(queueId);
+        if (session.getQueues().isEmpty()) {
+            activeSessions.remove(sessionKey(session.getUserId(), session.getExchangeType(), session.getSymbol(), session.getTradeMode()));
+            syncWebSocketSubscriptions();
+        }
     }
 
     /**

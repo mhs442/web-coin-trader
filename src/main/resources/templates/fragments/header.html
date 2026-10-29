@@ -103,6 +103,17 @@
             }
 
             /**
+             * 거래소 타입의 화면 표시명을 반환한다. (서버 ExchangeType 표시명 기준)
+             * 거래소 목록을 아직 못 받았거나 목록에 없는 거래소면 타입 값을 그대로 반환한다.
+             * @param {string} type 거래소 타입 (예: 'BYBIT')
+             * @returns {string} 표시명 (예: 'Bybit')
+             */
+            window.getExchangeName = function(type) {
+                const status = (exchangeKeyStatuses || []).find(function(s) { return s.exchangeType === type; });
+                return (status && status.displayName) || type;
+            };
+
+            /**
              * 실전 모드 + 키 미등록이면 잔고 대신 등록 안내를 표시한다. (모의 모드는 키 없이 사용)
              * @returns {boolean} 안내를 표시했으면 true
              */

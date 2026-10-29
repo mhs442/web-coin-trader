@@ -35,6 +35,7 @@ public class AutoTradeSessionDTO {
     private final AtomicBoolean laneScheduled = new AtomicBoolean(false);        // 레인 작업 제출 여부 (세션당 동시에 1개만 실행)
     private final Queue<KlineDTO> pendingKlines = new ConcurrentLinkedQueue<>(); // 봉 마감 대기열 (봉당 1회 신호 → 덮어쓰지 않고 순서대로 모두 처리)
     private final Queue<PositionCloseDTO> pendingCloses = new ConcurrentLinkedQueue<>(); // 외부 청산 체결 대기열 (레인에서 가격·봉 마감보다 먼저 처리)
+    private final Queue<Runnable> pendingCommands = new ConcurrentLinkedQueue<>(); // 사용자 명령 대기열 (큐 종료 청산 등, 레인에서 외부 청산 다음에 처리)
 
     /**
      * 로그를 추가한다. 50건 초과 시 가장 오래된 로그를 제거한다.

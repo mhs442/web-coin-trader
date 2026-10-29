@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.trade.service;
 
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
@@ -183,6 +184,23 @@ public class TradeFacade {
     public void cancelExecution(String clientOrderId, ExchangeType exchangeType, TradeMode tradeMode) {
         if (tradeMode == TradeMode.SIM) return;
         registry.trade(exchangeType).cancelExecution(clientOrderId);
+    }
+
+    /**
+     * MAIN 모드에서 미체결 주문을 clientOrderId로 취소한다. (익절 지정가 취소용)
+     * SIM 모드는 거래소에 걸린 주문이 없으므로 CANCELLED를 반환한다.
+     *
+     * @param userId        사용자 ID
+     * @param symbol        심볼
+     * @param clientOrderId 취소할 주문의 사용자 지정 ID
+     * @param exchangeType  거래소 타입
+     * @param tradeMode     거래 모드
+     * @return CANCELLED: 취소 성공(SIM 포함) / NOT_FOUND: 이미 전부 체결·취소 / FAILED: 그 외 실패
+     */
+    public OrderCancelResult cancelOrder(Long userId, String symbol, String clientOrderId,
+                                         ExchangeType exchangeType, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return OrderCancelResult.CANCELLED;
+        return registry.trade(exchangeType).cancelOrder(userId, symbol, clientOrderId);
     }
 
     /**

@@ -2,6 +2,11 @@ package com.coin.webcointrader.binance.trade;
 
 import com.coin.webcointrader.binance.common.BinanceApiException;
 import com.coin.webcointrader.binance.market.BinanceMarketClient;
+import com.coin.webcointrader.binance.stream.BinanceExecutionWaiter;
+import com.coin.webcointrader.binance.stream.BinancePrivateWebSocketClient;
+import com.coin.webcointrader.binance.stream.dto.BinanceFilledOrderDTO;
+import com.coin.webcointrader.binance.stream.dto.BinanceOrderTradeUpdateDTO;
+import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderHistoryResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderRequest;
 import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceIncomeResponse;
@@ -11,6 +16,7 @@ import com.coin.webcointrader.binance.trade.dto.BinancePositionRiskResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceUserTradeResponse;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.enums.PositionCloseType;
 import com.coin.webcointrader.common.exception.CustomException;
@@ -45,6 +51,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,6 +98,12 @@ class BinanceTradeClientTest {
     @Mock
     private Clock clock;
 
+    @Mock
+    private BinanceExecutionWaiter executionWaiter;
+
+    @Mock
+    private BinancePrivateWebSocketClient privateWebSocketClient;
+
     private BinanceTradeClient client;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -95,11 +111,17 @@ class BinanceTradeClientTest {
     @BeforeEach
     void setUp() {
         // 재시도 대기 없이 실행
-        client = new BinanceTradeClient(feignClient, marketClient, exchangeKeyService, aesEncryptor, clock) {
+        client = new BinanceTradeClient(feignClient, marketClient, exchangeKeyService, aesEncryptor, clock,
+                executionWaiter, privateWebSocketClient) {
             @Override
             protected void sleep(long millis) {
             }
         };
+    }
+
+    @AfterEach
+    void shutdownClient() {
+        client.destroy();
     }
 
     @AfterEach
@@ -110,6 +132,13 @@ class BinanceTradeClientTest {
     // ─────────────────────────────────────────────
     // placeOrder: 요청 변환·조건부 주문 정리
     // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getTakerFeeRate / getMakerFeeRate: Binance USDⓈ-M 기본 등급 taker 0.05%, maker 0.02%")
+    void feeRates() {
+        assertThat(client.getTakerFeeRate()).isEqualByComparingTo("0.0005");
+        assertThat(client.getMakerFeeRate()).isEqualByComparingTo("0.0002");
+    }
 
     @Test
     @DisplayName("placeOrder 진입: 남은 조건부 주문을 먼저 취소하고 시장가 주문을 보낸다 (reduceOnly 생략)")
@@ -153,6 +182,58 @@ class BinanceTradeClientTest {
         order.verify(feignClient).cancelAllAlgoOpenOrders("BTCUSDT");
         assertThat(captor.getValue().getSide()).isEqualTo("SELL");
         assertThat(captor.getValue().getReduceOnly()).isEqualTo("true");
+        assertThat(captor.getValue().getType()).isEqualTo("MARKET");
+        assertThat(captor.getValue().getPrice()).isNull();
+        assertThat(captor.getValue().getTimeInForce()).isNull();
+    }
+
+    @Test
+    @DisplayName("placeOrder 익절 지정가: LIMIT·가격·GTC로 보내고, 포지션이 남아 있으므로 조건부 주문(안전망)은 취소하지 않는다")
+    void placeOrder_limitClose_keepsAlgoOrders() throws Exception {
+        givenKey();
+        given(feignClient.newOrder(any())).willReturn(fixture("newOrder", BinanceOrderResponse.class));
+        OrderRequestDTO tpLimit = OrderRequestDTO.builder()
+                .symbol("BTCUSDT").side(OrderSide.SELL).qty("0.010").reduceOnly(true)
+                .price("52000.5").clientOrderId("q1-T-1").build();
+
+        client.placeOrder(tpLimit, 1L);
+
+        ArgumentCaptor<BinanceOrderRequest> captor = ArgumentCaptor.forClass(BinanceOrderRequest.class);
+        then(feignClient).should().newOrder(captor.capture());
+        BinanceOrderRequest sent = captor.getValue();
+        assertThat(sent.getType()).isEqualTo("LIMIT");
+        assertThat(sent.getPrice()).isEqualTo("52000.5");
+        assertThat(sent.getTimeInForce()).isEqualTo("GTC");
+        assertThat(sent.getReduceOnly()).isEqualTo("true");
+        then(feignClient).should(never()).cancelAllAlgoOpenOrders(any());
+    }
+
+    @Test
+    @DisplayName("cancelOrder: 심볼·origClientOrderId로 취소하고 정상 응답이면 CANCELLED")
+    void cancelOrder_success() throws Exception {
+        givenKey();
+        given(feignClient.cancelOrder("BTCUSDT", "q1-T-1")).willReturn(fixture("newOrder", BinanceOrderResponse.class));
+
+        assertThat(client.cancelOrder(1L, "BTCUSDT", "q1-T-1")).isEqualTo(OrderCancelResult.CANCELLED);
+        then(feignClient).should().cancelOrder("BTCUSDT", "q1-T-1");
+    }
+
+    @Test
+    @DisplayName("cancelOrder: -2011(Unknown order — 이미 체결·취소)이면 NOT_FOUND")
+    void cancelOrder_notFound() {
+        givenKey();
+        given(feignClient.cancelOrder("BTCUSDT", "q1-T-1")).willThrow(new BinanceApiException(-2011, "Unknown order sent."));
+
+        assertThat(client.cancelOrder(1L, "BTCUSDT", "q1-T-1")).isEqualTo(OrderCancelResult.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("cancelOrder: 그 외 오류 코드면 FAILED")
+    void cancelOrder_otherError_failed() {
+        givenKey();
+        given(feignClient.cancelOrder("BTCUSDT", "q1-T-1")).willThrow(new BinanceApiException(-1001, "Internal error"));
+
+        assertThat(client.cancelOrder(1L, "BTCUSDT", "q1-T-1")).isEqualTo(OrderCancelResult.FAILED);
     }
 
     @Test
@@ -482,6 +563,80 @@ class BinanceTradeClientTest {
     }
 
     @Test
+    @DisplayName("findLastClose: 주문 ID·유형으로 판정되지 않으면 조건부 주문 이력에서 actualOrderId 로 찾아 판정한다")
+    void findLastClose_resolvesByAlgoHistory() throws Exception {
+        givenKey();
+        given(clock.millis()).willReturn(NOW);
+        given(feignClient.getUserTrades(eq("BTCUSDT"), isNull(), eq(1761526800000L), anyInt()))
+                .willReturn(fixtureList("getUserTrades_recent", BinanceUserTradeResponse.class));
+        given(feignClient.getOrder("BTCUSDT", "22542200", null))
+                .willReturn(fixture("getOrder_triggeredUnknown", BinanceOrderResponse.class));
+        given(feignClient.getAllAlgoOrders(eq("BTCUSDT"), eq(1761526800000L), anyInt()))
+                .willReturn(fixtureList("getAllAlgoOrders", BinanceAlgoOrderHistoryResponse.class));
+
+        PositionCloseDTO close = client.findLastClose(1L, "BTCUSDT", 1761526800000L);
+
+        assertThat(close.getOrderId()).isEqualTo("22542200");
+        assertThat(close.getOrderLinkId()).isEqualTo("x-Wd9kPq2M");
+        // 트리거된 TP 알고 주문(clientAlgoId ...-TP, TAKE_PROFIT_MARKET)과 매칭
+        assertThat(close.getCloseType()).isEqualTo(PositionCloseType.TAKE_PROFIT);
+    }
+
+    @Test
+    @DisplayName("findLastClose: 조건부 주문 이력에도 일치하는 주문이 없으면 OTHER")
+    void findLastClose_algoHistoryNoMatch() throws Exception {
+        givenKey();
+        given(clock.millis()).willReturn(NOW);
+        given(feignClient.getUserTrades(eq("BTCUSDT"), isNull(), eq(1761526800000L), anyInt()))
+                .willReturn(fixtureList("getUserTrades_recent", BinanceUserTradeResponse.class));
+        given(feignClient.getOrder("BTCUSDT", "22542200", null))
+                .willReturn(fixture("getOrder_triggeredUnknown", BinanceOrderResponse.class));
+        // 트리거되지 않은(actualOrderId 빈 값) SL 주문만 존재
+        List<BinanceAlgoOrderHistoryResponse> history =
+                fixtureList("getAllAlgoOrders", BinanceAlgoOrderHistoryResponse.class).subList(0, 1);
+        given(feignClient.getAllAlgoOrders(eq("BTCUSDT"), eq(1761526800000L), anyInt())).willReturn(history);
+
+        PositionCloseDTO close = client.findLastClose(1L, "BTCUSDT", 1761526800000L);
+
+        assertThat(close.getOrderId()).isEqualTo("22542200");
+        assertThat(close.getCloseType()).isEqualTo(PositionCloseType.OTHER);
+    }
+
+    @Test
+    @DisplayName("findLastClose: 조건부 주문 이력 조회가 실패해도 청산 이벤트는 OTHER 로 돌려준다")
+    void findLastClose_algoHistoryFailure() throws Exception {
+        givenKey();
+        given(clock.millis()).willReturn(NOW);
+        given(feignClient.getUserTrades(eq("BTCUSDT"), isNull(), eq(1761526800000L), anyInt()))
+                .willReturn(fixtureList("getUserTrades_recent", BinanceUserTradeResponse.class));
+        given(feignClient.getOrder("BTCUSDT", "22542200", null))
+                .willReturn(fixture("getOrder_triggeredUnknown", BinanceOrderResponse.class));
+        given(feignClient.getAllAlgoOrders(anyString(), anyLong(), anyInt()))
+                .willThrow(new BinanceApiException(-1003, "Too many requests"));
+
+        PositionCloseDTO close = client.findLastClose(1L, "BTCUSDT", 1761526800000L);
+
+        assertThat(close).isNotNull();
+        assertThat(close.getOrderId()).isEqualTo("22542200");
+        assertThat(close.getCloseType()).isEqualTo(PositionCloseType.OTHER);
+    }
+
+    @Test
+    @DisplayName("findLastClose: 주문 ID·유형으로 판정되면 조건부 주문 이력을 조회하지 않는다")
+    void findLastClose_resolvedWithoutAlgoHistory() throws Exception {
+        givenKey();
+        given(clock.millis()).willReturn(NOW);
+        given(feignClient.getUserTrades(eq("BTCUSDT"), isNull(), eq(1761526800000L), anyInt()))
+                .willReturn(fixtureList("getUserTrades_recent", BinanceUserTradeResponse.class));
+        given(feignClient.getOrder("BTCUSDT", "22542200", null))
+                .willReturn(fixture("getOrder_takeProfit", BinanceOrderResponse.class));
+
+        client.findLastClose(1L, "BTCUSDT", 1761526800000L);
+
+        then(feignClient).should(never()).getAllAlgoOrders(anyString(), anyLong(), anyInt());
+    }
+
+    @Test
     @DisplayName("getPositionSize: positionAmt 절댓값 합계, 조회 실패면 null")
     void getPositionSize() throws Exception {
         givenKey();
@@ -560,4 +715,172 @@ class BinanceTradeClientTest {
                 Collections.emptyMap(), null, StandardCharsets.UTF_8, null);
         return new RetryableException(-1, "Read timed out", Request.HttpMethod.POST, (Long) null, request);
     }
+
+    // ─── private 스트림 ───
+
+    @Test
+    @DisplayName("expectExecution·cancelExecution: 체결 대기자에 위임한다")
+    void expectAndCancel_delegateToWaiter() {
+        given(executionWaiter.expect(1L, CLIENT_ORDER_ID)).willReturn(true);
+
+        assertThat(client.expectExecution(1L, CLIENT_ORDER_ID)).isTrue();
+        client.cancelExecution(CLIENT_ORDER_ID);
+
+        then(executionWaiter).should().cancel(CLIENT_ORDER_ID);
+    }
+
+    @Test
+    @DisplayName("getExecution: 스트림 체결을 받으면 BNB 수수료를 USDT로 환산하고 REST 체결 조회는 하지 않는다")
+    void getExecution_fromStream() {
+        given(executionWaiter.await(eq(CLIENT_ORDER_ID), anyLong())).willReturn(filled("0.1", "0.0002", false));
+        given(marketClient.getTickers()).willReturn(List.of(ticker("BNBUSDT", "600")));
+
+        ExecutionDTO exec = client.getExecution("22542179", CLIENT_ORDER_ID, "BTCUSDT", 1L);
+
+        assertThat(exec.getOrderId()).isEqualTo("22542179");
+        assertThat(exec.getSide()).isEqualTo(OrderSide.BUY);
+        assertThat(exec.getExecPrice()).isEqualTo("50000");
+        assertThat(exec.getExecQty()).isEqualTo("0.01");
+        assertThat(exec.getOrderQty()).isEqualTo("0.01");
+        // 0.1 USDT + 0.0002 BNB × 600 = 0.22
+        assertThat(new BigDecimal(exec.getExecFee())).isEqualByComparingTo("0.22");
+        then(feignClient).should(never()).getUserTrades(anyString(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("getExecution: 스트림 체결에 USDT·BNB 외 수수료 자산이 섞이면 평균가 × 수량 × taker 요율로 추정한다")
+    void getExecution_fromStreamOtherFeeAsset() {
+        given(executionWaiter.await(eq(CLIENT_ORDER_ID), anyLong())).willReturn(filled("0.1", "0", true));
+
+        ExecutionDTO exec = client.getExecution("22542179", CLIENT_ORDER_ID, "BTCUSDT", 1L);
+
+        // 50000 × 0.01 × 0.0005 = 0.25
+        assertThat(new BigDecimal(exec.getExecFee())).isEqualByComparingTo("0.25");
+    }
+
+    @Test
+    @DisplayName("syncPrivateStreams: 신규 대상은 API 키로 연결하고, 대상에서 빠진 사용자는 닫고, 키 오류 사용자는 건너뛴다")
+    void syncPrivateStreams_opensAndCloses() {
+        given(privateWebSocketClient.getConnectedUserIds()).willReturn(Set.of(1L, 3L));
+        ExchangeKeyDTO key2 = ExchangeKeyDTO.builder()
+                .userId(2L).exchangeType(ExchangeType.BINANCE)
+                .apiKey("encKey").apiSecret("encSecret").build();
+        given(exchangeKeyService.findKey(2L, ExchangeType.BINANCE)).willReturn(key2);
+        given(aesEncryptor.decrypt("encKey")).willReturn("rawKey");
+        given(exchangeKeyService.findKey(4L, ExchangeType.BINANCE))
+                .willThrow(new CustomException(ExceptionMessage.API_KEY_NOT_FOUND));
+
+        client.syncPrivateStreams(Set.of(1L, 2L, 4L));
+
+        then(privateWebSocketClient).should().close(3L);
+        then(privateWebSocketClient).should().open(2L, "rawKey");
+        then(privateWebSocketClient).should(never()).open(eq(1L), anyString());
+        then(privateWebSocketClient).should(never()).open(eq(4L), anyString());
+    }
+
+    @Test
+    @DisplayName("onOrderUpdate: 전량 체결된 청산 주문은 원 주문 유형으로 판정해 청산 이벤트로 발행한다")
+    void onOrderUpdate_publishesClose() throws Exception {
+        BlockingQueue<PositionCloseDTO> events = listenCloses();
+        BinanceOrderTradeUpdateDTO.OrderUpdate o = closeUpdate("x-Wd9kPq2M", "TAKE_PROFIT_MARKET", "TRADE", "FILLED");
+
+        client.onOrderUpdate(1L, o);
+
+        PositionCloseDTO close = events.poll(2, TimeUnit.SECONDS);
+        assertThat(close).isNotNull();
+        assertThat(close.getUserId()).isEqualTo(1L);
+        assertThat(close.getExchangeType()).isEqualTo(ExchangeType.BINANCE);
+        assertThat(close.getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(close.getOrderId()).isEqualTo("22542200");
+        assertThat(close.getOrderLinkId()).isEqualTo("x-Wd9kPq2M");
+        assertThat(close.getExecPrice()).isEqualTo("51000");
+        assertThat(close.getCloseType()).isEqualTo(PositionCloseType.TAKE_PROFIT);
+        then(feignClient).should(never()).getAllAlgoOrders(anyString(), anyLong(), anyInt());
+    }
+
+    @Test
+    @DisplayName("onOrderUpdate: 주문 ID·유형으로 판정되지 않으면 조건부 주문 이력으로 판정해 발행한다")
+    void onOrderUpdate_resolvesByAlgoHistory() throws Exception {
+        givenKey();
+        given(clock.millis()).willReturn(NOW);
+        given(feignClient.getAllAlgoOrders(eq("BTCUSDT"), anyLong(), anyInt()))
+                .willReturn(fixtureList("getAllAlgoOrders", BinanceAlgoOrderHistoryResponse.class));
+        BlockingQueue<PositionCloseDTO> events = listenCloses();
+
+        client.onOrderUpdate(1L, closeUpdate("x-Wd9kPq2M", "MARKET", "TRADE", "FILLED"));
+
+        PositionCloseDTO close = events.poll(2, TimeUnit.SECONDS);
+        assertThat(close).isNotNull();
+        assertThat(close.getCloseType()).isEqualTo(PositionCloseType.TAKE_PROFIT);
+    }
+
+    @Test
+    @DisplayName("onOrderUpdate: 강제청산 체결(x=CALCULATED)은 강제청산으로 발행한다")
+    void onOrderUpdate_liquidation() throws Exception {
+        BlockingQueue<PositionCloseDTO> events = listenCloses();
+
+        client.onOrderUpdate(1L, closeUpdate("autoclose-1761530000000", "LIQUIDATION", "CALCULATED", "FILLED"));
+
+        PositionCloseDTO close = events.poll(2, TimeUnit.SECONDS);
+        assertThat(close).isNotNull();
+        assertThat(close.getCloseType()).isEqualTo(PositionCloseType.LIQUIDATION);
+    }
+
+    @Test
+    @DisplayName("onOrderUpdate: 진입 체결·부분 체결 중간 건·체결 외 이벤트는 발행하지 않는다")
+    void onOrderUpdate_ignoresNonClose() throws Exception {
+        BlockingQueue<PositionCloseDTO> events = listenCloses();
+        // 진입 체결: 실현손익 0, reduceOnly·closePosition 아님
+        BinanceOrderTradeUpdateDTO.OrderUpdate entry = closeUpdate(CLIENT_ORDER_ID, "MARKET", "TRADE", "FILLED");
+        entry.setRealizedProfit("0");
+        entry.setReduceOnly(false);
+        entry.setClosePosition(false);
+
+        client.onOrderUpdate(1L, entry);
+        client.onOrderUpdate(1L, closeUpdate("x-Wd9kPq2M", "TAKE_PROFIT_MARKET", "TRADE", "PARTIALLY_FILLED"));
+        client.onOrderUpdate(1L, closeUpdate("x-Wd9kPq2M", "TAKE_PROFIT_MARKET", "NEW", "NEW"));
+
+        assertThat(events.poll(300, TimeUnit.MILLISECONDS)).isNull();
+    }
+
+    /** 청산 이벤트 수신 큐를 리스너로 등록한다. */
+    private BlockingQueue<PositionCloseDTO> listenCloses() {
+        BlockingQueue<PositionCloseDTO> events = new LinkedBlockingQueue<>();
+        client.addPositionCloseListener(events::add);
+        return events;
+    }
+
+    /** 실현손익이 있는 reduceOnly 청산 주문 업데이트 */
+    private BinanceOrderTradeUpdateDTO.OrderUpdate closeUpdate(String clientOrderId, String origType,
+                                                                String execType, String status) {
+        BinanceOrderTradeUpdateDTO.OrderUpdate o = new BinanceOrderTradeUpdateDTO.OrderUpdate();
+        o.setSymbol("BTCUSDT");
+        o.setClientOrderId(clientOrderId);
+        o.setSide("SELL");
+        o.setOrderType("MARKET");
+        o.setOrigType(origType);
+        o.setOrigQty("0.01");
+        o.setAvgPrice("51000");
+        o.setExecType(execType);
+        o.setOrderStatus(status);
+        o.setOrderId("22542200");
+        o.setLastFilledQty("0.01");
+        o.setCumFilledQty("0.01");
+        o.setLastFilledPrice("51000");
+        o.setTradeId("9001");
+        o.setReduceOnly(true);
+        o.setRealizedProfit("10");
+        return o;
+    }
+
+    /** 스트림 집계 체결 결과 (BUY 0.01 @ 50000) */
+    private BinanceFilledOrderDTO filled(String usdtFee, String bnbFee, boolean otherFeeAsset) {
+        return BinanceFilledOrderDTO.builder()
+                .symbol("BTCUSDT").orderId("22542179").side("BUY")
+                .orderQty("0.01").avgPrice("50000").filledQty("0.01")
+                .usdtFee(usdtFee).bnbFee(bnbFee).otherFeeAsset(otherFeeAsset)
+                .execTime("1761526800000")
+                .build();
+    }
+
 }

@@ -11,8 +11,10 @@ import lombok.Getter;
 public class BinanceOrderRequest {
     private String symbol;           // 종목 심볼 (예: BTCUSDT)
     private String side;             // 주문 방향 (BUY/SELL)
-    private String type;             // 주문 유형 (MARKET)
+    private String type;             // 주문 유형 (MARKET / LIMIT)
     private String quantity;         // 주문 수량 (코인 기준)
+    private String price;            // 지정가 가격 (LIMIT만, tickSize 단위)
+    private String timeInForce;      // 주문 유효 방식 (GTC: 취소·체결 전까지 유효, LIMIT만)
     private String reduceOnly;       // 포지션 축소 전용 ("true", 청산 주문만 지정)
     private String newClientOrderId; // 사용자 지정 주문 ID (null이면 거래소 자동 생성)
 }

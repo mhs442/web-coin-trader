@@ -45,6 +45,7 @@ public enum LogMessage {
     PRIVATE_WS_RECONNECT_SCHEDULED("Bybit Private WebSocket 재연결 예약: userId={}, {}ms 후"),
     PRIVATE_WS_EXECUTION_WAIT_TIMEOUT("WS 체결 대기 시간 초과 → REST 체결 조회로 전환: orderLinkId={}, timeout={}ms"),
     PRIVATE_WS_OPEN_SKIPPED("Bybit Private WebSocket 연결 생략(REST 체결 조회로 동작): userId={}, reason={}"),
+    BINANCE_PRIVATE_WS_OPEN_SKIPPED("Binance Private WebSocket 연결 생략(REST 체결 조회로 동작): userId={}, reason={}"),
     EXTERNAL_CLOSE_DETECTED("외부 청산 감지: queueId={}, symbol={}, closeType={}, orderId={}"),
     EXTERNAL_CLOSE_IGNORED("외부 청산 무시(거래소 포지션 남아 있음): userId={}, symbol={}, size={}, orderId={}"),
     CLOSE_ORDER_FAILED_ALREADY_CLOSED("앱 매도/청산 주문 실패 — 거래소 포지션 이미 청산됨: queueId={}, symbol={}, closeType={}, orderId={}"),
@@ -64,6 +65,11 @@ public enum LogMessage {
     POSITION_ENTRY_FAILED("포지션 진입 실패: queue={}, error={}"),
     INVESTMENT_HISTORY_SAVED("투자 히스토리 저장: symbol={}, side={}, profitLoss={}, mode={}"),
     QUEUE_DEACTIVATED("큐 비활성화: queue={}, reason={}"),
+    TP_LIMIT_FILLED("익절 지정가 체결 → 1단계 리셋: queue={}, symbol={}, orderId={}"),
+    TP_CANCEL_FAILED("손절 전 익절 지정가 취소 미확인 → 손절 보류: queue={}, reason={}, 연속={}"),
+    TP_LIMIT_ORDER_FAILED("익절 지정가 등록 실패 → 시장가 청산 후 큐 비활성화: queue={}, reason={}"),
+    ENTRY_NOT_CONFIRMED("진입 주문 후 거래소 포지션 미확인: queue={}, positionSize={}, 연속={}"),
+    CLOSE_NOT_CONFIRMED("청산 주문 후 거래소 포지션 0 미확인: queue={}, positionSize={}, 연속={}"),
     CLOSE_QTY_SKIP_DEACTIVATED("포지션 청산 수량 오류 5회 초과 → 큐 비활성화: queue={}, phase={}"),
     ENTRY_SKIP_LIMIT_EXCEEDED("최소 주문 단위 미달 5회 초과 → 큐 비활성화 (amount × leverage 부족): queue={}, symbol={}, notional={}, currentPrice={}"),
 
@@ -97,7 +103,26 @@ public enum LogMessage {
     BINANCE_WS_SUBSCRIPTION_SENT("Binance WebSocket {} 요청: 스트림 {}개"),
     BINANCE_WS_MESSAGE_PARSE_ERROR("Binance WebSocket 메시지 파싱 실패: {}"),
     BINANCE_WS_MESSAGE_SEND_FAILED("Binance WebSocket 메시지 전송 실패: {}"),
-    BINANCE_WS_SESSION_CLOSE_ERROR("Binance WebSocket 세션 종료 중 오류: {}");
+    BINANCE_WS_SESSION_CLOSE_ERROR("Binance WebSocket 세션 종료 중 오류: {}"),
+
+    // ─────────────────────────────────────────────
+    // BinancePrivateWebSocketClient (user data stream)
+    // ─────────────────────────────────────────────
+    BINANCE_PRIVATE_WS_CONNECTING("Binance Private WebSocket 연결 시도(listenKey 발급): userId={}"),
+    BINANCE_PRIVATE_WS_CONNECTED("Binance Private WebSocket 연결 성공: userId={}"),
+    BINANCE_PRIVATE_WS_CONNECT_FAILED("Binance Private WebSocket 연결 실패: userId={}, error={}"),
+    BINANCE_PRIVATE_WS_LISTEN_KEY_FAILED("Binance listenKey 발급 실패 → 재시도: userId={}, error={}"),
+    BINANCE_PRIVATE_WS_INVALID_KEY("Binance API 키 거부 → 연결 종료(재연결 안 함): userId={}, reason={}"),
+    BINANCE_PRIVATE_WS_KEEPALIVE_FAILED("Binance listenKey 연장 실패: userId={}, error={}"),
+    BINANCE_PRIVATE_WS_LISTEN_KEY_EXPIRED("Binance listenKey 만료 → 재발급·재연결: userId={}"),
+    BINANCE_PRIVATE_WS_CLOSE_LISTEN_KEY_FAILED("Binance listenKey 폐기 실패(60분 후 자동 만료): userId={}, error={}"),
+    BINANCE_PRIVATE_WS_ORDER_UPDATE_RECEIVED("주문 업데이트 수신: userId={}, symbol={}, clientOrderId={}, execType={}, status={}, lastPrice={}, lastQty={}, fee={} {}"),
+    BINANCE_PRIVATE_WS_CALLBACK_ERROR("주문 업데이트 콜백 처리 오류: userId={}, clientOrderId={}, error={}"),
+    BINANCE_PRIVATE_WS_CONNECTION_CLOSED("Binance Private WebSocket 연결 종료: userId={}, status={}"),
+    BINANCE_PRIVATE_WS_TRANSPORT_ERROR("Binance Private WebSocket 전송 오류: userId={}, error={}"),
+    BINANCE_PRIVATE_WS_RECONNECT_SCHEDULED("Binance Private WebSocket 재연결 예약: userId={}, {}ms 후"),
+    BINANCE_PRIVATE_WS_EXECUTION_WAIT_TIMEOUT("Binance WS 체결 대기 시간 초과 → REST 체결 조회로 전환: clientOrderId={}, timeout={}ms"),
+    BINANCE_PRIVATE_WS_ORDER_ENDED_WITHOUT_FILL("Binance 주문이 체결 없이 종료됨 → REST 체결 조회로 확인: clientOrderId={}, status={}");
 
     private final String message; // 로그 메시지 템플릿
 

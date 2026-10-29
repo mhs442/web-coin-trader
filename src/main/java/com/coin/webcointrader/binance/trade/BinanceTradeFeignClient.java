@@ -1,6 +1,7 @@
 package com.coin.webcointrader.binance.trade;
 
 import com.coin.webcointrader.binance.common.BinanceFeignConfig;
+import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderHistoryResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderRequest;
 import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceIncomeResponse;
@@ -33,6 +34,18 @@ public interface BinanceTradeFeignClient {
      */
     @PostMapping("/fapi/v1/order")
     BinanceOrderResponse newOrder(@SpringQueryMap BinanceOrderRequest request);
+
+    /**
+     * Binance DELETE /fapi/v1/order (TRADE, 가중치 1)
+     * 미체결 주문을 취소한다. 이미 전부 체결·취소된 주문은 -2011(Unknown order sent).
+     *
+     * @param symbol            종목 심볼
+     * @param origClientOrderId 취소할 주문의 사용자 지정 ID
+     * @return 취소된 주문 상태 (status CANCELED)
+     */
+    @DeleteMapping("/fapi/v1/order")
+    BinanceOrderResponse cancelOrder(@RequestParam("symbol") String symbol,
+                                     @RequestParam("origClientOrderId") String origClientOrderId);
 
     /**
      * Binance GET /fapi/v1/order (USER_DATA, 가중치 1)
@@ -124,4 +137,19 @@ public interface BinanceTradeFeignClient {
      */
     @GetMapping("/fapi/v3/positionRisk")
     List<BinancePositionRiskResponse> getPositionRisk(@RequestParam("symbol") String symbol);
+
+    /**
+     * Binance GET /fapi/v1/allAlgoOrders (USER_DATA, 가중치 5)
+     * 조건부(알고) 주문 이력. 조회 범위는 최대 7일이며, 트리거된 주문은 actualOrderId 에 실제 생성된 주문 ID 가 들어간다.
+     * (생성 후 90일 경과 주문, 체결 없이 취소·만료된 지 3일 지난 주문은 조회되지 않음)
+     *
+     * @param symbol    종목 심볼
+     * @param startTime 조회 시작 시각 epoch ms
+     * @param limit     최대 건수 (기본 500, 최대 1000)
+     * @return 조건부 주문 이력 목록
+     */
+    @GetMapping("/fapi/v1/allAlgoOrders")
+    List<BinanceAlgoOrderHistoryResponse> getAllAlgoOrders(@RequestParam("symbol") String symbol,
+                                                           @RequestParam("startTime") long startTime,
+                                                           @RequestParam("limit") int limit);
 }

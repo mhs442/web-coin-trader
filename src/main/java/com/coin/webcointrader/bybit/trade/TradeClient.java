@@ -1,5 +1,7 @@
 package com.coin.webcointrader.bybit.trade;
 
+import com.coin.webcointrader.bybit.trade.dto.CancelOrderRequest;
+import com.coin.webcointrader.bybit.trade.dto.CancelOrderResponse;
 import com.coin.webcointrader.bybit.trade.dto.CreateOrderRequest;
 import com.coin.webcointrader.bybit.trade.dto.CreateOrderResponse;
 import com.coin.webcointrader.bybit.trade.dto.GetExecutionListResponse;
@@ -28,6 +30,16 @@ public interface TradeClient {
      */
     @PostMapping("/v5/order/create")
     ResponseEntity<CreateOrderResponse> createOrder(@RequestBody CreateOrderRequest request);
+
+    /**
+     * Bybit POST /v5/order/cancel
+     * 미체결(또는 부분 체결) 주문을 취소한다. 이미 전부 체결·취소된 주문은 retCode 110001.
+     *
+     * @param request 취소 요청 (category, symbol, orderLinkId)
+     * @return 취소 응답 (취소된 주문 ID 포함)
+     */
+    @PostMapping("/v5/order/cancel")
+    ResponseEntity<CancelOrderResponse> cancelOrder(@RequestBody CancelOrderRequest request);
 
     /**
      * Bybit GET /v5/execution/list

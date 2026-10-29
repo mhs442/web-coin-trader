@@ -40,6 +40,15 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
             Long userId, TradeMode tradeMode, ExchangeType exchangeType);
 
     /**
+     * 사용자/거래모드에 해당하는 모든 거래소의 패턴 큐 목록을 생성일 오름차순으로 조회한다. (심볼·거래소 무관 - 큐 가져오기용)
+     *
+     * @param userId    사용자 ID
+     * @param tradeMode 거래 모드 (MAIN/SIM)
+     * @return 전체 거래소 패턴 큐 목록 (createdAt 오름차순)
+     */
+    List<PatternQueue> findByUserIdAndTradeModeOrderByCreatedAtAsc(Long userId, TradeMode tradeMode);
+
+    /**
      * 사용자/심볼/거래모드/거래소에 해당하는 패턴 큐 개수를 조회한다.
      *
      * @param userId       사용자 ID

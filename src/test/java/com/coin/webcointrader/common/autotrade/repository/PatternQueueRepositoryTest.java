@@ -178,6 +178,32 @@ class PatternQueueRepositoryTest {
     }
 
     // ─────────────────────────────────────────────
+    // findByUserIdAndTradeModeOrderByCreatedAtAsc
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("거래 모드만 지정하면 거래소와 무관하게 사용자의 큐를 생성 순서대로 반환한다")
+    void findByUserIdAndTradeMode_allExchanges() {
+        // given: Bybit·Binance MAIN 큐 + 다른 모드(SIM) 큐 + 다른 사용자 큐
+        patternQueueRepository.save(makeQueue(USER_ID, "BTCUSDT"));
+        PatternQueue binance = makeQueue(USER_ID, "ETHUSDT");
+        binance.setExchangeType(ExchangeType.BINANCE);
+        patternQueueRepository.save(binance);
+        PatternQueue sim = makeQueue(USER_ID, "SOLUSDT");
+        sim.setTradeMode(TradeMode.SIM);
+        patternQueueRepository.save(sim);
+        patternQueueRepository.save(makeQueue(2L, "XRPUSDT"));
+
+        // when
+        List<PatternQueue> result = patternQueueRepository.findByUserIdAndTradeModeOrderByCreatedAtAsc(USER_ID, TradeMode.MAIN);
+
+        // then
+        assertThat(result).extracting(PatternQueue::getSymbol).containsExactly("BTCUSDT", "ETHUSDT");
+        assertThat(result).extracting(PatternQueue::getExchangeType)
+                .containsExactly(ExchangeType.BYBIT, ExchangeType.BINANCE);
+    }
+
+    // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
 

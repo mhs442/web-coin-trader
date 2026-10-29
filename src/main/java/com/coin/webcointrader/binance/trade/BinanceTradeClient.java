@@ -2,6 +2,11 @@ package com.coin.webcointrader.binance.trade;
 
 import com.coin.webcointrader.binance.common.BinanceApiException;
 import com.coin.webcointrader.binance.market.BinanceMarketClient;
+import com.coin.webcointrader.binance.stream.BinanceExecutionWaiter;
+import com.coin.webcointrader.binance.stream.BinancePrivateWebSocketClient;
+import com.coin.webcointrader.binance.stream.dto.BinanceFilledOrderDTO;
+import com.coin.webcointrader.binance.stream.dto.BinanceOrderTradeUpdateDTO;
+import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderHistoryResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceAlgoOrderRequest;
 import com.coin.webcointrader.binance.trade.dto.BinanceIncomeResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceOrderRequest;
@@ -10,9 +15,12 @@ import com.coin.webcointrader.binance.trade.dto.BinancePositionRiskResponse;
 import com.coin.webcointrader.binance.trade.dto.BinanceUserTradeResponse;
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
+import com.coin.webcointrader.common.enums.LogMessage;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.enums.PositionCloseType;
 import com.coin.webcointrader.common.exception.CustomException;
+import com.coin.webcointrader.common.login.dto.ExchangeKeyDTO;
 import com.coin.webcointrader.common.login.service.ExchangeKeyService;
 import com.coin.webcointrader.common.market.dto.TickerDTO;
 import com.coin.webcointrader.common.trade.client.AbstractExchangeTradeClient;
@@ -27,6 +35,8 @@ import com.coin.webcointrader.common.util.AesEncryptor;
 import com.coin.webcointrader.common.util.UserApiKeyContext;
 import feign.FeignException;
 import feign.RetryableException;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -34,12 +44,14 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Binance 거래 클라이언트.
  * 공통 주문 요청을 Binance USDⓈ-M 선물 REST(단방향 모드)로 변환하고, 응답을 공통 DTO로 변환한다.
  * TP/SL은 진입 후 별도 조건부(algo) 주문으로 걸고, 청산 손익은 체결·펀딩 내역으로 직접 계산한다.
- * user data stream 은 아직 없으므로(3-5 예정) 체결은 REST 조회, 외부 청산은 재조정(findLastClose)으로 감지한다.
+ * 체결은 user data stream(ORDER_TRADE_UPDATE)으로 받고 없으면 REST 조회, 외부 청산은 스트림 + 재조정(findLastClose)으로 감지한다.
  */
 @Slf4j
 @Component
@@ -47,6 +59,8 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
 
     // 기본 등급 taker 수수료율 (0.05%, BNB 할인 미적용)
     private static final BigDecimal TAKER_FEE_RATE = new BigDecimal("0.0005");
+    // 기본 등급 maker 수수료율 (0.02%, BNB 할인 미적용)
+    private static final BigDecimal MAKER_FEE_RATE = new BigDecimal("0.0002");
     // 체결·손익 내역 조회 건수 (Binance 최대값)
     private static final int QUERY_LIMIT = 1000;
     // userTrades startTime 조회 가능 최대 범위 (7일)
@@ -55,19 +69,55 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
     private static final Set<Integer> AMBIGUOUS_CODES = Set.of(-1000, -1006, -1007);
     // 주문 없음
     private static final int CODE_ORDER_NOT_FOUND = -2013;
+    // 취소할 주문 없음 (이미 전부 체결·취소)
+    private static final int CODE_CANCEL_UNKNOWN_ORDER = -2011;
     // 이미 같은 마진 모드 (정상 처리)
     private static final int CODE_MARGIN_NOT_MODIFIED = -4046;
     // 수수료 환산용 BNB 시세 심볼
     private static final String BNB_PRICE_SYMBOL = "BNBUSDT";
+    // 체결 이벤트 실행 유형 (TRADE 일반 체결, CALCULATED 강제청산·ADL 체결)
+    private static final Set<String> CLOSE_EXEC_TYPES = Set.of("TRADE", "CALCULATED");
+    // 전량 체결 상태
+    private static final String FILLED = "FILLED";
+    // 거래소 개입 청산 clientOrderId 접두어 (강제청산, ADL, 상장폐지 정산)
+    private static final List<String> EXCHANGE_CLOSE_PREFIXES = List.of("autoclose-", "adl_autoclose", "settlement_autoclose-");
 
     private final BinanceTradeFeignClient feignClient;
     private final BinanceMarketClient marketClient;
+    private final BinanceExecutionWaiter executionWaiter;
+    private final BinancePrivateWebSocketClient privateWebSocketClient;
+    // 청산 방식 판정(REST 호출 가능)·청산 이벤트 발행 전용 스레드 — WebSocket 수신을 막지 않고, 단일 스레드로 수신 순서 유지
+    private final ExecutorService closeEventExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "binance-close-event");
+        t.setDaemon(true);
+        return t;
+    });
 
     public BinanceTradeClient(BinanceTradeFeignClient feignClient, BinanceMarketClient marketClient,
-                              ExchangeKeyService exchangeKeyService, AesEncryptor aesEncryptor, Clock clock) {
+                              ExchangeKeyService exchangeKeyService, AesEncryptor aesEncryptor, Clock clock,
+                              BinanceExecutionWaiter executionWaiter,
+                              BinancePrivateWebSocketClient privateWebSocketClient) {
         super(exchangeKeyService, aesEncryptor, clock);
         this.feignClient = feignClient;
         this.marketClient = marketClient;
+        this.executionWaiter = executionWaiter;
+        this.privateWebSocketClient = privateWebSocketClient;
+    }
+
+    /**
+     * 빈 초기화 시 개인 스트림에 주문 업데이트 콜백을 등록한다. (청산 체결 → 포지션 청산 리스너 팬아웃)
+     */
+    @PostConstruct
+    public void init() {
+        privateWebSocketClient.addOrderUpdateCallback(this::onOrderUpdate);
+    }
+
+    /**
+     * 종료 시 청산 이벤트 스레드를 정리한다.
+     */
+    @PreDestroy
+    public void destroy() {
+        closeEventExecutor.shutdownNow();
     }
 
     @Override
@@ -78,6 +128,11 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
     @Override
     public BigDecimal getTakerFeeRate() {
         return TAKER_FEE_RATE;
+    }
+
+    @Override
+    public BigDecimal getMakerFeeRate() {
+        return MAKER_FEE_RATE;
     }
 
     // ─── API 키 바인딩 ───
@@ -95,9 +150,11 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
     // ─── 주문 ───
 
     /**
-     * 공통 주문을 Binance 시장가 주문으로 전송한다. (POST /fapi/v1/order)
+     * 공통 주문을 Binance 시장가/지정가 주문으로 전송한다. (POST /fapi/v1/order)
+     * price가 있으면 지정가(LIMIT, GTC), 없으면 시장가로 보낸다.
      * positionSide 는 보내지 않는다. (단방향 모드 전제 — 헤지 모드 계정은 거래소가 거부)
-     * [사용자 정책 2026-10-27] 진입 전·청산 접수 후 심볼의 조건부 주문을 전부 취소한다. (사용자가 직접 건 조건부 주문 포함)
+     * [사용자 정책 2026-10-27] 진입 전·시장가 청산 접수 후 심볼의 조건부 주문을 전부 취소한다. (사용자가 직접 건 조건부 주문 포함)
+     * [사용자 정책 2026-10-28] 익절 지정가 접수 후에는 포지션이 남아 있으므로 조건부 주문(안전망)을 취소하지 않는다.
      * [사용자 정책 2026-10-27] 진입 후 TP/SL 조건부 주문 접수가 실패해도 진입은 성공으로 처리한다. (경고 로그만)
      *
      * @param request 주문 요청 (clientOrderId → newClientOrderId)
@@ -118,8 +175,11 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
             response = feignClient.newOrder(BinanceOrderRequest.builder()
                     .symbol(symbol)
                     .side(request.getSide().name())
-                    .type("MARKET")
+                    .type(request.getPrice() != null ? "LIMIT" : "MARKET")
                     .quantity(request.getQty())
+                    // 지정가만 가격 + GTC 지정 (시장가는 필드 생략)
+                    .price(request.getPrice())
+                    .timeInForce(request.getPrice() != null ? "GTC" : null)
                     // 청산 주문만 reduceOnly 지정 (진입 주문은 필드 생략)
                     .reduceOnly(request.isReduceOnly() ? "true" : null)
                     .newClientOrderId(request.getClientOrderId())
@@ -135,8 +195,11 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
         }
 
         if (request.isReduceOnly()) {
-            // 청산 접수 후: 포지션이 사라져 쓸모없어진 조건부 주문 정리
-            cancelAlgoOrders(symbol);
+            // 시장가 청산 접수 후: 포지션이 사라져 쓸모없어진 조건부 주문 정리
+            // 지정가 익절은 접수만 된 상태(포지션 유지) → 안전망 조건부 주문을 남겨둠
+            if (request.getPrice() == null) {
+                cancelAlgoOrders(symbol);
+            }
         } else {
             placeProtectionOrders(request);
         }
@@ -243,6 +306,26 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
         return OrderLookupDTO.builder().orderId(order.getOrderId()).accepted(accepted).build();
     }
 
+    /**
+     * 주문을 origClientOrderId로 취소한다. (DELETE /fapi/v1/order)
+     *
+     * @param symbol        종목 심볼
+     * @param clientOrderId 취소할 주문의 사용자 지정 ID
+     * @return 정상 응답 → CANCELLED, -2011(이미 체결·취소) → NOT_FOUND, 그 외 오류 → FAILED
+     */
+    @Override
+    protected OrderCancelResult doCancelOrder(String symbol, String clientOrderId) {
+        try {
+            feignClient.cancelOrder(symbol, clientOrderId);
+            return OrderCancelResult.CANCELLED;
+        } catch (BinanceApiException e) {
+            // 이미 전부 체결·취소된 주문
+            if (e.getCode() == CODE_CANCEL_UNKNOWN_ORDER) return OrderCancelResult.NOT_FOUND;
+            log.warn("[BINANCE 주문 취소] 거부 clientOrderId={}: {}", clientOrderId, e.getMessage());
+            return OrderCancelResult.FAILED;
+        }
+    }
+
     // ─── 마진 모드 / 레버리지 ───
 
     /**
@@ -280,21 +363,21 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
 
     // ─── 체결 / 손익 조회 ───
 
-    /** 스트림 미구현(3-5 예정) → 대기 등록하지 않고 REST 조회로 진행 */
     @Override
     public boolean expectExecution(Long userId, String clientOrderId) {
-        return false;
+        return executionWaiter.expect(userId, clientOrderId);
     }
 
-    /** 스트림 미구현 → 정리할 대기 없음 */
     @Override
     public void cancelExecution(String clientOrderId) {
+        executionWaiter.cancel(clientOrderId);
     }
 
-    /** 스트림 미구현 → 항상 REST 조회로 fallback */
     @Override
     protected ExecutionDTO awaitExecution(String clientOrderId, long waitMillis) {
-        return null;
+        BinanceFilledOrderDTO filled = executionWaiter.await(clientOrderId, waitMillis);
+        // null(미등록·시간 초과·체결 없이 종료) → 호출부가 REST 조회로 fallback
+        return filled != null ? toExecutionDTO(filled) : null;
     }
 
     /**
@@ -379,7 +462,7 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
      * 그 주문의 clientOrderId·origType으로 청산 방식을 판정한다.
      * - 청산 체결 없음: orderId null, closeType OTHER
      * - 주문 조회 결과 없음: orderId 유지, closeType OTHER
-     * (GET /fapi/v1/userTrades 가중치 5 + GET /fapi/v1/order 가중치 1)
+     * (GET /fapi/v1/userTrades 가중치 5 + GET /fapi/v1/order 가중치 1, 판정 불가 시 + GET /fapi/v1/allAlgoOrders 가중치 5)
      *
      * @param userId      API 키를 조회할 사용자 ID
      * @param symbol      종목 심볼
@@ -427,13 +510,52 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
                 }
                 return builder
                         .orderLinkId(order.getClientOrderId())
-                        .closeType(BinanceCloseTypeResolver.resolve(order.getClientOrderId(), order.getOrigType()))
+                        .closeType(resolveCloseType(symbol, closeOrderId, order.getClientOrderId(),
+                                order.getOrigType(), startTime))
                         .build();
             });
         } catch (Exception e) {
             log.warn("[BINANCE 청산 내역 조회 실패] symbol={}: {}", symbol, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 청산 주문의 청산 방식을 판정한다. (C안 — REST 재조정·user data stream 공용)
+     * ① clientOrderId 접두어·원 주문 유형으로 판정 (API 호출 없음)
+     * ② ①이 OTHER 면 조건부 주문 이력에서 actualOrderId == 청산 주문 ID 인 주문을 찾아 그 clientAlgoId·orderType 으로 판정
+     *    (트리거된 TP/SL 주문의 clientOrderId·origType 이 거래소 임의 값일 수 있어 보강, GET /fapi/v1/allAlgoOrders 가중치 5)
+     * ③ 그래도 판정 불가 또는 이력 조회 실패 → OTHER (청산 감지 자체는 유지)
+     * 호출부에서 API 키가 바인딩돼 있어야 한다.
+     *
+     * @param symbol        종목 심볼
+     * @param closeOrderId  청산 주문의 거래소 주문 ID
+     * @param clientOrderId 청산 주문의 clientOrderId (null 가능)
+     * @param origType      청산 주문의 원 주문 유형 (null 가능)
+     * @param startTime     조건부 주문 이력 조회 시작 시각 epoch ms (최대 7일 범위로 보정)
+     * @return 청산 방식
+     */
+    private PositionCloseType resolveCloseType(String symbol, String closeOrderId, String clientOrderId,
+                                               String origType, long startTime) {
+        // ① 주문 ID·유형으로 판정되면 바로 반환
+        PositionCloseType type = BinanceCloseTypeResolver.resolve(clientOrderId, origType);
+        if (type != PositionCloseType.OTHER || closeOrderId == null) return type;
+
+        // ② 조건부 주문 이력에서 이 청산 주문을 만든 TP/SL 주문 탐색
+        try {
+            long from = Math.max(startTime, clock.millis() - USER_TRADES_MAX_RANGE_MS);
+            List<BinanceAlgoOrderHistoryResponse> history = feignClient.getAllAlgoOrders(symbol, from, QUERY_LIMIT);
+            if (history == null) return PositionCloseType.OTHER;
+            for (BinanceAlgoOrderHistoryResponse algo : history) {
+                if (closeOrderId.equals(algo.getActualOrderId())) {
+                    return BinanceCloseTypeResolver.resolve(algo.getClientAlgoId(), algo.getOrderType());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[BINANCE 조건부 주문 이력 조회 실패] symbol={}, orderId={}: {}", symbol, closeOrderId, e.getMessage());
+        }
+        // ③ 판정 불가
+        return PositionCloseType.OTHER;
     }
 
     /**
@@ -464,9 +586,90 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
 
     // ─── private 스트림 ───
 
-    /** user data stream 미구현(3-5 예정) → 외부 청산은 재조정으로만 감지 */
+    /**
+     * user data stream 연결 대상 사용자와 실제 연결을 동기화한다.
+     * 신규 대상은 API 키를 복호화해 연결을 열고(listenKey 발급은 키 헤더만 필요), 대상에서 빠진 사용자는 연결을 닫는다.
+     * 키가 없거나 복호화에 실패한 사용자는 건너뛴다. (해당 사용자는 REST 체결 조회·재조정으로 동작)
+     *
+     * @param userIds 연결을 유지할 사용자 ID 집합 (활성 MAIN 세션 보유자)
+     */
     @Override
     public void syncPrivateStreams(Set<Long> userIds) {
+        Set<Long> connected = privateWebSocketClient.getConnectedUserIds();
+
+        // 대상에서 빠진 사용자 → 연결 종료
+        for (Long userId : connected) {
+            if (!userIds.contains(userId)) {
+                privateWebSocketClient.close(userId);
+            }
+        }
+
+        // 신규 대상 사용자 → 키 복호화 후 연결 (이미 연결된 사용자는 키 조회 생략)
+        for (Long userId : userIds) {
+            if (connected.contains(userId)) continue;
+            try {
+                ExchangeKeyDTO key = exchangeKeyService.findKey(userId, ExchangeType.BINANCE);
+                privateWebSocketClient.open(userId, aesEncryptor.decrypt(key.getApiKey()));
+            } catch (Exception e) {
+                // 한 사용자의 키 문제로 다른 사용자 연결이 막히지 않도록 건너뜀 (키 값은 로그에 남기지 않음)
+                log.warn(LogMessage.BINANCE_PRIVATE_WS_OPEN_SKIPPED.getMessage(), userId, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 개인 스트림에서 주문 업데이트를 받으면 호출된다. (WebSocket 수신 스레드)
+     * 전량 체결된 청산 성격 주문만 청산 이벤트로 바꿔 리스너에 전달한다. → 주문당 1회
+     * - 체결 이벤트(x=TRADE, 강제청산·ADL은 CALCULATED)이면서 X=FILLED 인 마지막 체결만 대상
+     * - 청산 성격: 실현손익 ≠ 0, reduceOnly, closePosition, 거래소 개입 청산 접두어 중 하나 (진입 체결 제외)
+     * - 앱이 보낸 청산 주문도 전달되며, 수신부가 orderLinkId 로 걸러낸다.
+     * 청산 방식 판정은 REST 조회가 필요할 수 있어 별도 스레드에서 수행한다.
+     *
+     * @param userId 이벤트가 온 연결의 사용자 ID
+     * @param order  주문 업데이트
+     */
+    void onOrderUpdate(Long userId, BinanceOrderTradeUpdateDTO.OrderUpdate order) {
+        if (!CLOSE_EXEC_TYPES.contains(order.getExecType()) || !FILLED.equals(order.getOrderStatus())) return;
+        if (!isCloseLike(order)) return;
+        closeEventExecutor.execute(() -> publishStreamClose(userId, order));
+    }
+
+    /**
+     * 스트림 청산 체결의 청산 방식을 판정해 청산 이벤트를 발행한다. (청산 이벤트 스레드)
+     *
+     * @param userId 사용자 ID
+     * @param order  전량 체결된 청산 주문 업데이트
+     */
+    private void publishStreamClose(Long userId, BinanceOrderTradeUpdateDTO.OrderUpdate order) {
+        PositionCloseType closeType;
+        try {
+            // 시작 시각 0 → 조건부 주문 이력 최대 범위(7일)로 보정됨
+            closeType = withApiKey(userId, () -> resolveCloseType(order.getSymbol(), order.getOrderId(),
+                    order.getClientOrderId(), order.getOrigType(), 0L));
+        } catch (Exception e) {
+            // 키 조회 실패 등 → 주문 ID·유형만으로 판정
+            log.warn("[BINANCE 청산 방식 판정 실패] userId={}, orderId={}: {}", userId, order.getOrderId(), e.getMessage());
+            closeType = BinanceCloseTypeResolver.resolve(order.getClientOrderId(), order.getOrigType());
+        }
+
+        publishPositionClose(PositionCloseDTO.builder()
+                .userId(userId)
+                .exchangeType(ExchangeType.BINANCE)
+                .symbol(order.getSymbol())
+                .orderId(order.getOrderId())
+                .orderLinkId(order.getClientOrderId())
+                // 주문 평균 체결가 우선, 없으면 마지막 체결가
+                .execPrice(isPositive(order.getAvgPrice()) ? order.getAvgPrice() : order.getLastFilledPrice())
+                .closeType(closeType)
+                .build());
+    }
+
+    /** 포지션을 줄인 주문인지 판단한다. (실현손익 발생, 축소 전용, 전량 청산, 거래소 개입 청산) */
+    private static boolean isCloseLike(BinanceOrderTradeUpdateDTO.OrderUpdate order) {
+        if (toDecimal(order.getRealizedProfit()).signum() != 0) return true;
+        if (order.isReduceOnly() || order.isClosePosition()) return true;
+        String clientOrderId = order.getClientOrderId();
+        return clientOrderId != null && EXCHANGE_CLOSE_PREFIXES.stream().anyMatch(clientOrderId::startsWith);
     }
 
     // ─── 변환 ───
@@ -489,6 +692,51 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
                 .orderQty(orderQty)
                 .execTime(trade.getTime() != null ? String.valueOf(trade.getTime()) : null)
                 .build();
+    }
+
+    /**
+     * 스트림 집계 체결을 공통 체결 정보로 변환한다. (수수료는 USDT 환산)
+     *
+     * @param filled 스트림 집계 체결
+     * @return 공통 체결 정보
+     */
+    private ExecutionDTO toExecutionDTO(BinanceFilledOrderDTO filled) {
+        return ExecutionDTO.builder()
+                .symbol(filled.getSymbol())
+                .orderId(filled.getOrderId())
+                .side(filled.getSide() != null ? OrderSide.valueOf(filled.getSide()) : null)
+                .execPrice(filled.getAvgPrice())
+                .execQty(filled.getFilledQty())
+                .execFee(toUsdtFee(filled).toPlainString())
+                .orderQty(filled.getOrderQty())
+                .execTime(filled.getExecTime())
+                .build();
+    }
+
+    /**
+     * 스트림 집계 수수료를 USDT로 환산한다. (부호와 관계없이 절댓값)
+     * - USDT 수수료 + BNB 수수료 × BNBUSDT 현재가 (시세 캐시 사용)
+     * - BNB 시세 없음·그 외 자산 수수료 포함: 평균가 × 수량 × taker 요율로 추정 (자산별로 나눌 수 없어 전체 추정)
+     *
+     * @param filled 스트림 집계 체결
+     * @return USDT 수수료
+     */
+    private BigDecimal toUsdtFee(BinanceFilledOrderDTO filled) {
+        BigDecimal usdtFee = toDecimal(filled.getUsdtFee()).abs();
+        BigDecimal bnbFee = toDecimal(filled.getBnbFee()).abs();
+        if (!filled.isOtherFeeAsset()) {
+            if (bnbFee.signum() == 0) return usdtFee;
+            String bnbPrice = findLastPrice(BNB_PRICE_SYMBOL);
+            if (bnbPrice != null) {
+                log.warn("[BINANCE BNB 수수료 환산] orderId={}, commission={} BNB, price={}",
+                        filled.getOrderId(), bnbFee.toPlainString(), bnbPrice);
+                return usdtFee.add(bnbFee.multiply(new BigDecimal(bnbPrice)));
+            }
+        }
+        BigDecimal estimated = toDecimal(filled.getAvgPrice()).multiply(toDecimal(filled.getFilledQty())).multiply(TAKER_FEE_RATE);
+        log.warn("[BINANCE 수수료 추정] orderId={} — 환산 불가로 taker 요율 추정값 {} 사용",
+                filled.getOrderId(), estimated.toPlainString());
+        return estimated;
     }
 
     /**

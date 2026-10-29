@@ -14,6 +14,7 @@ import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.market.service.MarketService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -22,9 +23,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -120,15 +123,15 @@ public class PatternQueueService {
      * 새로운 패턴 큐를 검증 후 저장한다.
      * cascade에 의해 Pattern(블록 목록 포함)이 함께 저장된다.
      * <ul>
-     *   <li>트리거 시간 > 0, 트리거 비율 > 0</li>
-     *   <li>패턴마다 단계 번호(stepLevel) 1 이상 필수</li>
+     *   <li>트리거 비율 > 0</li>
+     *   <li>패턴마다 단계 번호(stepLevel) 1 이상 필수, 단계 번호는 1부터 빠짐없이 연속</li>
      *   <li>단계는 1~20개</li>
-     *   <li>패턴은 단계당 정확히 2개</li>
-     *   <li>조건 블록은 패턴당 최대 5개</li>
+     *   <li>패턴은 단계당 정확히 2개 (LONG 시작 1개 + SHORT 시작 1개)</li>
+     *   <li>조건 블록은 패턴당 1~5개</li>
      *   <li>리프 블록은 필수 1개</li>
      *   <li>금액 > 0, 레버리지 > 0</li>
      *   <li>side는 LONG 또는 SHORT만 허용</li>
-     *   <li>심볼당 큐 최대 20개</li>
+     *   <li>거래소·심볼·거래 모드당 큐 1개</li>
      *   <li>거래소는 필수, 지원 목록(ExchangeType)만 허용</li>
      * </ul>
      *
@@ -136,7 +139,7 @@ public class PatternQueueService {
      * @param request 패턴 큐 추가 요청
      * @return 저장된 PatternQueue 엔티티
      * @throws CustomException 거래소 미전달(EXCHANGE_TYPE_REQUIRED), 지원하지 않는 거래소(INVALID_EXCHANGE_TYPE),
-     *                         거래소에서 거래할 수 없는 종목(SYMBOL_NOT_TRADABLE)
+     *                         거래소에서 거래할 수 없는 종목(SYMBOL_NOT_TRADABLE), 이미 큐가 있음(EXCEED_MAX_QUEUES)
      */
     @Transactional
     public PatternQueue addQueue(Long userId, AddPatternRequest request) {
@@ -165,22 +168,18 @@ public class PatternQueueService {
         queue.setTriggerRate(request.getTriggerRate());
         queue.setActive(false);
         queue.setCycle(request.isCycle());
-        // 거래 모드 설정 (프론트에서 전달, 없으면 MAIN)
-        if ("SIM".equalsIgnoreCase(request.getTradeMode())) {
-            queue.setTradeMode(TradeMode.SIM);
-        } else {
-            queue.setTradeMode(TradeMode.MAIN);
-        }
+        // 거래 모드 설정 (위에서 판단한 값, 없으면 MAIN)
+        queue.setTradeMode(mode);
         // 거래소 타입 설정 (프론트에서 전달한 값, 위에서 검증 완료)
         queue.setExchangeType(exchangeType);
 
         // 패턴(블록 목록 포함) 생성
         buildPatterns(queue, request.getPatterns());
 
-        // 모든 단계가 가득 찬 상태인지 확인
-        queue.setFull(isAllStepsFull(request.getPatterns()));
+        // 검증 통과 = 모든 단계에 패턴이 정확히 2개 → 항상 가득 찬 상태
+        queue.setFull(true);
 
-        return patternQueueRepository.save(queue);
+        return saveNewQueue(queue);
     }
 
     /**
@@ -202,22 +201,35 @@ public class PatternQueueService {
     }
 
     /**
-     * 큐의 활성화 상태를 토글한다. (isActive: true ↔ false)
+     * 사용자의 큐를 조회한다. (권한 확인 포함)
      *
      * @param userId  사용자 ID (권한 검증용)
      * @param queueId 대상 큐 ID
-     * @return 변경된 PatternQueue 엔티티
+     * @return PatternQueue 엔티티
      */
-    @Transactional
-    public PatternQueue toggleActive(Long userId, Long queueId) {
+    public PatternQueue getQueue(Long userId, Long queueId) {
         PatternQueue queue = patternQueueRepository.findById(queueId)
                 .orElseThrow(() -> new CustomException(ExceptionMessage.QUEUE_NOT_FOUND));
 
         if (!queue.getUserId().equals(userId)) {
             throw new CustomException(ExceptionMessage.QUEUE_UNAUTHORIZED);
         }
+        return queue;
+    }
 
-        queue.setActive(!queue.isActive());
+    /**
+     * 큐의 활성화 상태를 지정한 값으로 변경한다.
+     * 끄기 전 포지션 청산 중 엔진이 큐를 먼저 비활성화해도 다시 켜지지 않도록 반전이 아닌 목표 상태로 지정한다.
+     *
+     * @param userId  사용자 ID (권한 검증용)
+     * @param queueId 대상 큐 ID
+     * @param active  변경할 활성 상태
+     * @return 변경된 PatternQueue 엔티티
+     */
+    @Transactional
+    public PatternQueue setActive(Long userId, Long queueId, boolean active) {
+        PatternQueue queue = getQueue(userId, queueId);
+        queue.setActive(active);
         return patternQueueRepository.save(queue);
     }
 
@@ -225,11 +237,15 @@ public class PatternQueueService {
      * 사용자/거래소/거래모드의 전체 패턴 큐 목록을 심볼 무관하게 조회한다. (큐 가져오기 모달용)
      *
      * @param userId       사용자 ID
-     * @param exchangeType 거래소 타입
+     * @param exchangeType 거래소 타입 (null 이면 모든 거래소)
      * @param tradeMode    거래 모드 (MAIN/SIM)
      * @return 전체 패턴 큐 목록 (createdAt 오름차순)
      */
     public List<PatternQueue> getAllQueues(Long userId, ExchangeType exchangeType, TradeMode tradeMode) {
+        // 거래소 미지정 → 전체 거래소 큐 (큐 가져오기: 다른 거래소 큐도 복사 원본으로 사용)
+        if (exchangeType == null) {
+            return patternQueueRepository.findByUserIdAndTradeModeOrderByCreatedAtAsc(userId, tradeMode);
+        }
         return patternQueueRepository.findByUserIdAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
                 userId, tradeMode, exchangeType);
     }
@@ -277,6 +293,7 @@ public class PatternQueueService {
         newQueue.setUserId(userId);
         newQueue.setSymbol(targetSymbol);
         newQueue.setTriggerRate(origin.getTriggerRate());
+        newQueue.setCycle(origin.isCycle()); // 사이클(단계 소진 후 재시작) 설정 유지
         newQueue.setActive(false);
         newQueue.setTradeMode(tradeMode);
         newQueue.setExchangeType(exchangeType); // 대상 거래소 (미지정 시 원본 거래소)
@@ -299,7 +316,7 @@ public class PatternQueueService {
         // 가득 찬 상태는 원본 값 그대로 복사
         newQueue.setFull(origin.isFull());
 
-        return patternQueueRepository.save(newQueue);
+        return saveNewQueue(newQueue);
     }
 
     /**
@@ -350,10 +367,30 @@ public class PatternQueueService {
         // 새 패턴 빌드 후 큐에 추가
         buildPatterns(queue, request.getPatterns());
 
-        // full 플래그 재계산
-        queue.setFull(isAllStepsFull(request.getPatterns()));
+        // 검증 통과 = 모든 단계에 패턴이 정확히 2개 → 항상 가득 찬 상태
+        queue.setFull(true);
 
         return patternQueueRepository.save(queue);
+    }
+
+    /**
+     * 신규 큐를 저장하고 즉시 flush하여 유니크 제약 위반을 이 시점에 감지한다.
+     * 개수 검증과 저장 사이에 같은 큐가 먼저 저장되면(중복 클릭 등 동시 요청)
+     * DB 유니크 제약(user_id, exchange_type, symbol, trade_mode)이 막아주며, 이를 EXCEED_MAX_QUEUES로 변환한다.
+     *
+     * @param queue 저장할 신규 큐
+     * @return 저장된 PatternQueue 엔티티
+     * @throws CustomException 같은 거래소·심볼·거래 모드의 큐가 이미 저장된 경우(EXCEED_MAX_QUEUES)
+     */
+    private PatternQueue saveNewQueue(PatternQueue queue) {
+        try {
+            PatternQueue saved = patternQueueRepository.save(queue);
+            // 커밋 시점이 아닌 여기서 INSERT를 실행해 제약 위반을 잡는다
+            patternQueueRepository.flush();
+            return saved;
+        } catch (DataIntegrityViolationException e) {
+            throw new CustomException(ExceptionMessage.EXCEED_MAX_QUEUES);
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -414,16 +451,6 @@ public class PatternQueueService {
     }
 
     /**
-     * 모든 단계가 가득 찬 상태(패턴 2개 이상)인지 확인한다.
-     *
-     * @param patterns 패턴 요청 목록
-     * @return 모든 단계의 패턴이 2개 이상이면 true
-     */
-    private boolean isAllStepsFull(List<AddPatternRequest.PatternRequest> patterns) {
-        return countPatternsByStep(patterns).values().stream().allMatch(count -> count >= 2);
-    }
-
-    /**
      * 단계 번호별 패턴 개수를 센다.
      *
      * @param patterns 패턴 요청 목록
@@ -461,8 +488,29 @@ public class PatternQueueService {
             throw new CustomException(ExceptionMessage.INVALID_PATTERN_COUNT);
         }
 
+        // 단계 번호 1..N 연속 검증 — 엔진은 "현재 단계 + 1"로 다음 단계를 찾으므로
+        // 빈 번호가 있으면 이후 단계가 실행되지 않고, 1단계가 없으면 시작 자체가 불가
+        for (int level = 1; level <= countByStep.size(); level++) {
+            if (!countByStep.containsKey(level)) {
+                throw new CustomException(ExceptionMessage.NON_CONSECUTIVE_STEP_LEVEL);
+            }
+        }
+
         for (AddPatternRequest.PatternRequest pattern : patterns) {
             validatePattern(pattern);
+        }
+
+        // 단계별 시작 블록(첫 조건 블록) 중복 검증 — 엔진은 신호 방향과 첫 조건 블록이 같은 패턴을 고르므로
+        // 두 패턴이 같은 방향으로 시작하면 반대 방향 신호 때 선택할 패턴이 없음 (개별 검증 후라 조건 블록·side 유효)
+        Map<Integer, Set<Side>> startSidesByStep = new HashMap<>();
+        for (AddPatternRequest.PatternRequest pattern : patterns) {
+            Side startSide = Side.valueOf(pattern.getConditionBlocks().get(0).toUpperCase());
+            boolean added = startSidesByStep
+                    .computeIfAbsent(pattern.getStepLevel(), level -> EnumSet.noneOf(Side.class))
+                    .add(startSide);
+            if (!added) {
+                throw new CustomException(ExceptionMessage.DUPLICATE_START_BLOCK);
+            }
         }
     }
 
@@ -497,17 +545,19 @@ public class PatternQueueService {
         if (pattern.getLeafBlock() == null) {
             throw new CustomException(ExceptionMessage.MISSING_LEAF_BLOCK);
         }
-        // 조건 블록 최대 5개
+        // 조건 블록 1개 이상 — 엔진은 조건 블록 없는(리프만 있는) 패턴을 선택하지 못함
         List<String> conditionBlocks = pattern.getConditionBlocks();
-        if (conditionBlocks != null && conditionBlocks.size() > 5) {
+        if (conditionBlocks == null || conditionBlocks.isEmpty()) {
+            throw new CustomException(ExceptionMessage.EMPTY_CONDITION_BLOCKS);
+        }
+        // 조건 블록 최대 5개
+        if (conditionBlocks.size() > 5) {
             throw new CustomException(ExceptionMessage.EXCEED_MAX_CONDITION_BLOCKS);
         }
 
         // side 검증 (조건 블록)
-        if (conditionBlocks != null) {
-            for (String side : conditionBlocks) {
-                validateSide(side);
-            }
+        for (String side : conditionBlocks) {
+            validateSide(side);
         }
         // side 검증 (리프 블록)
         validateSide(pattern.getLeafBlock());
@@ -517,6 +567,10 @@ public class PatternQueueService {
      * side 값 검증 (LONG 또는 SHORT만 허용)
      */
     private void validateSide(String side) {
+        // null이면 toUpperCase에서 NPE(500)가 나므로 먼저 차단
+        if (side == null) {
+            throw new CustomException(ExceptionMessage.INVALID_SIDE);
+        }
         try {
             Side.valueOf(side.toUpperCase());
         } catch (IllegalArgumentException e) {

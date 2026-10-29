@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.trade.service;
 
 import com.coin.webcointrader.common.enums.ExceptionMessage;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderCancelResult;
 import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.enums.OrderSide;
 import com.coin.webcointrader.common.enums.TradeMode;
@@ -154,6 +155,26 @@ class TradeFacadeTest {
 
         then(bybitTrade).should().switchToIsolated(1L, "BTCUSDT");
         then(bybitTrade).should().setLeverage(1L, "BTCUSDT", "10");
+    }
+
+    @Test
+    @DisplayName("cancelOrder: MAIN은 거래소 클라이언트에 위임해 취소 결과를 반환한다")
+    void cancelOrder_main_delegates() {
+        given(registry.trade(ExchangeType.BYBIT)).willReturn(bybitTrade);
+        given(bybitTrade.cancelOrder(1L, "BTCUSDT", "q1-T-1")).willReturn(OrderCancelResult.CANCELLED);
+
+        OrderCancelResult result = tradeFacade.cancelOrder(1L, "BTCUSDT", "q1-T-1", ExchangeType.BYBIT, TradeMode.MAIN);
+
+        assertThat(result).isEqualTo(OrderCancelResult.CANCELLED);
+    }
+
+    @Test
+    @DisplayName("cancelOrder: SIM은 걸린 주문이 없으므로 거래소 호출 없이 CANCELLED")
+    void cancelOrder_sim_noop() {
+        OrderCancelResult result = tradeFacade.cancelOrder(1L, "BTCUSDT", "q1-T-1", ExchangeType.BYBIT, TradeMode.SIM);
+
+        assertThat(result).isEqualTo(OrderCancelResult.CANCELLED);
+        then(registry).shouldHaveNoInteractions();
     }
 
     @Test
