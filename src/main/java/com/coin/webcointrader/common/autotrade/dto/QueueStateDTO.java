@@ -57,6 +57,7 @@ public class QueueStateDTO {
     private int closeConfirmFailCount;       // 완료 미확인 연속 횟수 (5회 시 큐 비활성화)
     private long closeConfirmCheckedAt;      // 마지막 포지션 확인 시각 (epoch ms, 재확인 간격 제한용)
     private boolean stopRequested;           // 큐 종료(끄기·삭제) 청산 요청됨 — 청산 확인 시 다음 단계 대신 큐 비활성화
+    private Double volumeBaseline;           // 거래량 급변 판정 기준 (진입 시점 최근 60초 체결량, null = 워밍업 중 미확정)
 
     /**
      * 초기 상태로 생성한다. (TRIGGER_WAIT 페이즈)
@@ -106,5 +107,6 @@ public class QueueStateDTO {
         closeConfirmFailCount = 0;
         closeConfirmCheckedAt = 0L;
         stopRequested = false;
+        volumeBaseline = null;
     }
 }

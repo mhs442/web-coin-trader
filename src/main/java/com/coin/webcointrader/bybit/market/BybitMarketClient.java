@@ -1,6 +1,7 @@
 package com.coin.webcointrader.bybit.market;
 
 import com.coin.webcointrader.bybit.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.bybit.market.dto.WebSocketPublicTradeDTO;
 import com.coin.webcointrader.bybit.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.bybit.common.BybitMasterDTO;
 import com.coin.webcointrader.bybit.market.dto.FindTickerResponse;
@@ -14,6 +15,7 @@ import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.market.client.AbstractExchangeMarketClient;
 import com.coin.webcointrader.common.market.dto.InstrumentDTO;
 import com.coin.webcointrader.common.market.dto.KlineDTO;
+import com.coin.webcointrader.common.market.dto.PublicTradeDTO;
 import com.coin.webcointrader.common.market.dto.OrderBookDTO;
 import com.coin.webcointrader.common.market.dto.TickerDTO;
 import jakarta.annotation.PostConstruct;
@@ -53,6 +55,7 @@ public class BybitMarketClient extends AbstractExchangeMarketClient {
     public void init() {
         bybitWebSocketClient.addTickerCallback(this::onTickerReceived);
         bybitWebSocketClient.addKlineCallback(this::onKlineReceived);
+        bybitWebSocketClient.addTradeCallback(this::onTradeReceived);
         refreshInstruments();
     }
 
@@ -188,6 +191,31 @@ public class BybitMarketClient extends AbstractExchangeMarketClient {
     @Override
     public void syncSubscriptions(Set<String> symbols) {
         bybitWebSocketClient.syncSubscriptions(symbols);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void syncTradeSubscriptions(Set<String> symbols) {
+        bybitWebSocketClient.syncTradeSubscriptions(symbols);
+    }
+
+    /**
+     * 공개 WebSocket publicTrade 메시지 수신 시 호출된다. 묶여 온 체결을 1건씩 공통 체결로 넘긴다.
+     *
+     * @param dto WebSocket 공개 체결 메시지
+     */
+    private void onTradeReceived(WebSocketPublicTradeDTO dto) {
+        if (dto == null || dto.getData() == null) return;
+        for (WebSocketPublicTradeDTO.TradeData data : dto.getData()) {
+            if (data.getSymbol() == null || data.getQty() == null) continue;
+            publishTrade(PublicTradeDTO.builder()
+                    .symbol(data.getSymbol())
+                    .tradeTime(data.getTradeTime())
+                    .qty(data.getQty())
+                    .build());
+        }
     }
 
     /**

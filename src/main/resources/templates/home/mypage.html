@@ -490,7 +490,24 @@
                                 '</div>';
                         }
 
-                        let html = tpSlBar +
+                        // 부분 익절 후 손절: 익절분·손절분 손익을 한 줄로 요약 (행별 손익은 서버 계산값)
+                        let splitBar = '';
+                        const tpRow = trades.find(function(t) { return t.orderType === 'sell' && t.profitLoss != null; });
+                        const slRow = trades.find(function(t) { return t.orderType === 'liquidation' && t.profitLoss != null; });
+                        if (tpRow && slRow) {
+                            const fmtPL = function(v) {
+                                const n = parseFloat(v);
+                                return '<span class="' + (n >= 0 ? 'status-active' : 'status-failed') + '">'
+                                    + (n >= 0 ? '+' : '') + n.toFixed(4) + ' USDT</span>';
+                            };
+                            splitBar =
+                                '<div class="split-close-bar">' +
+                                    fmtPL(tpRow.profitLoss) + ' 익절, ' + fmtPL(slRow.profitLoss) + ' 손절' +
+                                    ' <span class="split-close-note">(부분 익절 후 잔여 손절, 수수료 차감)</span>' +
+                                '</div>';
+                        }
+
+                        let html = tpSlBar + splitBar +
                             '<table class="trade-detail-table">' +
                                 '<thead><tr>' +
                                     '<th>유형</th>' +
@@ -505,15 +522,20 @@
                                 '<tbody>';
 
                         trades.forEach(function(t) {
-                            const orderTypeMap = { 'entry': '진입', 'sell': '매도', 'liquidation': '청산' };
+                            const orderTypeMap = { 'entry': '진입', 'sell': '매도', 'liquidation': '청산', 'stop': '중지' };
+                            const typeClassMap = { 'entry': 'type-entry', 'sell': 'type-sell', 'liquidation': 'type-liquidation', 'stop': 'type-stop' };
                             const typeLabel = orderTypeMap[t.orderType] || t.orderType;
-                            const typeClass = t.orderType === 'entry' ? 'type-entry' : (t.orderType === 'sell' ? 'type-sell' : 'type-liquidation');
+                            const typeClass = typeClassMap[t.orderType] || 'type-liquidation';
                             const isExit = t.orderType === 'sell' || t.orderType === 'liquidation';
+
+                            // 행별 손익: 서버가 계산한 값 우선 (부분 익절 후 손절이면 행마다 다름), 없으면 투자 전체 값
+                            const rowGross = t.grossProfitLoss != null ? parseFloat(t.grossProfitLoss) : grossPL;
+                            const rowNet = t.profitLoss != null ? parseFloat(t.profitLoss) : netPL;
 
                             // 순수익(총손익): 매도/청산 행에만 표시
                             const grossCell = isExit
-                                ? '<span class="' + (grossPL >= 0 ? 'status-active' : 'status-failed') + '">'
-                                    + (grossPL >= 0 ? '+' : '') + grossPL.toFixed(4) + ' USDT</span>'
+                                ? '<span class="' + (rowGross >= 0 ? 'status-active' : 'status-failed') + '">'
+                                    + (rowGross >= 0 ? '+' : '') + rowGross.toFixed(4) + ' USDT</span>'
                                 : '-';
 
                             // 실세 손익금:
@@ -521,8 +543,8 @@
                             //   매도/청산 행 → 진입+청산 수수료 모두 차감된 순손익
                             const tradeFeeNum = parseFloat(t.fee) || 0;
                             const netCell = isExit
-                                ? '<span class="' + (netPL >= 0 ? 'status-active' : 'status-failed') + '">'
-                                    + (netPL >= 0 ? '+' : '') + netPL.toFixed(4) + ' USDT</span>'
+                                ? '<span class="' + (rowNet >= 0 ? 'status-active' : 'status-failed') + '">'
+                                    + (rowNet >= 0 ? '+' : '') + rowNet.toFixed(4) + ' USDT</span>'
                                 : '<span class="status-failed">-' + tradeFeeNum.toFixed(4) + ' USDT</span>';
 
                             html +=

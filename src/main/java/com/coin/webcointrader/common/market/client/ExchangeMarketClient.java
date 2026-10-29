@@ -4,6 +4,7 @@ import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.market.dto.InstrumentDTO;
 import com.coin.webcointrader.common.market.dto.KlineDTO;
 import com.coin.webcointrader.common.market.dto.OrderBookDTO;
+import com.coin.webcointrader.common.market.dto.PublicTradeDTO;
 import com.coin.webcointrader.common.market.dto.TickerDTO;
 
 import java.math.BigDecimal;
@@ -105,4 +106,18 @@ public interface ExchangeMarketClient {
      * @param listener 마감된 캔들을 받는 리스너
      */
     void addKlineListener(Consumer<KlineDTO> listener);
+
+    /**
+     * 실시간 공개 체결 구독 심볼을 주어진 집합과 같게 맞춘다. (거래량 급변 감시 대상만, 추가분 구독·제외분 해지)
+     *
+     * @param symbols 체결을 구독할 심볼 집합
+     */
+    void syncTradeSubscriptions(Set<String> symbols);
+
+    /**
+     * 공개 체결 리스너를 등록한다. 체결 1건마다 전달된다.
+     *
+     * @param listener 체결을 받는 리스너
+     */
+    void addTradeListener(Consumer<PublicTradeDTO> listener);
 }

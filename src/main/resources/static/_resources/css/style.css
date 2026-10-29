@@ -816,6 +816,16 @@ body {
     font-weight: 600;
 }
 
+/* 거래량 급변 중지 예약 뱃지 */
+.volume-stop-badge {
+    font-size: 0.75rem;
+    color: #b54708;
+    background-color: #fff4e5;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
 /* 단계 카드 */
 .step-card {
     border: 2px solid #dee2e6;
@@ -2502,6 +2512,26 @@ body {
 .order-type-badge.type-liquidation {
     background: #f8d7da;
     color: #721c24;
+}
+
+.order-type-badge.type-stop {
+    background: #e9ecef;
+    color: #495057;
+}
+
+/* 부분 익절 후 손절 — 익절분·손절분 손익 요약 줄 */
+.split-close-bar {
+    padding: 7px 12px;
+    margin-bottom: 10px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+
+.split-close-note {
+    color: #6c757d;
+    font-size: 0.75rem;
 }
 
 /* =====================================================

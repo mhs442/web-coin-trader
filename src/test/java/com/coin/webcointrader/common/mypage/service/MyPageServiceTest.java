@@ -267,6 +267,68 @@ class MyPageServiceTest {
     }
 
     @Test
+    @DisplayName("getInvestmentTradeDetails: 부분 익절 후 손절이면 EXIT 2건을 모두 반환하고 행별 손익의 합이 투자 손익과 같다")
+    void getInvestmentTradeDetails_partialTpThenStopLoss_splitsProfitLoss() {
+        // given: LONG 진입가 50000, 마진 100, 레버리지 10 (수량 0.02), 진입 수수료 0.5
+        //   SELL(부분 익절) 마진 60 → 수량 0.012 @51000, 수수료 0.3
+        //   LIQUIDATION(잔여 손절) 마진 40 → 수량 0.008 @49000, 수수료 0.2
+        //   투자 손익 3.0 = 익절 11.4 + 손절 -8.4
+        Long userId = 1L;
+        InvestmentHistoryDTO inv = InvestmentHistoryDTO.builder()
+                .id(9L).userId(userId).patternId(1L).symbol("BTCUSDT").side(Side.LONG)
+                .entryPrice(new BigDecimal("50000")).amount(new BigDecimal("100")).leverage(10)
+                .profitLoss(new BigDecimal("3.0")).exchangeType(ExchangeType.BYBIT)
+                .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))
+                .build();
+        given(mainHistory.findInvestment(9L, userId)).willReturn(Optional.of(inv));
+        given(mainHistory.findTradesUpTo(1L, userId, inv.getCreatedAt())).willReturn(List.of(
+                makeTrade(4L, "liquidation", "40", "49000", "0.2"),
+                makeTrade(3L, "sell", "60", "51000", "0.3"),
+                makeTrade(2L, "entry", "100", "50000", "0.5"),
+                makeTrade(1L, "liquidation", "100", "48000", "1")));
+
+        // when
+        List<InvestmentTradeDetailResponse> result = myPageService.getInvestmentTradeDetails(userId, 9L, "main");
+
+        // then: ENTRY → SELL → LIQUIDATION
+        assertThat(result).extracting(InvestmentTradeDetailResponse::getId).containsExactly(2L, 3L, 4L);
+        // 진입 행은 손익 없음
+        assertThat(result.get(0).getProfitLoss()).isNull();
+        // 익절분: 차익 (51000-50000)×0.012 = 12, 순손익 12 - 0.3 - 0.5×0.6 = 11.4
+        assertThat(new BigDecimal(result.get(1).getGrossProfitLoss())).isEqualByComparingTo("12");
+        assertThat(new BigDecimal(result.get(1).getProfitLoss())).isEqualByComparingTo("11.4");
+        // 손절분(마지막): 투자 손익 3.0 - 11.4 = -8.4, 차익 -8.4 + 0.2 + 0.2 = -8
+        assertThat(new BigDecimal(result.get(2).getProfitLoss())).isEqualByComparingTo("-8.4");
+        assertThat(new BigDecimal(result.get(2).getGrossProfitLoss())).isEqualByComparingTo("-8");
+    }
+
+    @Test
+    @DisplayName("getInvestmentTradeDetails: 단일 청산이면 EXIT 행 손익 = 투자 손익, 차익 = 손익 + 진입·청산 수수료 + 펀딩비")
+    void getInvestmentTradeDetails_singleExit_usesInvestmentProfitLoss() {
+        // given
+        Long userId = 1L;
+        InvestmentHistoryDTO inv = InvestmentHistoryDTO.builder()
+                .id(10L).userId(userId).patternId(1L).symbol("BTCUSDT").side(Side.SHORT)
+                .entryPrice(new BigDecimal("50000")).amount(new BigDecimal("100")).leverage(10)
+                .profitLoss(new BigDecimal("200")).fundingFee(new BigDecimal("0.1"))
+                .exchangeType(ExchangeType.BYBIT)
+                .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))
+                .build();
+        given(mainHistory.findInvestment(10L, userId)).willReturn(Optional.of(inv));
+        given(mainHistory.findTradesUpTo(1L, userId, inv.getCreatedAt())).willReturn(List.of(
+                makeTrade(2L, "sell", "100", "49000", "2"),
+                makeTrade(1L, "entry", "100", "50000", "1")));
+
+        // when
+        List<InvestmentTradeDetailResponse> result = myPageService.getInvestmentTradeDetails(userId, 10L, "main");
+
+        // then
+        assertThat(result).extracting(InvestmentTradeDetailResponse::getId).containsExactly(1L, 2L);
+        assertThat(new BigDecimal(result.get(1).getProfitLoss())).isEqualByComparingTo("200");
+        assertThat(new BigDecimal(result.get(1).getGrossProfitLoss())).isEqualByComparingTo("203.1");
+    }
+
+    @Test
     @DisplayName("getInvestmentTradeDetails: 투자 히스토리가 없거나 EXIT 거래가 없으면 빈 목록이다")
     void getInvestmentTradeDetails_emptyCases() {
         // given
@@ -445,6 +507,17 @@ class MyPageServiceTest {
         return TradeHistoryDTO.builder()
                 .id(id).patternId(1L).userId(1L).symbol("BTCUSDT").side(Side.LONG)
                 .amount(new BigDecimal("100")).executedPrice(new BigDecimal("50000"))
+                .orderType(orderType).orderResult(OrderResult.SUCCESS)
+                .exchangeType(ExchangeType.BYBIT)
+                .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))
+                .build();
+    }
+
+    /** 마진·체결가·수수료를 지정한 거래 이력 (SUCCESS) */
+    private TradeHistoryDTO makeTrade(Long id, String orderType, String amount, String price, String fee) {
+        return TradeHistoryDTO.builder()
+                .id(id).patternId(1L).userId(1L).symbol("BTCUSDT").side(Side.LONG)
+                .amount(new BigDecimal(amount)).executedPrice(new BigDecimal(price)).fee(new BigDecimal(fee))
                 .orderType(orderType).orderResult(OrderResult.SUCCESS)
                 .exchangeType(ExchangeType.BYBIT)
                 .createdAt(LocalDateTime.of(2026, 1, 10, 12, 0))

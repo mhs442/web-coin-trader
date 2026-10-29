@@ -81,6 +81,7 @@ class AutoTradeControllerUpdateTest {
                         .content("""
                                 {
                                     "triggerRate": 2.5,
+                                    "volumeStopEnabled": true,
                                     "patterns": [
                                         {
                                             "stepLevel": 1,
@@ -103,6 +104,8 @@ class AutoTradeControllerUpdateTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(saved.getId()))
                 .andExpect(jsonPath("$.triggerRate").value(2.5))
+                .andExpect(jsonPath("$.volumeStopEnabled").value(true))
+                .andExpect(jsonPath("$.volumeStopReserved").value(false))
                 .andExpect(jsonPath("$.patterns[0].amount").value(20));
     }
 

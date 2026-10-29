@@ -18,6 +18,7 @@ public class AddPatternRequest {
     private String tradeMode;          // 거래 모드 ("MAIN" 또는 "SIM")
     private BigDecimal triggerRate;     // 트리거 기준 상승/하락률 (%)
     private boolean cycle;             // 단계 소진 후 1단계 재시작 여부
+    private boolean volumeStopEnabled; // 거래량 급변 시 큐 중지 사용 여부
     private List<PatternRequest> patterns;  // 패턴 목록 (단계당 2개)
 
     @Getter @Setter

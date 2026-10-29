@@ -1,6 +1,7 @@
 package com.coin.webcointrader.bybit.market;
 
 import com.coin.webcointrader.bybit.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.bybit.market.dto.WebSocketPublicTradeDTO;
 import com.coin.webcointrader.bybit.market.dto.WebSocketRequest;
 import com.coin.webcointrader.bybit.market.dto.WebSocketTickerDTO;
 import com.coin.webcointrader.common.enums.LogMessage;
@@ -65,11 +66,17 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
     // 현재 kline.1 구독 중인 심볼 목록 (1분봉 봉 마감 알림용)
     private final Set<String> subscribedKlineSymbols = ConcurrentHashMap.newKeySet();
 
+    // 현재 publicTrade 구독 중인 심볼 목록 (거래량 급변 감시용)
+    private final Set<String> subscribedTradeSymbols = ConcurrentHashMap.newKeySet();
+
     // 티커 데이터 수신 콜백 목록 (여러 구독자 지원)
     private final List<Consumer<WebSocketTickerDTO>> tickerCallbacks = new CopyOnWriteArrayList<>();
 
     // Kline(봉) 데이터 수신 콜백 목록 (여러 구독자 지원)
     private final List<Consumer<WebSocketKlineDTO>> klineCallbacks = new CopyOnWriteArrayList<>();
+
+    // 공개 체결 수신 콜백 목록
+    private final List<Consumer<WebSocketPublicTradeDTO>> tradeCallbacks = new CopyOnWriteArrayList<>();
 
     // heartbeat 스케줄러
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
@@ -233,6 +240,44 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
     }
 
     /**
+     * 공개 체결 수신 콜백을 추가한다.
+     *
+     * @param callback WebSocketPublicTradeDTO를 처리할 콜백
+     */
+    public void addTradeCallback(Consumer<WebSocketPublicTradeDTO> callback) {
+        tradeCallbacks.add(callback);
+    }
+
+    /**
+     * publicTrade 구독 목록을 주어진 심볼 집합과 동기화한다. (추가분 구독, 제외분 해제)
+     *
+     * @param targetSymbols 체결을 구독할 심볼 집합
+     */
+    public void syncTradeSubscriptions(Set<String> targetSymbols) {
+        for (String symbol : targetSymbols) {
+            if (subscribedTradeSymbols.add(symbol)) {
+                String topic = "publicTrade." + symbol;
+                sendMessage(WebSocketRequest.subscribe(List.of(topic)));
+                log.info(LogMessage.WS_SUBSCRIBE.getMessage(), topic);
+            }
+        }
+        for (String symbol : Set.copyOf(subscribedTradeSymbols)) {
+            if (!targetSymbols.contains(symbol) && subscribedTradeSymbols.remove(symbol)) {
+                String topic = "publicTrade." + symbol;
+                sendMessage(WebSocketRequest.unsubscribe(List.of(topic)));
+                log.info(LogMessage.WS_UNSUBSCRIBE.getMessage(), topic);
+            }
+        }
+    }
+
+    /**
+     * 현재 publicTrade 구독 중인 심볼 목록을 반환한다.
+     */
+    public Set<String> getSubscribedTradeSymbols() {
+        return Set.copyOf(subscribedTradeSymbols);
+    }
+
+    /**
      * 현재 kline.1 구독 중인 심볼 목록을 반환한다.
      */
     public Set<String> getSubscribedKlineSymbols() {
@@ -289,6 +334,12 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
                 } else if (topic.startsWith("kline.")) {
                     WebSocketKlineDTO dto = objectMapper.readValue(payload, WebSocketKlineDTO.class);
                     for (Consumer<WebSocketKlineDTO> cb : klineCallbacks) {
+                        cb.accept(dto);
+                    }
+                } else if (topic.startsWith("publicTrade.")) {
+                    // 공개 체결 (거래량 급변 감시용)
+                    WebSocketPublicTradeDTO dto = objectMapper.treeToValue(node, WebSocketPublicTradeDTO.class);
+                    for (Consumer<WebSocketPublicTradeDTO> cb : tradeCallbacks) {
                         cb.accept(dto);
                     }
                 }
@@ -394,13 +445,14 @@ public class BybitWebSocketClient extends TextWebSocketHandler {
      * tickers.{symbol}와 kline.1.{symbol} 두 종류 모두 재구독한다.
      */
     private void resubscribeAll() {
-        if (subscribedSymbols.isEmpty() && subscribedKlineSymbols.isEmpty()) {
+        if (subscribedSymbols.isEmpty() && subscribedKlineSymbols.isEmpty() && subscribedTradeSymbols.isEmpty()) {
             return;
         }
 
         List<String> topics = new java.util.ArrayList<>();
         subscribedSymbols.forEach(s -> topics.add("tickers." + s));
         subscribedKlineSymbols.forEach(s -> topics.add("kline.1." + s));
+        subscribedTradeSymbols.forEach(s -> topics.add("publicTrade." + s));
 
         if (!topics.isEmpty()) {
             sendMessage(WebSocketRequest.subscribe(topics));

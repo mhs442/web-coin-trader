@@ -71,6 +71,23 @@ class PatternQueueServiceUpdateTest {
     }
 
     @Test
+    @DisplayName("updateQueue: 거래량 급변 중지 on/off 설정을 교체한다")
+    void updateQueue_replacesVolumeStopEnabled() {
+        Long userId = 1L;
+        Long queueId = 10L;
+        PatternQueue existing = makeInactiveQueue(queueId, userId, "BTCUSDT", new BigDecimal("1.0"));
+        existing.getPatterns().add(makeOldPattern(existing, 1));
+        UpdatePatternRequest request = makeUpdateRequest(new BigDecimal("2.5"), 1);
+        request.setVolumeStopEnabled(true);
+        given(patternQueueRepository.findById(queueId)).willReturn(Optional.of(existing));
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        PatternQueue result = patternQueueService.updateQueue(userId, queueId, request);
+
+        assertThat(result.isVolumeStopEnabled()).isTrue();
+    }
+
+    @Test
     @DisplayName("updateQueue: 단계 1개짜리 요청으로 교체하면 단계가 1개로 줄어든다")
     void updateQueue_reduceSteps() {
         // given

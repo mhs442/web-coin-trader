@@ -6,6 +6,10 @@ import com.coin.webcointrader.common.enums.TradeMode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -123,4 +127,16 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
     Page<PatternQueue> findByUserIdAndSymbolContainingIgnoreCaseAndTradeModeAndExchangeTypeAndCreatedAtBetween(
             Long userId, String symbol, TradeMode tradeMode, ExchangeType exchangeType,
             LocalDateTime start, LocalDateTime end, Pageable pageable);
+
+    /**
+     * 거래량 급변 중지 예약 사유만 변경한다. (엔진이 들고 있는 오래된 엔티티로 다른 컬럼을 덮어쓰지 않도록 단일 컬럼 UPDATE)
+     *
+     * @param id     큐 ID
+     * @param reason 예약 사유 (null: 예약 해제)
+     * @return 변경된 행 수
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE PatternQueue q SET q.volumeStopReason = :reason WHERE q.id = :id")
+    int updateVolumeStopReason(@Param("id") Long id, @Param("reason") String reason);
 }

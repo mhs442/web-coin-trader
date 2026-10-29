@@ -168,6 +168,7 @@ public class PatternQueueService {
         queue.setTriggerRate(request.getTriggerRate());
         queue.setActive(false);
         queue.setCycle(request.isCycle());
+        queue.setVolumeStopEnabled(request.isVolumeStopEnabled());
         // 거래 모드 설정 (위에서 판단한 값, 없으면 MAIN)
         queue.setTradeMode(mode);
         // 거래소 타입 설정 (프론트에서 전달한 값, 위에서 검증 완료)
@@ -230,6 +231,8 @@ public class PatternQueueService {
     public PatternQueue setActive(Long userId, Long queueId, boolean active) {
         PatternQueue queue = getQueue(userId, queueId);
         queue.setActive(active);
+        // [사용자 정책 2026-10-29] 사용자가 직접 끄거나 켜면 거래량 급변 중지 예약은 해제 (STOP 이력 없음)
+        queue.setVolumeStopReason(null);
         return patternQueueRepository.save(queue);
     }
 
@@ -294,6 +297,7 @@ public class PatternQueueService {
         newQueue.setSymbol(targetSymbol);
         newQueue.setTriggerRate(origin.getTriggerRate());
         newQueue.setCycle(origin.isCycle()); // 사이클(단계 소진 후 재시작) 설정 유지
+        newQueue.setVolumeStopEnabled(origin.isVolumeStopEnabled()); // 거래량 급변 중지 설정 유지 (중지 예약은 복사하지 않음)
         newQueue.setActive(false);
         newQueue.setTradeMode(tradeMode);
         newQueue.setExchangeType(exchangeType); // 대상 거래소 (미지정 시 원본 거래소)
@@ -355,9 +359,10 @@ public class PatternQueueService {
         // 패턴/블록 검증
         validatePatterns(request.getPatterns());
 
-        // triggerRate, cycle 교체
+        // triggerRate, cycle, 거래량 급변 중지 설정 교체
         queue.setTriggerRate(request.getTriggerRate());
         queue.setCycle(request.isCycle());
+        queue.setVolumeStopEnabled(request.isVolumeStopEnabled());
 
         // 기존 패턴 전체 삭제 (orphanRemoval이 DB 삭제 처리)
         queue.getPatterns().clear();

@@ -48,6 +48,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -102,6 +103,9 @@ class AutoTradeServiceTest {
 
     @Mock
     private ExecutorService sessionLaneExecutor;
+
+    @Mock
+    private VolumeMonitorService volumeMonitor;
 
     // 가짜 거래소 포지션 수량 (setUp의 placeOrder 기본 응답이 갱신)
     private final java.util.concurrent.atomic.AtomicReference<BigDecimal> fakePositionSize =
@@ -945,6 +949,45 @@ class AutoTradeServiceTest {
         }
 
         @Test
+        @DisplayName("진입 직전 거래소에 기존 포지션이 있으면 주문하지 않고 같은 단계의 트리거 대기로 돌아간다")
+        void existingPosition_skipsEntryAndReturnsToTriggerWait() {
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            QueueStateDTO state = leafReadyState();
+            state.setCurrentStepLevel(2);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
+            given(tradeFacade.getPositionSize(1L, "BTCUSDT", ExchangeType.BYBIT, TradeMode.MAIN))
+                    .willReturn(new BigDecimal("0.5"));
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any(), any());
+            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
+            assertThat(state.getCurrentStepLevel()).isEqualTo(2);
+            assertThat(state.getBasePrice()).isNull();
+            assertThat(state.getActivePatternId()).isNull();
+            assertThat(state.getEntryPrice()).isNull();
+            assertThat(queue.isActive()).isTrue();
+            assertThat(session.getTradeLog()).anyMatch(l -> l.contains("[진입 보류]"));
+        }
+
+        @Test
+        @DisplayName("진입 직전 포지션 조회에 실패하면 이번 진입은 건너뛰고 트리거 대기로 돌아간다")
+        void positionCheckFails_skipsEntry() {
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            QueueStateDTO state = leafReadyState();
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
+            given(tradeFacade.getPositionSize(1L, "BTCUSDT", ExchangeType.BYBIT, TradeMode.MAIN)).willReturn(null);
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any(), any());
+            assertThat(state.getPhase()).isEqualTo(TradePhase.TRIGGER_WAIT);
+            assertThat(queue.isActive()).isTrue();
+        }
+
+        @Test
         @DisplayName("진입 시 notional(amount × leverage)로 convertUsdtToQty를 호출한다")
         void callsConvertUsdtToQtyWithNotional() {
             // amount=100, leverage=10 → notional=1000
@@ -1095,7 +1138,7 @@ class AutoTradeServiceTest {
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
             given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
             given(tradeFacade.getPositionSize(1L, "BTCUSDT", ExchangeType.BYBIT, TradeMode.MAIN))
-                    .willReturn(null, new BigDecimal("0.002"));
+                    .willReturn(BigDecimal.ZERO, null, new BigDecimal("0.002"));
 
             autoTradeService.processBlockMatching(queue, state, session, "50000.00");
             assertThat(limitOrders()).isEmpty();
@@ -1114,7 +1157,6 @@ class AutoTradeServiceTest {
             QueueStateDTO state = leafReadyState();
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
             given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
-            fakePositionSize.set(new BigDecimal("0.002"));
             // 지정가만 거래소 거부, 시장가(진입·청산)는 접수
             willAnswer(inv -> {
                 OrderRequestDTO req = inv.getArgument(0);
@@ -1210,7 +1252,7 @@ class AutoTradeServiceTest {
             given(tradeFacade.placeOrder(any(), any(), any(), any(), any()))
                     .willReturn(OrderResultDTO.builder().orderId("entry-1").build());
             given(tradeFacade.getPositionSize(1L, "BTCUSDT", ExchangeType.BYBIT, TradeMode.MAIN))
-                    .willReturn(null, new BigDecimal("0.002"));
+                    .willReturn(BigDecimal.ZERO, null, new BigDecimal("0.002"));
 
             autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
@@ -1243,7 +1285,7 @@ class AutoTradeServiceTest {
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
             given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
             given(tradeFacade.getPositionSize(1L, "BTCUSDT", ExchangeType.BYBIT, TradeMode.MAIN))
-                    .willReturn(null, BigDecimal.ZERO);
+                    .willReturn(BigDecimal.ZERO, null, BigDecimal.ZERO);
 
             autoTradeService.processBlockMatching(queue, state, session, "50000.00");
             state.setCloseConfirmCheckedAt(0L);
@@ -1281,7 +1323,7 @@ class AutoTradeServiceTest {
             given(tradeFacade.placeOrder(any(), any(), any(), any(), any()))
                     .willReturn(OrderResultDTO.builder().orderId("entry-1").build());
             given(tradeFacade.getPositionSize(1L, "BTCUSDT", ExchangeType.BYBIT, TradeMode.MAIN))
-                    .willReturn(new BigDecimal("0.002"));
+                    .willReturn(BigDecimal.ZERO, new BigDecimal("0.002"));
             // 첫 저장(진입 이력)은 DB 오류, 두 번째(fallback)는 성공
             willThrow(new RuntimeException("DB down")).willDoNothing()
                     .given(tradeFacade).saveTradeHistory(any(), any());
@@ -3499,6 +3541,216 @@ class AutoTradeServiceTest {
     /**
      * 테스트용 세션 생성
      */
+    // ─────────────────────────────────────────────
+    // 거래량 급변 시 큐 중지
+    // ─────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("거래량 급변 시 큐 중지")
+    class VolumeStopTest {
+
+        private static final String RESERVED = "[거래량 급감 중지] 감지 14:03:21 · SHORT 보유 · 진입 기준 120.5 → 52.1 (-56.8%)";
+
+        private QueueStateDTO holding(Side direction, Double baseline) {
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.POSITION_HOLDING);
+            state.setDirection(direction);
+            state.setActivePatternId(direction == Side.LONG ? 100L : 10L);
+            state.setEntryPrice("50000.00");
+            state.setEntryQty("0.001");
+            state.setEntryMargin(new BigDecimal("100"));
+            state.setTpPrice(new BigDecimal("55000"));
+            state.setSlPrice(new BigDecimal("45000"));
+            state.setCurrentBlockOrder(2);
+            state.setVolumeBaseline(baseline);
+            return state;
+        }
+
+        private PatternQueue enabledQueue() {
+            PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
+            queue.setVolumeStopEnabled(true);
+            return queue;
+        }
+
+        private TradeHistoryDTO savedStopHistory() {
+            ArgumentCaptor<TradeHistoryDTO> captor = ArgumentCaptor.forClass(TradeHistoryDTO.class);
+            then(tradeFacade).should(atLeastOnce()).saveTradeHistory(captor.capture(), any());
+            return captor.getAllValues().stream()
+                    .filter(h -> TradeOrderType.STOP.getTradeOrderType().equals(h.getOrderType()))
+                    .findFirst().orElseThrow();
+        }
+
+        @Test
+        @DisplayName("보유 중 거래량이 진입 기준의 0.5배 이하로 줄면 중지 예약을 DB에 저장하고 포지션은 유지한다")
+        void drop_reservesStop() {
+            PatternQueue queue = enabledQueue();
+            QueueStateDTO state = holding(Side.LONG, 100.0);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(40.0);
+
+            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+
+            ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
+            then(patternQueueRepository).should().updateVolumeStopReason(eq(1L), reason.capture());
+            assertThat(reason.getValue()).startsWith("[거래량 급감 중지] 감지 ")
+                    .contains("LONG 보유").contains("진입 기준 100 → 40 (-60%)");
+            assertThat(queue.getVolumeStopReason()).isEqualTo(reason.getValue());
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
+            then(tradeFacade).should(never()).placeOrder(any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("보유 중 거래량이 진입 기준의 1.5배 이상으로 늘면 급증 중지를 예약한다")
+        void surge_reservesStop() {
+            PatternQueue queue = enabledQueue();
+            QueueStateDTO state = holding(Side.LONG, 100.0);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(150.0);
+
+            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+
+            then(patternQueueRepository).should().updateVolumeStopReason(eq(1L),
+                    argThat(r -> r.startsWith("[거래량 급증 중지]") && r.contains("100 → 150 (+50%)")));
+        }
+
+        @Test
+        @DisplayName("0.5배 초과 ~ 1.5배 미만이면 예약하지 않는다")
+        void withinRange_noReservation() {
+            PatternQueue queue = enabledQueue();
+            QueueStateDTO state = holding(Side.LONG, 100.0);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(149.0);
+
+            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+
+            then(patternQueueRepository).should(never()).updateVolumeStopReason(any(), any());
+            assertThat(queue.getVolumeStopReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("이미 예약된 큐와 감시를 끈 큐는 거래량을 확인하지 않는다")
+        void reservedOrDisabled_skipsCheck() {
+            PatternQueue reserved = enabledQueue();
+            reserved.setVolumeStopReason(RESERVED);
+            autoTradeService.processPositionHolding(reserved, holding(Side.LONG, 100.0),
+                    makeSession(1L, "BTCUSDT", reserved), "51000.00");
+
+            PatternQueue disabled = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
+            autoTradeService.processPositionHolding(disabled, holding(Side.LONG, 100.0),
+                    makeSession(1L, "BTCUSDT", disabled), "51000.00");
+
+            then(volumeMonitor).should(never()).getVolume(any(), any());
+            then(patternQueueRepository).should(never()).updateVolumeStopReason(any(), any());
+        }
+
+        @Test
+        @DisplayName("워밍업(B안): 진입 기준이 없으면 창이 찬 첫 시점의 거래량을 기준으로 확정하고 판정하지 않는다")
+        void warmup_fixesBaselineWhenWindowFull() {
+            PatternQueue queue = enabledQueue();
+            QueueStateDTO state = holding(Side.LONG, null);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+
+            // 창이 아직 안 참 → 기준 미확정
+            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(null);
+            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+            assertThat(state.getVolumeBaseline()).isNull();
+
+            // 창이 참 → 그 값으로 기준 확정
+            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(80.0);
+            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+            assertThat(state.getVolumeBaseline()).isEqualTo(80.0);
+            then(patternQueueRepository).should(never()).updateVolumeStopReason(any(), any());
+        }
+
+        @Test
+        @DisplayName("진입 시 그 시점의 60초 거래량을 기준으로 저장한다")
+        void entry_savesBaseline() {
+            PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
+            queue.setVolumeStopEnabled(true);
+            QueueStateDTO state = QueueStateDTO.initial(1L);
+            state.setPhase(TradePhase.BLOCK_MATCHING);
+            state.setDirection(Side.LONG);
+            state.setActivePatternId(10L);
+            state.setCurrentBlockOrder(2);
+            state.setVolumeBaseline(999.0); // 이전 진입의 기준
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
+            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(120.0);
+
+            autoTradeService.processBlockMatching(queue, state, session, "50000.00");
+
+            assertThat(state.getPhase()).isEqualTo(TradePhase.POSITION_HOLDING);
+            assertThat(state.getVolumeBaseline()).isEqualTo(120.0);
+        }
+
+        @Test
+        @DisplayName("예약된 큐가 익절로 끝나면 1단계로 가지 않고 STOP 이력 저장 → 큐 비활성화 → 예약 해제")
+        void reserved_afterSell_stopsQueue() {
+            PatternQueue queue = enabledQueue();
+            queue.setVolumeStopReason(RESERVED);
+            QueueStateDTO state = holding(Side.LONG, 100.0);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            session.getQueueStates().put(1L, state);
+            given(marketService.getTicker(ExchangeType.BYBIT, "BTCUSDT"))
+                    .willReturn(TickerDTO.builder().symbol("BTCUSDT").lastPrice("55600").build());
+
+            // TP 도달 → 매도
+            autoTradeService.processPositionHolding(queue, state, session, "55500.00");
+
+            TradeHistoryDTO stop = savedStopHistory();
+            assertThat(stop.getOrderResult()).isEqualTo(OrderResult.SUCCESS);
+            assertThat(stop.getSide()).isEqualTo(Side.LONG);
+            assertThat(stop.getAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(stop.getExecutedPrice()).isEqualByComparingTo(new BigDecimal("55600"));
+            assertThat(stop.getPatternId()).isEqualTo(100L);
+            assertThat(stop.getErrorMessage()).isEqualTo(RESERVED);
+            assertThat(queue.isActive()).isFalse();
+            assertThat(queue.getVolumeStopReason()).isNull();
+            then(patternQueueRepository).should().save(queue);
+            assertThat(session.getQueueStates()).doesNotContainKey(1L);
+        }
+
+        @Test
+        @DisplayName("예약된 큐가 손절로 끝나면 다음 단계로 가지 않고 STOP 이력 저장 후 큐 비활성화")
+        void reserved_afterLiquidation_stopsQueue() {
+            PatternQueue queue = makeTwoStepQueue(1L, 1L, "BTCUSDT", 10);
+            queue.setVolumeStopEnabled(true);
+            queue.setVolumeStopReason(RESERVED);
+            QueueStateDTO state = holding(Side.LONG, 100.0);
+            state.setActivePatternId(10L);
+            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+            session.getQueueStates().put(1L, state);
+
+            // SL 도달 → 청산
+            autoTradeService.processPositionHolding(queue, state, session, "44500.00");
+
+            TradeHistoryDTO stop = savedStopHistory();
+            assertThat(stop.getSide()).isEqualTo(Side.LONG);
+            // 현재가 조회 실패 시 0
+            assertThat(stop.getExecutedPrice()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(queue.isActive()).isFalse();
+            assertThat(queue.getVolumeStopReason()).isNull();
+            assertThat(state.getCurrentStepLevel()).isNotEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("syncSession: 거래량 감시를 켠 큐의 심볼만 체결 구독 대상으로 동기화한다")
+        void syncSession_syncsVolumeSubscriptions() {
+            PatternQueue on = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
+            on.setVolumeStopEnabled(true);
+            PatternQueue off = makePatternQueue(2L, 1L, "ETHUSDT", Side.LONG);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    1L, "BTCUSDT", true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(on));
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    1L, "ETHUSDT", true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(off));
+
+            autoTradeService.syncSession(1L, ExchangeType.BYBIT, "BTCUSDT", TradeMode.MAIN);
+            autoTradeService.syncSession(1L, ExchangeType.BYBIT, "ETHUSDT", TradeMode.MAIN);
+
+            then(volumeMonitor).should(times(2)).syncSubscriptions(Map.of(ExchangeType.BYBIT, Set.of("BTCUSDT")));
+        }
+    }
+
     private AutoTradeSessionDTO makeSession(Long userId, String symbol, PatternQueue queue) {
         AutoTradeSessionDTO session = new AutoTradeSessionDTO();
         session.setExchangeType(ExchangeType.BYBIT);

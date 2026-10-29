@@ -54,6 +54,13 @@ public class PatternQueue extends BaseEntity {
     @Column(nullable = false)
     private boolean cycle = false;                        // 단계 소진 후 1단계 재시작 여부 (true: 반복, false: 큐 비활성화)
 
+    @Column(nullable = false)
+    private boolean volumeStopEnabled = false;            // 거래량 급변 시 큐 중지 사용 여부
+
+    // [사용자 정책 2026-10-29] 재시작 후에도 중지 예약이 유지되도록 DB에 보관
+    @Column(length = 500)
+    private String volumeStopReason;                      // 거래량 급변 중지 예약 사유 (null: 예약 없음, 값 있음: 현재 단계 종료 후 큐 중지)
+
     @OneToMany(mappedBy = "queue", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("stepLevel ASC, patternOrder ASC")
     @BatchSize(size = 50)  // N+1 방지: 여러 큐의 patterns를 건별 조회 대신 IN절로 배치 조회

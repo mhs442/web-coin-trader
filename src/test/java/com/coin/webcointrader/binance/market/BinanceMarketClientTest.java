@@ -4,7 +4,9 @@ import com.coin.webcointrader.binance.common.BinanceApiException;
 import com.coin.webcointrader.binance.market.dto.BinanceDepthResponse;
 import com.coin.webcointrader.binance.market.dto.BinanceExchangeInfoResponse;
 import com.coin.webcointrader.binance.market.dto.BinancePriceTickerResponse;
+import com.coin.webcointrader.binance.market.dto.BinanceWsAggTradeDTO;
 import com.coin.webcointrader.binance.market.dto.BinanceWsKlineDTO;
+import com.coin.webcointrader.common.market.dto.PublicTradeDTO;
 import com.coin.webcointrader.binance.market.dto.BinanceWsTickerDTO;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.exception.CustomException;
@@ -309,6 +311,37 @@ class BinanceMarketClientTest {
         assertThat(kline.getEndTime()).isEqualTo(1761526799999L);
         assertThat(kline.getClose()).isEqualTo("67090.9");
         assertThat(kline.isConfirmed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("aggTrade: 체결을 공통 체결 DTO로 바꿔 리스너에 전달한다")
+    @SuppressWarnings("unchecked")
+    void trade_publishesPublicTrade() {
+        client.init();
+        ArgumentCaptor<Consumer<BinanceWsAggTradeDTO>> captor = ArgumentCaptor.forClass(Consumer.class);
+        then(webSocketClient).should().addTradeCallback(captor.capture());
+        List<PublicTradeDTO> received = new ArrayList<>();
+        client.addTradeListener(received::add);
+
+        BinanceWsAggTradeDTO dto = new BinanceWsAggTradeDTO();
+        dto.setSymbol("BTCUSDT");
+        dto.setQty("0.125");
+        dto.setTradeTime(1761526800005L);
+        captor.getValue().accept(dto);
+        captor.getValue().accept(null);
+
+        assertThat(received).hasSize(1);
+        assertThat(received.get(0).getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(received.get(0).getQty()).isEqualTo("0.125");
+        assertThat(received.get(0).getTradeTime()).isEqualTo(1761526800005L);
+    }
+
+    @Test
+    @DisplayName("syncTradeSubscriptions: WebSocket 클라이언트 체결 구독 동기화에 위임한다")
+    void syncTradeSubscriptions_delegates() {
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+
+        then(webSocketClient).should().syncTradeSubscriptions(Set.of("BTCUSDT"));
     }
 
     @Test

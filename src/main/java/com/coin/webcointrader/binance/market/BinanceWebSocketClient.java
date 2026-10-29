@@ -1,5 +1,6 @@
 package com.coin.webcointrader.binance.market;
 
+import com.coin.webcointrader.binance.market.dto.BinanceWsAggTradeDTO;
 import com.coin.webcointrader.binance.market.dto.BinanceWsKlineDTO;
 import com.coin.webcointrader.binance.market.dto.BinanceWsRequest;
 import com.coin.webcointrader.binance.market.dto.BinanceWsTickerDTO;
@@ -69,11 +70,20 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
     // 실제로 구독 요청을 보낸 심볼 (대문자, ticker·kline 함께 관리)
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
 
+    // 체결(aggTrade)을 구독해야 하는 심볼 (거래량 급변 감시 대상, 대문자)
+    private volatile Set<String> targetTradeSymbols = Set.of();
+
+    // 실제로 aggTrade 구독 요청을 보낸 심볼 (대문자)
+    private final Set<String> subscribedTradeSymbols = ConcurrentHashMap.newKeySet();
+
     // 티커 데이터 수신 콜백 목록
     private final List<Consumer<BinanceWsTickerDTO>> tickerCallbacks = new CopyOnWriteArrayList<>();
 
     // Kline(봉) 데이터 수신 콜백 목록
     private final List<Consumer<BinanceWsKlineDTO>> klineCallbacks = new CopyOnWriteArrayList<>();
+
+    // 집계 체결 수신 콜백 목록
+    private final List<Consumer<BinanceWsAggTradeDTO>> tradeCallbacks = new CopyOnWriteArrayList<>();
 
     // 구독 요청 id (응답 매칭용, 증가값)
     private final AtomicLong requestId = new AtomicLong();
@@ -131,6 +141,33 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
     }
 
     /**
+     * 집계 체결 수신 콜백을 추가한다.
+     *
+     * @param callback BinanceWsAggTradeDTO를 처리할 콜백
+     */
+    public void addTradeCallback(Consumer<BinanceWsAggTradeDTO> callback) {
+        tradeCallbacks.add(callback);
+    }
+
+    /**
+     * 체결(aggTrade)을 구독할 심볼 집합을 바꾼다. 실제 전송은 {@link #flushSubscriptions()}에서 ticker·kline과 묶어서 한다.
+     *
+     * @param symbols 거래량 급변 감시 대상 심볼 집합 (예: "BTCUSDT")
+     */
+    public void syncTradeSubscriptions(Set<String> symbols) {
+        targetTradeSymbols = Set.copyOf(symbols);
+    }
+
+    /**
+     * 현재 aggTrade 구독 중인 심볼 목록을 반환한다.
+     *
+     * @return 구독 중인 심볼 Set (읽기 전용 복사본)
+     */
+    public Set<String> getSubscribedTradeSymbols() {
+        return Set.copyOf(subscribedTradeSymbols);
+    }
+
+    /**
      * 구독할 심볼 집합을 바꾼다. 실제 전송은 {@link #flushSubscriptions()}에서 묶어서 한다.
      *
      * @param symbols 활성 세션의 심볼 집합 (예: "BTCUSDT")
@@ -150,7 +187,7 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
 
     /**
      * 목표 심볼과 구독 중인 심볼의 차이를 1초마다 한 번에 전송한다.
-     * 추가분은 SUBSCRIBE 1건, 제외분은 UNSUBSCRIBE 1건으로 묶는다.
+     * 추가분은 SUBSCRIBE 1건, 제외분은 UNSUBSCRIBE 1건으로 묶는다. (ticker·kline·aggTrade 모두 한 메시지에 — 연결당 초당 메시지 수 제한 대응)
      * 연결 전이거나 전송에 실패하면 구독 상태를 바꾸지 않아 다음 주기에 다시 시도한다.
      */
     @Scheduled(fixedRate = 1000)
@@ -159,19 +196,30 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
             return;
         }
         Set<String> target = targetSymbols;
+        Set<String> tradeTarget = targetTradeSymbols;
 
         Set<String> toAdd = new HashSet<>(target);
         toAdd.removeAll(subscribedSymbols);
-        if (!toAdd.isEmpty() && send(BinanceWsRequest.subscribe(streamsOf(toAdd), requestId.incrementAndGet()))) {
+        Set<String> tradeToAdd = new HashSet<>(tradeTarget);
+        tradeToAdd.removeAll(subscribedTradeSymbols);
+        List<String> addStreams = streamsOf(toAdd);
+        addStreams.addAll(tradeStreamsOf(tradeToAdd));
+        if (!addStreams.isEmpty() && send(BinanceWsRequest.subscribe(addStreams, requestId.incrementAndGet()))) {
             subscribedSymbols.addAll(toAdd);
-            log.info(LogMessage.BINANCE_WS_SUBSCRIPTION_SENT.getMessage(), "SUBSCRIBE", toAdd.size() * 2);
+            subscribedTradeSymbols.addAll(tradeToAdd);
+            log.info(LogMessage.BINANCE_WS_SUBSCRIPTION_SENT.getMessage(), "SUBSCRIBE", addStreams.size());
         }
 
         Set<String> toRemove = new HashSet<>(subscribedSymbols);
         toRemove.removeAll(target);
-        if (!toRemove.isEmpty() && send(BinanceWsRequest.unsubscribe(streamsOf(toRemove), requestId.incrementAndGet()))) {
+        Set<String> tradeToRemove = new HashSet<>(subscribedTradeSymbols);
+        tradeToRemove.removeAll(tradeTarget);
+        List<String> removeStreams = streamsOf(toRemove);
+        removeStreams.addAll(tradeStreamsOf(tradeToRemove));
+        if (!removeStreams.isEmpty() && send(BinanceWsRequest.unsubscribe(removeStreams, requestId.incrementAndGet()))) {
             subscribedSymbols.removeAll(toRemove);
-            log.info(LogMessage.BINANCE_WS_SUBSCRIPTION_SENT.getMessage(), "UNSUBSCRIBE", toRemove.size() * 2);
+            subscribedTradeSymbols.removeAll(tradeToRemove);
+            log.info(LogMessage.BINANCE_WS_SUBSCRIPTION_SENT.getMessage(), "UNSUBSCRIBE", removeStreams.size());
         }
     }
 
@@ -186,6 +234,7 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         subscribedSymbols.clear();
+        subscribedTradeSymbols.clear();
         this.session = session;
         currentReconnectDelay = reconnectDelay;
         log.info(LogMessage.BINANCE_WS_CONNECTED.getMessage(), websocketUrl);
@@ -207,6 +256,10 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
             } else if ("kline".equals(event)) {
                 BinanceWsKlineDTO dto = objectMapper.treeToValue(node, BinanceWsKlineDTO.class);
                 klineCallbacks.forEach(cb -> cb.accept(dto));
+            } else if ("aggTrade".equals(event)) {
+                // 집계 체결 (거래량 급변 감시용)
+                BinanceWsAggTradeDTO dto = objectMapper.treeToValue(node, BinanceWsAggTradeDTO.class);
+                tradeCallbacks.forEach(cb -> cb.accept(dto));
             }
             // 구독 응답 {"result":null,"id":n} 등은 무시
         } catch (JsonProcessingException e) {
@@ -222,6 +275,7 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         log.warn(LogMessage.BINANCE_WS_CONNECTION_CLOSED.getMessage(), status);
         subscribedSymbols.clear();
+        subscribedTradeSymbols.clear();
         if (shouldConnect) {
             scheduleReconnect();
         }
@@ -284,6 +338,15 @@ public class BinanceWebSocketClient extends TextWebSocketHandler {
             String lower = symbol.toLowerCase(Locale.ROOT);
             streams.add(lower + "@ticker");
             streams.add(lower + "@kline_1m");
+        }
+        return streams;
+    }
+
+    /** 심볼마다 소문자 집계 체결 스트림 이름을 만든다. (예: btcusdt@aggTrade) */
+    private static List<String> tradeStreamsOf(Set<String> symbols) {
+        List<String> streams = new ArrayList<>();
+        for (String symbol : symbols) {
+            streams.add(symbol.toLowerCase(Locale.ROOT) + "@aggTrade");
         }
         return streams;
     }

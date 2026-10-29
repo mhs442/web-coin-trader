@@ -1,7 +1,9 @@
 package com.coin.webcointrader.bybit.market;
 
 import com.coin.webcointrader.bybit.market.dto.WebSocketKlineDTO;
+import com.coin.webcointrader.bybit.market.dto.WebSocketPublicTradeDTO;
 import com.coin.webcointrader.bybit.market.dto.WebSocketTickerDTO;
+import com.coin.webcointrader.common.market.dto.PublicTradeDTO;
 import com.coin.webcointrader.bybit.market.dto.FindTickerResponse;
 import com.coin.webcointrader.bybit.market.dto.GetInstrumentsInfoResponse;
 import com.coin.webcointrader.bybit.market.dto.GetKlineResponse;
@@ -322,6 +324,43 @@ class BybitMarketClientTest {
         assertThat(kline.getOpen()).isEqualTo("100");
         assertThat(kline.getClose()).isEqualTo("110");
         assertThat(kline.isConfirmed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("publicTrade: 메시지 안의 체결 각각을 공통 체결 DTO로 바꿔 리스너에 전달한다")
+    @SuppressWarnings("unchecked")
+    void trade_publishesEachPublicTrade() {
+        client.init();
+        ArgumentCaptor<Consumer<WebSocketPublicTradeDTO>> captor = ArgumentCaptor.forClass(Consumer.class);
+        then(bybitWebSocketClient).should().addTradeCallback(captor.capture());
+        List<PublicTradeDTO> received = new ArrayList<>();
+        client.addTradeListener(received::add);
+
+        WebSocketPublicTradeDTO dto = new WebSocketPublicTradeDTO();
+        dto.setTopic("publicTrade.BTCUSDT");
+        dto.setData(List.of(makeWsTrade(1_000L, "0.001"), makeWsTrade(1_500L, "0.250")));
+        captor.getValue().accept(dto);
+        captor.getValue().accept(null);
+
+        assertThat(received).extracting(PublicTradeDTO::getQty).containsExactly("0.001", "0.250");
+        assertThat(received).extracting(PublicTradeDTO::getTradeTime).containsExactly(1_000L, 1_500L);
+        assertThat(received).extracting(PublicTradeDTO::getSymbol).containsOnly("BTCUSDT");
+    }
+
+    @Test
+    @DisplayName("syncTradeSubscriptions: WebSocket 클라이언트 체결 구독 동기화에 위임한다")
+    void syncTradeSubscriptions_delegates() {
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+
+        then(bybitWebSocketClient).should().syncTradeSubscriptions(Set.of("BTCUSDT"));
+    }
+
+    private WebSocketPublicTradeDTO.TradeData makeWsTrade(long tradeTime, String qty) {
+        WebSocketPublicTradeDTO.TradeData data = new WebSocketPublicTradeDTO.TradeData();
+        data.setSymbol("BTCUSDT");
+        data.setTradeTime(tradeTime);
+        data.setQty(qty);
+        return data;
     }
 
     @Test

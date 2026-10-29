@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.market.client;
 
 import com.coin.webcointrader.common.market.dto.InstrumentDTO;
 import com.coin.webcointrader.common.market.dto.KlineDTO;
+import com.coin.webcointrader.common.market.dto.PublicTradeDTO;
 import com.coin.webcointrader.common.market.dto.TickerDTO;
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,6 +40,7 @@ public abstract class AbstractExchangeMarketClient implements ExchangeMarketClie
 
     private final List<Consumer<TickerDTO>> tickerListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<KlineDTO>> klineListeners = new CopyOnWriteArrayList<>();
+    private final List<Consumer<PublicTradeDTO>> tradeListeners = new CopyOnWriteArrayList<>();
 
     protected AbstractExchangeMarketClient(Clock clock) {
         this.clock = clock;
@@ -176,6 +178,14 @@ public abstract class AbstractExchangeMarketClient implements ExchangeMarketClie
     }
 
     /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void addTradeListener(Consumer<PublicTradeDTO> listener) {
+        tradeListeners.add(listener);
+    }
+
+    /**
      * 스트림으로 받은 최신 티커(병합 완료)를 저장하고, 현재가가 바뀐 경우에만 리스너에 전달한다.
      * (거래량 등 다른 필드만 바뀐 갱신은 가격 처리·STOMP push가 필요 없으므로 생략)
      *
@@ -212,6 +222,21 @@ public abstract class AbstractExchangeMarketClient implements ExchangeMarketClie
                 listener.accept(kline);
             } catch (Exception e) {
                 log.error("[{} 캔들 리스너 오류] symbol={}: {}", getExchangeType(), kline.getSymbol(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 스트림으로 받은 공개 체결 1건을 리스너에 전달한다.
+     *
+     * @param trade 공개 체결
+     */
+    protected void publishTrade(PublicTradeDTO trade) {
+        for (Consumer<PublicTradeDTO> listener : tradeListeners) {
+            try {
+                listener.accept(trade);
+            } catch (Exception e) {
+                log.error("[{} 체결 리스너 오류] symbol={}: {}", getExchangeType(), trade.getSymbol(), e.getMessage());
             }
         }
     }

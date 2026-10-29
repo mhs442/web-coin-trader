@@ -191,5 +191,6 @@ class AbstractExchangeMarketClientTest {
         @Override public List<KlineDTO> getKlines(String symbol, String interval, int limit) { return List.of(); }
         @Override public OrderBookDTO getOrderBook(String symbol, int depth) { return null; }
         @Override public void syncSubscriptions(Set<String> symbols) { }
+        @Override public void syncTradeSubscriptions(Set<String> symbols) { }
     }
 }

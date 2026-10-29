@@ -1,5 +1,6 @@
 package com.coin.webcointrader.binance.market;
 
+import com.coin.webcointrader.binance.market.dto.BinanceWsAggTradeDTO;
 import com.coin.webcointrader.binance.market.dto.BinanceWsKlineDTO;
 import com.coin.webcointrader.binance.market.dto.BinanceWsTickerDTO;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -138,6 +139,51 @@ class BinanceWebSocketClientTest {
         assertThat(params(sent.get(1))).containsExactlyInAnyOrder("btcusdt@ticker", "btcusdt@kline_1m");
     }
 
+    @Test
+    @DisplayName("syncTradeSubscriptions: 체결 대상 심볼의 @aggTrade 스트림을 ticker·kline과 같은 SUBSCRIBE 메시지로 묶는다")
+    void syncTrade_batchesAggTradeInSameSubscribe() throws Exception {
+        client.afterConnectionEstablished(session);
+        client.syncSubscriptions(Set.of("BTCUSDT", "ETHUSDT"));
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+
+        client.flushSubscriptions();
+
+        List<JsonNode> sent = sentMessages(1);
+        assertThat(params(sent.get(0))).containsExactlyInAnyOrder(
+                "btcusdt@ticker", "btcusdt@kline_1m", "ethusdt@ticker", "ethusdt@kline_1m", "btcusdt@aggTrade");
+        assertThat(client.getSubscribedTradeSymbols()).containsExactly("BTCUSDT");
+    }
+
+    @Test
+    @DisplayName("syncTradeSubscriptions: 체결 대상에서 빠진 심볼은 @aggTrade만 해지하고 ticker·kline은 유지한다")
+    void syncTrade_unsubscribesOnlyAggTrade() throws Exception {
+        client.afterConnectionEstablished(session);
+        client.syncSubscriptions(Set.of("BTCUSDT"));
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+        client.flushSubscriptions();
+
+        client.syncTradeSubscriptions(Set.of());
+        client.flushSubscriptions();
+
+        List<JsonNode> sent = sentMessages(2);
+        assertThat(sent.get(1).get("method").asText()).isEqualTo("UNSUBSCRIBE");
+        assertThat(params(sent.get(1))).containsExactly("btcusdt@aggTrade");
+        assertThat(client.getSubscribedSymbols()).containsExactly("BTCUSDT");
+        assertThat(client.getSubscribedTradeSymbols()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("재연결: 연결이 끊기면 체결 구독 상태도 비워 다시 구독한다")
+    void reconnect_clearsTradeSubscriptions() throws Exception {
+        client.afterConnectionEstablished(session);
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+        client.flushSubscriptions();
+
+        client.afterConnectionClosed(session, org.springframework.web.socket.CloseStatus.NORMAL);
+
+        assertThat(client.getSubscribedTradeSymbols()).isEmpty();
+    }
+
     // ─────────────────────────────────────────────
     // 수신 메시지 분기
     // ─────────────────────────────────────────────
@@ -176,6 +222,22 @@ class BinanceWebSocketClientTest {
         assertThat(received.get().getKline().getCloseTime()).isEqualTo(1761526799999L);
         assertThat(received.get().getKline().getClose()).isEqualTo("67090.9");
         assertThat(received.get().getKline().isClosed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("handleTextMessage: aggTrade 메시지를 체결 콜백으로 전달한다")
+    void handle_aggTrade() throws Exception {
+        AtomicReference<BinanceWsAggTradeDTO> received = new AtomicReference<>();
+        client.addTradeCallback(received::set);
+
+        client.handleTextMessage(session, new TextMessage("""
+                {"e":"aggTrade","E":1761526800010,"s":"BTCUSDT","a":5933014,"p":"67000.1","q":"0.125",
+                 "f":100,"l":105,"T":1761526800005,"m":true}
+                """));
+
+        assertThat(received.get().getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(received.get().getQty()).isEqualTo("0.125");
+        assertThat(received.get().getTradeTime()).isEqualTo(1761526800005L);
     }
 
     @Test

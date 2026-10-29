@@ -102,11 +102,23 @@
                             <input type="number" id="trigger-rate" step="0.01" min="0.01">
                         </div>
                     </div>
-                    <div class="trigger-input-row" style="margin-top:8px;">
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                    <div class="trigger-input-row" style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                        <label class="toggle-switch">
                             <input type="checkbox" id="cycle-toggle">
-                            <span>단계 소진 후 1단계 재시작 (사이클 모드)</span>
+                            <span class="toggle-slider"></span>
                         </label>
+                        <label for="cycle-toggle" style="cursor:pointer;">단계 소진 후 1단계 재시작 (사이클 모드)</label>
+                    </div>
+                    <!-- 거래량 급변 시 중지 (감지 시 현재 단계 종료 후 큐 중지) -->
+                    <div class="trigger-input-row" style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="volume-stop-toggle">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <label for="volume-stop-toggle" style="cursor:pointer;">거래량 급변 시 중지</label>
+                    </div>
+                    <div style="margin:4px 0 0 48px; font-size:0.75rem; color:#6c757d;">
+                        진입 시점 대비 최근 60초 거래량이 절반 이하 또는 1.5배 이상이 되면, 현재 단계를 마친 뒤 큐를 중지합니다.
                     </div>
                 </div>
                 <!-- 구성 중인 큐 미리보기 -->
@@ -192,11 +204,23 @@
                             <input type="number" id="edit-trigger-rate" step="0.01" min="0.01">
                         </div>
                     </div>
-                    <div class="trigger-input-row" style="margin-top:8px;">
-                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                    <div class="trigger-input-row" style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                        <label class="toggle-switch">
                             <input type="checkbox" id="edit-cycle-toggle">
-                            <span>단계 소진 후 1단계 재시작 (사이클 모드)</span>
+                            <span class="toggle-slider"></span>
                         </label>
+                        <label for="edit-cycle-toggle" style="cursor:pointer;">단계 소진 후 1단계 재시작 (사이클 모드)</label>
+                    </div>
+                    <!-- 거래량 급변 시 중지 (감지 시 현재 단계 종료 후 큐 중지) -->
+                    <div class="trigger-input-row" style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="edit-volume-stop-toggle">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <label for="edit-volume-stop-toggle" style="cursor:pointer;">거래량 급변 시 중지</label>
+                    </div>
+                    <div style="margin:4px 0 0 48px; font-size:0.75rem; color:#6c757d;">
+                        진입 시점 대비 최근 60초 거래량이 절반 이하 또는 1.5배 이상이 되면, 현재 단계를 마친 뒤 큐를 중지합니다.
                     </div>
                 </div>
                 <!-- 단계 목록 (동적 렌더링) -->
@@ -968,11 +992,15 @@
                 var toggleClass = queue.active ? 'toggle-on' : 'toggle-off';
 
                 var cycleBadge = queue.cycle ? '<span class="cycle-badge">🔄 사이클</span>' : '';
+                // 거래량 급변 감지됨 → 현재 단계 종료 후 중지 예정
+                var volumeStopBadge = queue.volumeStopReserved
+                    ? '<span class="volume-stop-badge" title="거래량 급변이 감지되어 현재 단계가 끝나면 큐가 중지됩니다">⏸ 중지 예약</span>' : '';
                 return '<div class="server-queue-card ' + (queue.active ? 'queue-active' : 'queue-inactive') + '" data-queue-id="' + queue.id + '">' +
                     '<div class="server-queue-header">' +
                     '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '">' + toggleLabel + '</button>' +
                     '<span class="queue-trigger-info">트리거: ' + queue.triggerRate + '%</span>' +
                     cycleBadge +
+                    volumeStopBadge +
                     '<button onclick="startEditQueue(' + queue.id + ')" class="pattern-edit-btn" ' + (queue.active ? 'disabled title="비활성화 후 수정하세요"' : '') + '>수정</button>' +
                     '<button onclick="deletePattern(' + queue.id + ')" class="pattern-delete-btn">삭제</button>' +
                     '</div>' +
@@ -1329,6 +1357,7 @@
                 tradeMode: getTradeMode().toUpperCase(),
                 triggerRate: parseFloat(triggerRate),
                 cycle: document.getElementById('cycle-toggle').checked,
+                volumeStopEnabled: $('#volume-stop-toggle').prop('checked'),
                 patterns: patternsData
             };
             // 응답 전까지 버튼 비활성화 (중복 클릭으로 같은 큐가 두 번 등록 요청되는 것 방지)
@@ -1388,6 +1417,7 @@
 
             document.getElementById('edit-trigger-rate').value = queue.triggerRate;
             document.getElementById('edit-cycle-toggle').checked = queue.cycle;
+            $('#edit-volume-stop-toggle').prop('checked', queue.volumeStopEnabled);
 
             renderEditSteps();
             $('#edit-queue-modal').show();
@@ -1778,7 +1808,7 @@
                 url: '/api/autotrade/patterns/' + editQueueId,
                 type: 'PUT',
                 contentType: 'application/json',
-                data: JSON.stringify({ triggerRate: parseFloat(triggerRate), cycle: document.getElementById('edit-cycle-toggle').checked, patterns: patternsData }),
+                data: JSON.stringify({ triggerRate: parseFloat(triggerRate), cycle: document.getElementById('edit-cycle-toggle').checked, volumeStopEnabled: $('#edit-volume-stop-toggle').prop('checked'), patterns: patternsData }),
                 success: function() {
                     alert('큐가 수정되었습니다.');
                     cancelEditQueue();
@@ -1859,6 +1889,7 @@
             leafBlock = null;
             document.getElementById('trigger-rate').value = '';
             document.getElementById('cycle-toggle').checked = false;
+            $('#volume-stop-toggle').prop('checked', false);
             document.getElementById('step-number-label').textContent = '1단계';
             renderPatternBlocks();
             renderPendingPatterns();

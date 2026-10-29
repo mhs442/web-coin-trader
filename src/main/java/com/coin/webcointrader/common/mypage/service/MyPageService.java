@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.mypage.service;
 
 import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.autotrade.dto.PatternQueueDTO;
 import com.coin.webcointrader.common.autotrade.service.PatternQueueService;
 import com.coin.webcointrader.common.dto.response.PageResponse;
@@ -27,7 +28,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 마이페이지 서비스.
@@ -98,12 +101,13 @@ public class MyPageService {
      * <p>Pattern.id는 큐 사이클이 반복돼도 재사용되므로, 같은 패턴의 모든 거래를
      * patternId로 조회하면 여러 사이클의 거래가 섞인다.
      * 해결책: 투자 히스토리의 createdAt을 상한선으로 설정하고, 최신순 DESC로 조회한 뒤
-     * EXIT(SELL/LIQUIDATION) 1건 + 그 직전 ENTRY 1건만 추출해 해당 사이클 거래를 특정한다.</p>
+     * 최신 EXIT(SELL/LIQUIDATION) + 직전 ENTRY까지의 성공 EXIT + 그 ENTRY를 추출해 해당 사이클 거래를 특정한다.
+     * (부분 익절 후 손절이면 EXIT가 SELL·LIQUIDATION 2건)</p>
      *
      * @param userId        사용자 ID
      * @param investmentId  InvestmentHistory.id (투자 PK)
      * @param mode          거래 모드 ("sim" 또는 그 외)
-     * @return 거래 내역 목록 (체결 일시 오름차순, 해당 사이클 거래만)
+     * @return 거래 내역 목록 (체결 일시 오름차순, 해당 사이클 거래만, 성공 EXIT 행에는 행별 손익 포함)
      */
     public List<InvestmentTradeDetailResponse> getInvestmentTradeDetails(Long userId, Long investmentId, String mode) {
         HistoryService history = historyService(mode);
@@ -113,14 +117,81 @@ public class MyPageService {
 
         List<TradeHistoryDTO> trades = history.findTradesUpTo(inv.getPatternId(), userId, inv.getCreatedAt());
 
-        return extractCycleTrades(trades).stream()
-                .map(this::toTradeDetailResponse)
+        List<TradeHistoryDTO> cycle = extractCycleTrades(trades);
+        Map<Long, ExitProfit> exitProfits = splitExitProfits(cycle, inv);
+        return cycle.stream()
+                .map(t -> toTradeDetailResponse(t, exitProfits.get(t.getId())))
                 .toList();
+    }
+
+    /** 행별 손익 (실세 손익, 순수익) */
+    private record ExitProfit(BigDecimal net, BigDecimal gross) {}
+
+    /**
+     * 사이클의 성공 EXIT 행별 손익을 계산한다.
+     * 앞쪽 EXIT(부분 익절분)는 계산식, 마지막 EXIT는 투자 손익 − 앞쪽 합으로 두어 행별 합이 투자 손익과 일치한다.
+     * (단일 청산이면 투자 손익 그대로 — 거래소 실손익·펀딩비 반영값 유지)
+     *
+     * @param cycle 사이클 거래 목록 (오름차순)
+     * @param inv   투자 히스토리 (진입가·마진·레버리지·방향·손익·펀딩비)
+     * @return 거래 히스토리 ID → 행별 손익 (계산할 수 없으면 빈 Map)
+     */
+    private Map<Long, ExitProfit> splitExitProfits(List<TradeHistoryDTO> cycle, InvestmentHistoryDTO inv) {
+        Map<Long, ExitProfit> result = new HashMap<>();
+        List<TradeHistoryDTO> exits = cycle.stream()
+                .filter(t -> isExitOrder(t.getOrderType()) && t.getOrderResult() == OrderResult.SUCCESS)
+                .toList();
+        if (exits.isEmpty() || inv.getProfitLoss() == null) return result;
+
+        // 여러 건으로 나누려면 수량 계산 재료(진입가·마진·레버리지)가 필요 — 없으면(구 데이터) 표시 안 함
+        boolean multiExit = exits.size() > 1;
+        if (multiExit && (inv.getEntryPrice() == null || inv.getAmount() == null
+                || inv.getAmount().signum() <= 0 || inv.getLeverage() <= 0)) {
+            return result;
+        }
+
+        BigDecimal entryFee = cycle.stream()
+                .filter(t -> "entry".equalsIgnoreCase(t.getOrderType()) && t.getFee() != null)
+                .map(TradeHistoryDTO::getFee)
+                .findFirst().orElse(BigDecimal.ZERO);
+        BigDecimal sign = inv.getSide() == Side.LONG ? BigDecimal.ONE : BigDecimal.ONE.negate();
+
+        // 앞쪽 EXIT: 차익 = (체결가 − 진입가) × 수량 × 방향, 수량 = 마진 × 레버리지 ÷ 진입가
+        BigDecimal netSum = BigDecimal.ZERO;
+        BigDecimal entryFeeShareSum = BigDecimal.ZERO;
+        for (TradeHistoryDTO exit : exits.subList(0, exits.size() - 1)) {
+            BigDecimal qty = exit.getAmount().multiply(BigDecimal.valueOf(inv.getLeverage()))
+                    .divide(inv.getEntryPrice(), 12, RoundingMode.HALF_UP);
+            BigDecimal gross = exit.getExecutedPrice().subtract(inv.getEntryPrice()).multiply(qty).multiply(sign);
+            // 진입 수수료는 마진(=수량) 비율로 배분
+            BigDecimal entryFeeShare = entryFee.multiply(exit.getAmount())
+                    .divide(inv.getAmount(), 12, RoundingMode.HALF_UP);
+            BigDecimal exitFee = exit.getFee() != null ? exit.getFee() : BigDecimal.ZERO;
+            BigDecimal net = gross.subtract(exitFee).subtract(entryFeeShare);
+            result.put(exit.getId(), new ExitProfit(net, gross));
+            netSum = netSum.add(net);
+            entryFeeShareSum = entryFeeShareSum.add(entryFeeShare);
+        }
+
+        // 마지막 EXIT: 투자 손익 − 앞쪽 합, 차익은 남은 진입 수수료·자기 수수료·펀딩비를 되돌린 값
+        TradeHistoryDTO last = exits.get(exits.size() - 1);
+        BigDecimal lastNet = inv.getProfitLoss().subtract(netSum);
+        BigDecimal lastGross = lastNet
+                .add(last.getFee() != null ? last.getFee() : BigDecimal.ZERO)
+                .add(entryFee.subtract(entryFeeShareSum))
+                .add(inv.getFundingFee() != null ? inv.getFundingFee() : BigDecimal.ZERO);
+        result.put(last.getId(), new ExitProfit(lastNet, lastGross));
+        return result;
+    }
+
+    /** 매도·청산(EXIT) 주문 유형인지 */
+    private boolean isExitOrder(String orderType) {
+        return "sell".equalsIgnoreCase(orderType) || "liquidation".equalsIgnoreCase(orderType);
     }
 
     /**
      * 최신순 거래 목록에서 해당 사이클(EXIT + 직전 ENTRY)을 추출하여 오름차순으로 반환한다.
-     * EXIT(sell/liquidation)을 먼저 찾고, 그 직전 ENTRY를 찾아 쌍으로 구성한다.
+     * EXIT(sell/liquidation)을 먼저 찾고, 그 직전 ENTRY까지 사이의 성공 EXIT(부분 익절분)도 함께 담는다.
      *
      * @param trades 최신순 거래 목록 (createdAt DESC)
      * @return 해당 사이클 거래 목록 (createdAt ASC)
@@ -132,8 +203,7 @@ public class MyPageService {
         TradeHistoryDTO exitTrade = null;
         int exitIdx = -1;
         for (int i = 0; i < trades.size(); i++) {
-            String orderType = trades.get(i).getOrderType();
-            if ("sell".equalsIgnoreCase(orderType) || "liquidation".equalsIgnoreCase(orderType)) {
+            if (isExitOrder(trades.get(i).getOrderType())) {
                 exitTrade = trades.get(i);
                 exitIdx = i;
                 break;
@@ -141,16 +211,26 @@ public class MyPageService {
         }
         if (exitTrade == null) return List.of();
 
-        // EXIT 직후(DESC 기준)가 해당 사이클의 ENTRY
-        List<TradeHistoryDTO> result = new java.util.ArrayList<>();
+        // EXIT 이후(DESC 기준) 처음 만나는 ENTRY가 해당 사이클의 ENTRY, 그 사이의 성공 EXIT는 같은 사이클의 부분 청산분
+        TradeHistoryDTO entryTrade = null;
+        List<TradeHistoryDTO> earlierExits = new java.util.ArrayList<>(); // DESC 순
         for (int i = exitIdx + 1; i < trades.size(); i++) {
-            if ("entry".equalsIgnoreCase(trades.get(i).getOrderType())) {
-                result.add(trades.get(i)); // ENTRY
+            TradeHistoryDTO t = trades.get(i);
+            if ("entry".equalsIgnoreCase(t.getOrderType())) {
+                entryTrade = t;
                 break;
             }
+            if (isExitOrder(t.getOrderType()) && t.getOrderResult() == OrderResult.SUCCESS) {
+                earlierExits.add(t);
+            }
         }
-        result.add(exitTrade); // EXIT
-        // ASC 순서로 반환 (ENTRY → EXIT)
+
+        // ASC 순서로 반환 (ENTRY → 앞쪽 EXIT → 최신 EXIT)
+        List<TradeHistoryDTO> result = new java.util.ArrayList<>();
+        if (entryTrade != null) result.add(entryTrade);
+        java.util.Collections.reverse(earlierExits);
+        result.addAll(earlierExits);
+        result.add(exitTrade);
         return result;
     }
 
@@ -407,10 +487,11 @@ public class MyPageService {
     /**
      * TradeHistoryDTO → InvestmentTradeDetailResponse 변환
      *
-     * @param h 거래 히스토리 DTO
+     * @param h      거래 히스토리 DTO
+     * @param profit 행별 손익 (성공 EXIT 행이 아니면 null)
      * @return 거래 상세 응답 DTO
      */
-    private InvestmentTradeDetailResponse toTradeDetailResponse(TradeHistoryDTO h) {
+    private InvestmentTradeDetailResponse toTradeDetailResponse(TradeHistoryDTO h, ExitProfit profit) {
         return InvestmentTradeDetailResponse.builder()
                 .id(h.getId())
                 .orderType(h.getOrderType())
@@ -421,6 +502,14 @@ public class MyPageService {
                 .orderStatus(h.getOrderResult().name())
                 .errorMessage(h.getErrorMessage())
                 .createdAt(h.getCreatedAt().format(DT_FMT))
+                // 성공 EXIT 행만 행별 손익 (소수 4자리)
+                .profitLoss(profit != null ? formatProfit(profit.net()) : null)
+                .grossProfitLoss(profit != null ? formatProfit(profit.gross()) : null)
                 .build();
+    }
+
+    /** 손익 표시용 문자열 (소수 4자리 반올림, 끝 0 제거) */
+    private String formatProfit(BigDecimal value) {
+        return value.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
 }

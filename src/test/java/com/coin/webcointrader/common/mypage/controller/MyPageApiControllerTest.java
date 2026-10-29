@@ -4,8 +4,11 @@ import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.util.OtherExchangeTestData;
 import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.common.login.dto.UserDTO;
+import com.coin.webcointrader.common.enums.OrderResult;
 import com.coin.webcointrader.common.trade.entity.InvestmentHistory;
+import com.coin.webcointrader.common.trade.entity.TradeHistory;
 import com.coin.webcointrader.common.trade.repository.InvestmentHistoryRepository;
+import com.coin.webcointrader.common.trade.repository.TradeHistoryRepository;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +50,9 @@ class MyPageApiControllerTest {
     private InvestmentHistoryRepository investmentHistoryRepository;
 
     @Autowired
+    private TradeHistoryRepository tradeHistoryRepository;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     private static final Long USER_ID = 1L;
@@ -74,6 +80,7 @@ class MyPageApiControllerTest {
     @AfterEach
     void tearDown() {
         investmentHistoryRepository.deleteAllInBatch();
+        tradeHistoryRepository.deleteAllInBatch();
         WireMock.reset();
     }
 
@@ -117,6 +124,56 @@ class MyPageApiControllerTest {
                 .andExpect(status().isBadRequest());
 
         assertThat(investmentHistoryRepository.count()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("GET /api/mypage/investments/{id}/trades: 부분 익절 후 손절 건은 진입·익절·손절 3행과 행별 손익을 반환한다")
+    void getInvestmentTrades_partialTpThenStopLoss() throws Exception {
+        // given: 패턴 2번 사이클 — LONG 진입 50000, 마진 100, 레버리지 10, 투자 손익 3.0 (= 익절 11.4 + 손절 -8.4)
+        InvestmentHistory inv = makeInvestment();
+        inv.setPatternId(2L);
+        inv.setLeverage(10);
+        inv.setProfitLoss(new BigDecimal("3.0"));
+        Long invId = investmentHistoryRepository.save(inv).getId();
+        Long entryId = tradeHistoryRepository.save(makeTrade("entry", "100", "50000", "0.5")).getId();
+        Long sellId = tradeHistoryRepository.save(makeTrade("sell", "60", "51000", "0.3")).getId();
+        Long liqId = tradeHistoryRepository.save(makeTrade("liquidation", "40", "49000", "0.2")).getId();
+        // 생성 시각 고정 (진입 → 익절 → 손절 → 투자 이력 순)
+        setCreatedAt("trade_history", entryId, "2026-01-10 11:00:00");
+        setCreatedAt("trade_history", sellId, "2026-01-10 11:00:10");
+        setCreatedAt("trade_history", liqId, "2026-01-10 11:00:20");
+        setCreatedAt("investment_history", invId, "2026-01-10 11:00:30");
+
+        // when & then
+        mockMvc.perform(get("/api/mypage/investments/" + invId + "/trades").param("mode", "main")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].orderType").value("entry"))
+                .andExpect(jsonPath("$[1].orderType").value("sell"))
+                .andExpect(jsonPath("$[1].profitLoss").value("11.4"))
+                .andExpect(jsonPath("$[2].orderType").value("liquidation"))
+                .andExpect(jsonPath("$[2].profitLoss").value("-8.4"));
+    }
+
+    private TradeHistory makeTrade(String orderType, String amount, String price, String fee) {
+        TradeHistory t = new TradeHistory();
+        t.setExchangeType(ExchangeType.BYBIT);
+        t.setUserId(USER_ID);
+        t.setPatternId(2L);
+        t.setSymbol("BTCUSDT");
+        t.setSide(Side.LONG);
+        t.setOrderType(orderType);
+        t.setAmount(new BigDecimal(amount));
+        t.setExecutedPrice(new BigDecimal(price));
+        t.setFee(new BigDecimal(fee));
+        t.setOrderResult(OrderResult.SUCCESS);
+        return t;
+    }
+
+    private void setCreatedAt(String table, Long id, String createdAt) {
+        jdbcTemplate.update("UPDATE " + table + " SET created_at = ? WHERE id = ?",
+                java.sql.Timestamp.valueOf(createdAt), id);
     }
 
     private InvestmentHistory makeInvestment() {

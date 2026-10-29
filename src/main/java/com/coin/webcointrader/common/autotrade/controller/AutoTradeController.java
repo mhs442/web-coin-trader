@@ -197,6 +197,8 @@ public class AutoTradeController {
                 .exchangeType(queue.getExchangeType().name())
                 .active(queue.isActive())
                 .cycle(queue.isCycle())
+                .volumeStopEnabled(queue.isVolumeStopEnabled())
+                .volumeStopReserved(queue.getVolumeStopReason() != null)
                 .triggerRate(queue.getTriggerRate())
                 .patterns(patternResponses)
                 .build();

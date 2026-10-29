@@ -214,6 +214,22 @@ class PatternQueueRepositoryTest {
         testEntityManager.clear();
     }
 
+    @Test
+    @DisplayName("updateVolumeStopReason: 다른 컬럼은 건드리지 않고 거래량 중지 예약 사유만 바꾼다")
+    void updateVolumeStopReason_updatesOnlyReason() {
+        PatternQueue saved = patternQueueRepository.save(makeQueue(USER_ID, "BTCUSDT"));
+        // 엔진이 들고 있는 엔티티와 별개로 DB 값이 바뀐 상황 (사용자 수정 등)
+        jdbcTemplate.update("UPDATE pattern_queue SET cycle = true WHERE id = ?", saved.getId());
+
+        int updated = patternQueueRepository.updateVolumeStopReason(saved.getId(), "[거래량 급감 중지] 예약");
+        testEntityManager.clear();
+
+        PatternQueue reloaded = patternQueueRepository.findById(saved.getId()).orElseThrow();
+        assertThat(updated).isEqualTo(1);
+        assertThat(reloaded.getVolumeStopReason()).isEqualTo("[거래량 급감 중지] 예약");
+        assertThat(reloaded.isCycle()).isTrue();
+    }
+
     private PatternQueue makeQueue(Long userId, String symbol) {
         PatternQueue q = new PatternQueue();
         q.setExchangeType(ExchangeType.BYBIT);

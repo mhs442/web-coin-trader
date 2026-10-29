@@ -1,5 +1,6 @@
 package com.coin.webcointrader.bybit.market;
 
+import com.coin.webcointrader.bybit.market.dto.WebSocketPublicTradeDTO;
 import com.coin.webcointrader.bybit.market.dto.WebSocketTickerDTO;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -113,6 +114,30 @@ class BybitWebSocketClientTest {
     }
 
     @Test
+    @DisplayName("handleTextMessage: publicTrade 메시지를 체결 콜백으로 전달한다")
+    void handleTextMessage_publicTradeCallsTradeCallback() throws Exception {
+        AtomicReference<WebSocketPublicTradeDTO> received = new AtomicReference<>();
+        client.addTradeCallback(received::set);
+
+        client.handleTextMessage(session, new TextMessage("""
+                {
+                  "topic": "publicTrade.BTCUSDT",
+                  "type": "snapshot",
+                  "ts": 1672304486868,
+                  "data": [
+                    { "T": 1672304486865, "s": "BTCUSDT", "S": "Buy", "v": "0.001", "p": "16578.50", "i": "a1", "BT": false },
+                    { "T": 1672304486866, "s": "BTCUSDT", "S": "Sell", "v": "0.250", "p": "16578.00", "i": "a2", "BT": false }
+                  ]
+                }
+                """));
+
+        assertThat(received.get().getData()).hasSize(2);
+        assertThat(received.get().getData().get(0).getSymbol()).isEqualTo("BTCUSDT");
+        assertThat(received.get().getData().get(0).getTradeTime()).isEqualTo(1672304486865L);
+        assertThat(received.get().getData().get(1).getQty()).isEqualTo("0.250");
+    }
+
+    @Test
     @DisplayName("handleTextMessage: op 메시지(pong 등)는 무시한다")
     void handleTextMessage_ignoresOpMessages() throws Exception {
         // given
@@ -212,6 +237,38 @@ class BybitWebSocketClientTest {
 
         // then
         assertThat(client.getSubscribedSymbols()).containsExactlyInAnyOrder("BTCUSDT", "SOLUSDT");
+    }
+
+    @Test
+    @DisplayName("syncTradeSubscriptions: 새 심볼은 publicTrade 토픽을 구독하고, 빠진 심볼은 해제한다")
+    void syncTradeSubscriptions_addsNewAndRemovesOld() throws Exception {
+        ReflectionTestUtils.setField(client, "session", session);
+        given(session.isOpen()).willReturn(true);
+        client.syncTradeSubscriptions(Set.of("BTCUSDT", "ETHUSDT"));
+
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+
+        assertThat(client.getSubscribedTradeSymbols()).containsExactly("BTCUSDT");
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        then(session).should(atLeastOnce()).sendMessage(captor.capture());
+        assertThat(captor.getAllValues()).anyMatch(m -> m.getPayload().contains("\"subscribe\"") && m.getPayload().contains("publicTrade.BTCUSDT"));
+        assertThat(captor.getAllValues()).anyMatch(m -> m.getPayload().contains("\"unsubscribe\"") && m.getPayload().contains("publicTrade.ETHUSDT"));
+    }
+
+    @Test
+    @DisplayName("afterConnectionEstablished: 체결(publicTrade) 구독도 재구독한다")
+    void afterConnectionEstablished_resubscribesTradeTopics() throws Exception {
+        ReflectionTestUtils.setField(client, "session", session);
+        given(session.isOpen()).willReturn(true);
+        client.syncTradeSubscriptions(Set.of("BTCUSDT"));
+        reset(session);
+        given(session.isOpen()).willReturn(true);
+
+        client.afterConnectionEstablished(session);
+
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        then(session).should(atLeastOnce()).sendMessage(captor.capture());
+        assertThat(captor.getAllValues()).anyMatch(m -> m.getPayload().contains("publicTrade.BTCUSDT"));
     }
 
     // ─────────────────────────────────────────────

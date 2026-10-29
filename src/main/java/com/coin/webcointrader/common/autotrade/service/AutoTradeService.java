@@ -80,6 +80,7 @@ public class AutoTradeService {
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
     private final ExecutorService closeRecordExecutor;     // 청산 후처리(체결 조회·이력 저장) 전용 실행기 (AsyncConfig)
     private final ExecutorService sessionLaneExecutor;     // 세션별 가격 처리 레인 실행기 (AsyncConfig, 고정 4개)
+    private final VolumeMonitorService volumeMonitor;      // 거래량 급변 감시용 최근 60초 체결량 집계
 
     // 활성 세션 관리 (키: "userId:exchangeType:symbol:tradeMode")
     private final ConcurrentHashMap<String, AutoTradeSessionDTO> activeSessions = new ConcurrentHashMap<>();
@@ -107,6 +108,9 @@ public class AutoTradeService {
     private static final String HISTORY_SAVE_FAILED_PREFIX = "[이력 저장 실패] 체결은 완료됨 — ";
     // 앱이 보낸 매도/청산 주문의 orderLinkId (q{큐ID}-S/L-{millis}) — 외부 청산 판단에서 제외
     // (진입 E는 거래소 TP/SL 발동 주문이 원주문 링크를 이어받을 가능성이 있어 제외 대상에 넣지 않음)
+    // [사용자 정책 2026-10-29] 거래량 급변 판정: 진입 기준 대비 0.5배 이하(급감) 또는 1.5배 이상(급증)
+    private static final double VOLUME_DROP_RATIO = 0.5;
+    private static final double VOLUME_SURGE_RATIO = 1.5;
     private static final java.util.regex.Pattern OWN_CLOSE_LINK_ID = java.util.regex.Pattern.compile("^q\\d+-[SL]-\\d+$");
 
     /**
@@ -818,6 +822,22 @@ public class AutoTradeService {
     }
 
     /**
+     * 진입하지 않고 같은 단계의 트리거 대기로 되돌린다. (단계 레벨 유지, 트리거 기준가는 다음 가격으로 다시 설정)
+     *
+     * @param state 큐 런타임 상태
+     */
+    private void returnToTriggerWait(QueueStateDTO state) {
+        state.setPhase(TradePhase.TRIGGER_WAIT);
+        state.setBasePrice(null);
+        state.setBaseTime(null);
+        state.setDirection(null);
+        state.setActivePatternId(null);
+        state.setCurrentBlockOrder(1);
+        state.setBlockBaseTime(null);
+        state.setBlockBasePrice(null);
+    }
+
+    /**
      * 트리거 충족 후 BLOCK_MATCHING 페이즈로 전환한다.
      * 현재 단계에서 방향에 맞는 패턴을 선택하고, 블록 기준 시각/가격을 초기화한다.
      */
@@ -927,6 +947,20 @@ public class AutoTradeService {
             session.addLog(now() + " [진입 실패] leaf 블록 없음: pattern=" + pattern.getId());
             deactivateQueue(queue, state, session, "leaf 블록 없음");
             return;
+        }
+
+        // [사용자 정책 2026-10-29] 실거래: 거래소에 이미 포지션이 있으면(재시작 전 포지션 등) 진입하지 않고 같은 단계 트리거 대기로 복귀
+        // 남은 포지션은 거래소 안전망 TP/SL에 맡기고, 정리된 뒤 다음 트리거에서 정상 진입한다. 조회 실패도 건너뜀
+        if (session.getTradeMode() == TradeMode.MAIN) {
+            BigDecimal existingSize = tradeFacade.getPositionSize(session.getUserId(), session.getSymbol(),
+                    session.getExchangeType(), session.getTradeMode());
+            if (existingSize == null || existingSize.signum() != 0) {
+                String detail = existingSize == null ? "포지션 조회 실패" : "거래소에 기존 포지션 존재(" + existingSize.toPlainString() + ")";
+                session.addLog(now() + " [진입 보류] " + detail + " → 트리거 대기로 복귀 (큐 #" + queue.getId() + ")");
+                log.warn("[진입 보류] {}: queueId={}", detail, queue.getId());
+                returnToTriggerWait(state);
+                return;
+            }
         }
 
         OrderSide side = entryDirection == Side.LONG ? OrderSide.BUY : OrderSide.SELL;
@@ -1087,6 +1121,10 @@ public class AutoTradeService {
                     + ", TP=" + tpPrice.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
                     + ", SL=" + slPrice.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + ")");
 
+            // 거래량 급변 판정 기준: 진입 시점 최근 60초 체결량 (워밍업 중이면 null → 창이 찰 때 확정)
+            state.setVolumeBaseline(queue.isVolumeStopEnabled()
+                    ? volumeMonitor.getVolume(session.getExchangeType(), session.getSymbol()) : null);
+
             // POSITION_HOLDING 페이즈로 전환 (이후 실시간 가격 vs TP/SL 비교)
             state.setPhase(TradePhase.POSITION_HOLDING);
 
@@ -1201,6 +1239,9 @@ public class AutoTradeService {
             }
             return;
         }
+
+        // 거래량 급변 감지 → 중지 예약 (포지션은 유지, 다음 단계 전환 시점에 중지)
+        checkVolumeChange(queue, state, session);
 
         // 방어 코드: TP/SL 미세팅 (정상 흐름에서는 발생하지 않음)
         if (state.getTpPrice() == null || state.getSlPrice() == null) {
@@ -1326,10 +1367,115 @@ public class AutoTradeService {
     }
 
     /**
+     * 보유 중 최근 60초 거래량을 진입 기준과 비교해 급변이면 중지를 예약한다. (1회만)
+     * [사용자 정책 2026-10-29] 감지해도 포지션은 그대로 두고 현재 단계는 TP/SL대로 진행, 단계가 끝나면 큐를 중지한다.
+     * 진입 시 워밍업 중이라 기준이 없으면 창이 찬 첫 시점의 거래량으로 기준을 확정한다. (B안)
+     * 예약은 재시작 후에도 남도록 DB에 저장한다.
+     *
+     * @param queue   대상 큐
+     * @param state   큐 런타임 상태 (POSITION_HOLDING)
+     * @param session 세션
+     */
+    private void checkVolumeChange(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        // 감시 꺼짐 또는 이미 예약됨
+        if (!queue.isVolumeStopEnabled() || queue.getVolumeStopReason() != null) {
+            return;
+        }
+        Double current = volumeMonitor.getVolume(session.getExchangeType(), session.getSymbol());
+        if (current == null) {
+            return; // 워밍업 중
+        }
+        Double baseline = state.getVolumeBaseline();
+        if (baseline == null) {
+            // 워밍업 후 첫 확정 (B안)
+            state.setVolumeBaseline(current);
+            return;
+        }
+        if (baseline <= 0) {
+            return; // 진입 시 체결이 없었으면 배수 판정 불가
+        }
+        double ratio = current / baseline;
+        boolean drop = ratio <= VOLUME_DROP_RATIO;
+        if (!drop && ratio < VOLUME_SURGE_RATIO) {
+            return;
+        }
+        String reason = "[거래량 " + (drop ? "급감" : "급증") + " 중지] 감지 " + now()
+                + " · " + state.getDirection() + " 보유"
+                + " · 진입 기준 " + formatVolume(baseline) + " → " + formatVolume(current)
+                + " (" + (drop ? "" : "+") + BigDecimal.valueOf((ratio - 1) * 100).setScale(1, RoundingMode.HALF_UP)
+                        .stripTrailingZeros().toPlainString() + "%)";
+        patternQueueRepository.updateVolumeStopReason(queue.getId(), reason);
+        queue.setVolumeStopReason(reason);
+        session.addLog(now() + " [중지 예약] " + reason + " — 현재 단계가 끝나면 큐를 중지합니다 (큐 #" + queue.getId() + ")");
+        log.warn("거래량 급변 중지 예약: queueId={}, {}", queue.getId(), reason);
+    }
+
+    /** 체결량 표시용 문자열 (소수 4자리 반올림, 끝 0 제거) */
+    private static String formatVolume(double volume) {
+        return BigDecimal.valueOf(volume).setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    /**
+     * 거래량 급변 중지가 예약된 큐면 다음 단계로 가지 않고 중지한다.
+     * STOP 이력 저장 → 큐 비활성화 → 예약 해제 (비활성화 저장 시 함께 반영)
+     *
+     * @param queue   단계가 끝난 큐
+     * @param state   큐 런타임 상태 (direction = 마지막 포지션 방향)
+     * @param session 세션
+     * @return 중지했으면 true (호출 측은 상태 전환을 하지 않음)
+     */
+    private boolean stopIfVolumeReserved(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        String reason = queue.getVolumeStopReason();
+        if (reason == null) {
+            return false;
+        }
+        saveStopHistory(queue, state.getActivePatternId(), state.getDirection(), currentPriceOf(session),
+                reason, session.getTradeMode());
+        queue.setVolumeStopReason(null);
+        deactivateQueue(queue, state, session, reason);
+        return true;
+    }
+
+    /**
+     * 큐 중지 기록(STOP)을 거래 이력에 남긴다. (주문 없음, amount 0, 사유는 error_message)
+     *
+     * @param queue     중지한 큐
+     * @param patternId 마지막 활성 패턴 ID
+     * @param side      마지막 포지션 방향
+     * @param price     중지 시점 가격 (없으면 0)
+     * @param reason    중지 사유
+     * @param tradeMode 거래 모드
+     */
+    private void saveStopHistory(PatternQueue queue, Long patternId, Side side, String price,
+                                 String reason, TradeMode tradeMode) {
+        TradeHistoryDTO history = TradeHistoryDTO.builder()
+                .patternId(patternId)
+                .userId(queue.getUserId())
+                .symbol(queue.getSymbol())
+                .exchangeType(queue.getExchangeType())
+                .side(side)
+                .amount(BigDecimal.ZERO)
+                .executedPrice(price != null ? new BigDecimal(price) : BigDecimal.ZERO)
+                .orderType(TradeOrderType.STOP.getTradeOrderType())
+                .orderResult(OrderResult.SUCCESS)
+                .errorMessage(reason)
+                .build();
+        try {
+            saveTradeHistory(history, tradeMode);
+        } catch (Exception e) {
+            log.error("큐 중지(STOP) 이력 저장 실패: queueId={}", queue.getId(), e);
+        }
+    }
+
+    /**
      * 매도(익절) 완료 후 상태 전환: 1단계부터 다시 수행한다. (SRS 11, 12)
      * 재진입 시 매도 성공한 포지션 방향 그대로 1단계 패턴을 선택하며, 패턴이 없으면 큐를 비활성화한다.
      */
     private void resetToFirstStepAfterSell(PatternQueue queue, QueueStateDTO state, AutoTradeSessionDTO session) {
+        // 거래량 급변 중지 예약 → 다음 사이클 대신 큐 중지
+        if (stopIfVolumeReserved(queue, state, session)) {
+            return;
+        }
         List<Pattern> firstStepPatterns = findPatternsByLevel(queue, 1);
         if (firstStepPatterns.isEmpty()) {
             deactivateQueue(queue, state, session, "1단계가 존재하지 않음");
@@ -1358,6 +1504,7 @@ public class AutoTradeService {
         state.setTpOrderId(null);
         state.setTpOrderPrice(null);
         state.setTpCancelFailCount(0);
+        state.setVolumeBaseline(null);
         state.setBlockBaseTime(null);
         state.setBlockBasePrice(null);
         state.setPhase(TradePhase.BLOCK_MATCHING);
@@ -1701,6 +1848,10 @@ public class AutoTradeService {
      */
     private void moveToNextStepAfterLiquidation(PatternQueue queue, QueueStateDTO state,
                                                 AutoTradeSessionDTO session, Side liquidationDirection) {
+        // 거래량 급변 중지 예약 → 다음 단계 대신 큐 중지
+        if (stopIfVolumeReserved(queue, state, session)) {
+            return;
+        }
         // 다음 단계로 이동
         int nextStepLevel = state.getCurrentStepLevel() + 1;
         List<Pattern> nextStepPatterns = findPatternsByLevel(queue, nextStepLevel);
@@ -1739,6 +1890,7 @@ public class AutoTradeService {
         state.setTpOrderId(null);
         state.setTpOrderPrice(null);
         state.setTpCancelFailCount(0);
+        state.setVolumeBaseline(null);
         state.setBlockBaseTime(null);
         state.setBlockBasePrice(null);
         state.setPhase(TradePhase.BLOCK_MATCHING);
@@ -2896,6 +3048,15 @@ public class AutoTradeService {
         for (ExchangeMarketClient market : adapterRegistry.markets()) {
             market.syncSubscriptions(symbolsByExchange.getOrDefault(market.getExchangeType(), Set.of()));
         }
+
+        // 체결 스트림: 거래량 급변 감시를 켠 큐가 있는 심볼만 구독 (SIM 포함)
+        Map<ExchangeType, Set<String>> volumeSymbolsByExchange = activeSessions.values().stream()
+                .filter(s -> s.getQueues().stream().anyMatch(PatternQueue::isVolumeStopEnabled))
+                .collect(Collectors.groupingBy(
+                        AutoTradeSessionDTO::getExchangeType,
+                        Collectors.mapping(AutoTradeSessionDTO::getSymbol, Collectors.toSet())
+                ));
+        volumeMonitor.syncSubscriptions(volumeSymbolsByExchange);
 
         // private 스트림: 거래소별 MAIN 세션 사용자만 연결 (미지원 거래소는 no-op, REST 체결 조회만 사용)
         for (ExchangeTradeClient trade : adapterRegistry.trades()) {

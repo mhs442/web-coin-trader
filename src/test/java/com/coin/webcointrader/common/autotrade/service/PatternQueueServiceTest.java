@@ -102,6 +102,21 @@ class PatternQueueServiceTest {
     }
 
     @Test
+    @DisplayName("addQueue: 거래량 급변 중지 on/off 설정을 저장하고, 중지 예약은 비어 있다")
+    void addQueue_savesVolumeStopEnabled() {
+        Long userId = 1L;
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.setVolumeStopEnabled(true);
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(userId, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        PatternQueue result = patternQueueService.addQueue(userId, request);
+
+        assertThat(result.isVolumeStopEnabled()).isTrue();
+        assertThat(result.getVolumeStopReason()).isNull();
+    }
+
+    @Test
     @DisplayName("addQueue: 2단계 + 각 단계마다 양방향 패턴 2개 구조도 정상 저장된다")
     void addQueue_multiStepMultiPattern_success() {
         // given
@@ -628,6 +643,40 @@ class PatternQueueServiceTest {
         PatternQueue result = patternQueueService.copyQueue(userId, 1L, "BTCUSDT", null, TradeMode.MAIN);
 
         assertThat(result.isCycle()).isTrue();
+    }
+
+    @Test
+    @DisplayName("setActive: 사용자가 큐를 끄거나 켜면 거래량 급변 중지 예약을 해제한다 (STOP 이력 없음)")
+    void setActive_clearsVolumeStopReservation() {
+        Long userId = 1L;
+        PatternQueue queue = makePatternQueueWithSteps(1L, userId, "ETHUSDT");
+        queue.setVolumeStopEnabled(true);
+        queue.setVolumeStopReason("[거래량 급감 중지] 예약");
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(queue));
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        PatternQueue result = patternQueueService.setActive(userId, 1L, false);
+
+        assertThat(result.isActive()).isFalse();
+        assertThat(result.getVolumeStopReason()).isNull();
+        assertThat(result.isVolumeStopEnabled()).isTrue();
+    }
+
+    @Test
+    @DisplayName("copyQueue: 거래량 급변 중지 on/off는 복사하고, 중지 예약은 복사하지 않는다")
+    void copyQueue_copiesVolumeStopEnabledButNotReservation() {
+        Long userId = 1L;
+        PatternQueue origin = makePatternQueueWithSteps(1L, userId, "ETHUSDT");
+        origin.setVolumeStopEnabled(true);
+        origin.setVolumeStopReason("[거래량 급변 중지] 예약");
+        given(patternQueueRepository.findById(1L)).willReturn(java.util.Optional.of(origin));
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(userId, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+
+        PatternQueue result = patternQueueService.copyQueue(userId, 1L, "BTCUSDT", null, TradeMode.MAIN);
+
+        assertThat(result.isVolumeStopEnabled()).isTrue();
+        assertThat(result.getVolumeStopReason()).isNull();
     }
 
     @Test
