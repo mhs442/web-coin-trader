@@ -104,6 +104,24 @@ class TradeHistoryServiceTest {
     }
 
     @Test
+    @DisplayName("saveTrade: 실패 사유가 500자를 넘으면 500자로 잘라 저장한다 (error_message VARCHAR(500))")
+    void saveTrade_truncatesLongErrorMessage() {
+        // given
+        TradeHistoryDTO dto = TradeHistoryDTO.builder()
+                .patternId(5L).userId(USER_ID).symbol("BTCUSDT").side(Side.LONG)
+                .amount(BigDecimal.ZERO).executedPrice(BigDecimal.ZERO).orderType("ENTRY")
+                .orderResult(OrderResult.FAILED).errorMessage("가".repeat(600)).exchangeType(ExchangeType.BYBIT).build();
+
+        // when
+        service.saveTrade(dto);
+
+        // then
+        ArgumentCaptor<TradeHistory> captor = ArgumentCaptor.forClass(TradeHistory.class);
+        then(tradeHistoryRepository).should().save(captor.capture());
+        assertThat(captor.getValue().getErrorMessage()).isEqualTo("가".repeat(500));
+    }
+
+    @Test
     @DisplayName("saveInvestment: 펀딩비를 포함한 모든 필드를 InvestmentHistory 엔티티로 옮겨 저장한다")
     void saveInvestment_mapsAllFieldsIncludingFundingFee() {
         // given

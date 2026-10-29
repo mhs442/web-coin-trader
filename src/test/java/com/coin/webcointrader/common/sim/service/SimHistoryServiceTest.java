@@ -77,6 +77,24 @@ class SimHistoryServiceTest {
     }
 
     @Test
+    @DisplayName("saveTrade: 실패 사유가 500자를 넘으면 500자로 잘라 저장한다 (error_message VARCHAR(500))")
+    void saveTrade_truncatesLongErrorMessage() {
+        // given
+        TradeHistoryDTO dto = TradeHistoryDTO.builder()
+                .patternId(5L).userId(USER_ID).symbol("BTCUSDT").side(Side.LONG)
+                .amount(BigDecimal.ZERO).executedPrice(BigDecimal.ZERO).orderType("ENTRY")
+                .orderResult(OrderResult.FAILED).errorMessage("가".repeat(600)).exchangeType(ExchangeType.BYBIT).build();
+
+        // when
+        service.saveTrade(dto);
+
+        // then
+        ArgumentCaptor<SimTradeHistory> captor = ArgumentCaptor.forClass(SimTradeHistory.class);
+        then(simTradeHistoryRepository).should().save(captor.capture());
+        assertThat(captor.getValue().getErrorMessage()).isEqualTo("가".repeat(500));
+    }
+
+    @Test
     @DisplayName("saveInvestment: DTO를 SimInvestmentHistory 엔티티로 옮겨 저장한다 (펀딩비는 SIM에 없음)")
     void saveInvestment_mapsAllFields() {
         // given

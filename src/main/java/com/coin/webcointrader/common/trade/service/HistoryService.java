@@ -23,6 +23,23 @@ import java.util.Optional;
  */
 public interface HistoryService {
 
+    // 거래 히스토리 실패 사유 최대 길이 (DB error_message VARCHAR(500))
+    int ERROR_MESSAGE_MAX_LENGTH = 500;
+
+    /**
+     * 실패 사유를 DB 컬럼 길이에 맞게 자른다.
+     * 거래소·DB 예외 메시지가 그대로 들어오는 경우가 있어, 길이 초과로 이력 저장 자체가 실패하지 않도록 한다.
+     *
+     * @param message 실패 사유 (null 가능)
+     * @return 최대 {@link #ERROR_MESSAGE_MAX_LENGTH}자로 자른 실패 사유 (null이면 null)
+     */
+    static String truncateErrorMessage(String message) {
+        if (message == null || message.length() <= ERROR_MESSAGE_MAX_LENGTH) {
+            return message;
+        }
+        return message.substring(0, ERROR_MESSAGE_MAX_LENGTH);
+    }
+
     /**
      * 거래 히스토리를 저장한다.
      *

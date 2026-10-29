@@ -151,7 +151,7 @@ public class TradeHistoryService implements HistoryService {
         e.setFee(d.getFee());
         e.setOrderType(d.getOrderType());
         e.setOrderResult(d.getOrderResult());
-        e.setErrorMessage(d.getErrorMessage());
+        e.setErrorMessage(HistoryService.truncateErrorMessage(d.getErrorMessage())); // VARCHAR(500) 초과분 절단
         return e;
     }
 

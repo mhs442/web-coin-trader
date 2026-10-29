@@ -63,6 +63,6 @@ public class TradeHistory extends BaseEntity {
     @Column(nullable = false, length = 10)
     private OrderResult orderResult;    // SUCCESS / FAILED
 
-    @Column(columnDefinition = "TEXT")
-    private String errorMessage;        // 오류 메시지 (FAILED 시 기록)
+    @Column(length = 500)
+    private String errorMessage;        // 실패·중지 사유 (최대 500자)
 }

@@ -23,7 +23,8 @@ public class Pattern {
     private Long id;                        // 패턴 PK
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "queue_id", nullable = false)
+    // 물리 FK 생성 금지 (참조는 앱 레벨 관리)
+    @JoinColumn(name = "queue_id", nullable = false, foreignKey = @ForeignKey(ConstraintMode.NO_CONSTRAINT))
     private PatternQueue queue;             // 소속 큐
 
     @Column(nullable = false)

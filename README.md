@@ -297,9 +297,9 @@ TP/SL 가격: `진입가 × (1 ± 비율 / (100 × 레버리지))`. 비율은 �
 > 완료하면 `[x]`로 바꿔 주세요. (완료 여부가 기록에 없는 항목은 "완료 여부 불명"으로 표시)
 
 ### A. DB 적용 (먼저 수행)
-- [ ] `others/ddl_2026_10_27_drop_all_tables.sql` 실행 → `others/ddl_2026_10_23_create_all_tables.sql` 실행
-  - 기대: 12개 테이블이 **FK 없이** 생성, `pattern_queue`에 UNIQUE(user_id, exchange_type, symbol, trade_mode)
-  - 이유: 이전에 FK 포함 버전의 생성 DDL이 이미 실행된 기록이 있음. 이 생성 DDL이 예전 `ddl.sql`·06-21/06-29 ALTER 파일들을 대체
+- [ ] `others/ddl_2026_10_29_recreate_all_tables.sql` 실행 (기존 테이블 전부 삭제 후 재생성, 이전 DDL 파일 전부 대체)
+  - 기대: 9개 테이블이 **FK 없이** 생성, `pattern_queue`에 UNIQUE(user_id, exchange_type, symbol, trade_mode), `pattern_history` 없음
+  - 10-23 대비 변경: `pattern_history` 제거, `error_message` TEXT → VARCHAR(500), `exchange_type` DEFAULT 'BYBIT' 제거
   - 이번(10-29) 익절 지정가 작업은 DB 변경 없음
 
 ### B. 화면 확인 (모의투자로 가능, DB 적용 후)
@@ -370,6 +370,5 @@ TP/SL 가격: `진입가 × (1 ± 비율 / (100 × 레버리지))`. 비율은 �
 ### H. 결정이 필요한 보류 항목
 - [ ] 투자 이력 `close_type`(매도/청산 구분) 컬럼 추가 — DB 마이그레이션 필요로 보류 중
 - [ ] (완료 여부 불명) 복잡한 패턴에서 TP 도달이 LIQUIDATION으로 기록되는 문제 — 설계 결정 필요
-- [ ] `pattern_history` 저장 로직 미구현 (엔티티만 존재)
 - [ ] 이중 진입 재발 시 Option B(청산 후 TRIGGER_WAIT 복귀) 검토
 - [ ] 10-27 · 10-28 · 10-29 변경분 커밋/푸시 (Claude 셸은 GitHub 자격증명이 없어 직접 `git push` 필요)

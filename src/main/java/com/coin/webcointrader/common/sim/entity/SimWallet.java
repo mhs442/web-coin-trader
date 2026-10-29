@@ -25,7 +25,8 @@ public class SimWallet extends BaseEntity {
     private Long id;
 
     @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id", nullable = false, unique = true)
+    // 물리 FK 생성 금지 (참조는 앱 레벨 관리)
+    @JoinColumn(name = "user_id", nullable = false, unique = true, foreignKey = @ForeignKey(ConstraintMode.NO_CONSTRAINT))
     private User user;                                              // 소유자
 
     @Column(nullable = false, precision = 20, scale = 8)
