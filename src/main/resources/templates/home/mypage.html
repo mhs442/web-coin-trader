@@ -959,36 +959,75 @@
             });
     }
 
+    /**
+     * 큐가 포지션을 보유 중인지 상태 API로 조회한다. (차트 화면과 같은 holdingQueueIds 기준)
+     *
+     * @param queueId  큐 ID
+     * @param symbol   큐 심볼
+     * @param callback 보유 여부(boolean)를 받는 콜백 — 조회 실패 시 보유 중으로 간주해 확인을 거치게 함
+     */
+    function checkQueueHolding(queueId, symbol, callback) {
+        $.ajax({
+            url: '/api/autotrade/status',
+            type: 'GET',
+            data: { symbol: symbol, mode: getTradeMode(), exchange: getExchange() },
+            success: function(data) {
+                // 세션 비활성 응답은 holdingQueueIds가 null → 보유 없음
+                callback((data.holdingQueueIds || []).indexOf(queueId) >= 0);
+            },
+            error: function() { callback(true); }
+        });
+    }
+
+    /** 포지션 보유 큐를 끄거나 삭제하기 전 청산 확인 (차트 화면과 같은 문구) */
+    function confirmCloseHolding(action) {
+        return confirm('이 큐는 포지션을 보유 중입니다.\n계속하면 보유 포지션을 시장가로 전부 청산한 뒤 ' + action
+            + '합니다. 진행하시겠습니까?');
+    }
+
     function toggleQueueActive(queueId, symbol) {
+        // 켜진 큐를 끌 때만 보유 여부 확인 (서버는 끄기 전 항상 청산 — 청산 실패 시 큐 유지 + 에러 응답)
+        if ($('#toggle-' + queueId).hasClass('toggle-on')) {
+            checkQueueHolding(queueId, symbol, function(holding) {
+                if (holding && !confirmCloseHolding('비활성화')) return;
+                requestToggleQueue(queueId);
+            });
+            return;
+        }
+        requestToggleQueue(queueId);
+    }
+
+    /** 큐 on/off 토글 요청 후 행의 상태·버튼을 갱신한다. */
+    function requestToggleQueue(queueId) {
         $.ajax({
             url: '/api/autotrade/patterns/' + queueId + '/toggle',
             type: 'PATCH',
             success: function(data) {
                 const isActive = data.active;
-                const statusEl = document.getElementById('status-' + queueId);
-                statusEl.className = isActive ? 'status-active' : 'status-inactive';
-                statusEl.textContent = isActive ? '활성' : '비활성';
-                const toggleBtn = document.getElementById('toggle-' + queueId);
-                toggleBtn.className = isActive ? 'queue-toggle-btn toggle-on' : 'queue-toggle-btn toggle-off';
-                toggleBtn.textContent = isActive ? 'ON' : 'OFF';
+                $('#status-' + queueId).attr('class', isActive ? 'status-active' : 'status-inactive')
+                    .text(isActive ? '활성' : '비활성');
+                $('#toggle-' + queueId).attr('class', isActive ? 'queue-toggle-btn toggle-on' : 'queue-toggle-btn toggle-off')
+                    .text(isActive ? 'ON' : 'OFF');
             },
-            error: function() { alert('상태 변경에 실패했습니다.'); }
+            error: function(xhr) { alert('상태 변경에 실패했습니다: ' + (xhr.responseJSON?.message || xhr.statusText)); }
         });
     }
 
     function deleteQueue(queueId, symbol) {
-        if (!confirm('해당 큐를 삭제하시겠습니까?')) return;
-        $.ajax({
-            url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol + '&mode=' + getTradeMode()
-                + '&exchange=' + getExchange(),
-            type: 'DELETE',
-            success: function() {
-                const summaryRow = document.querySelector('tr[data-queue-id="' + queueId + '"]');
-                const detailRow = document.getElementById('pattern-detail-' + queueId);
-                if (summaryRow) summaryRow.remove();
-                if (detailRow) detailRow.remove();
-            },
-            error: function() { alert('삭제에 실패했습니다.'); }
+        checkQueueHolding(queueId, symbol, function(holding) {
+            // 보유 중이면 청산 안내, 아니면 기존 삭제 확인
+            const ok = holding ? confirmCloseHolding('삭제') : confirm('해당 큐를 삭제하시겠습니까?');
+            if (!ok) return;
+            $.ajax({
+                url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol + '&mode=' + getTradeMode()
+                    + '&exchange=' + getExchange(),
+                type: 'DELETE',
+                success: function() {
+                    $('tr[data-queue-id="' + queueId + '"]').remove();
+                    $('#pattern-detail-' + queueId).remove();
+                },
+                error: function(xhr) { alert('삭제에 실패했습니다: ' + (xhr.responseJSON?.message || xhr.statusText)); }
+            });
         });
     }
 

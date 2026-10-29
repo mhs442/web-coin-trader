@@ -26,6 +26,7 @@ public class AutoTradeStatusResponse {
     private String entryPrice;           // 진입 시점 체결가 (POSITION_HOLDING 시 설정)
     private BigDecimal tpPrice;          // 익절가 (POSITION_HOLDING 시 설정)
     private BigDecimal slPrice;          // 손절가 (POSITION_HOLDING 시 설정)
+    private Double entryVolume;          // 진입 시점 24시간 거래량 (오토스탑 큐 POSITION_HOLDING 시 설정, null = 미확정)
     private boolean tpOrderPending;      // 익절 지정가가 거래소에 걸려 체결 대기 중인지 (MAIN 전용, leaf 스피너 표시용)
     private List<Long> holdingQueueIds;  // 포지션 보유 중인 큐 ID 목록 (끄기·삭제 시 청산 확인 팝업 판단용)
 }

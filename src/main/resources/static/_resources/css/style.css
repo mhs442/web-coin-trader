@@ -378,13 +378,13 @@ body {
 }
 
 /* 대시보드 테이블 컬럼 고정 너비 */
-.market-table th:nth-child(1) { width: 18%; } /* Symbol */
-.market-table th:nth-child(2) { width: 12%; } /* Base Coin */
-.market-table th:nth-child(3) { width: 14%; } /* Last Price */
-.market-table th:nth-child(4) { width: 14%; } /* 24h Change */
-.market-table th:nth-child(5) { width: 14%; } /* 24h High */
-.market-table th:nth-child(6) { width: 14%; } /* 24h Low */
-.market-table th:nth-child(7) { width: 14%; } /* 24h Volume */
+.market-table th:nth-child(1) { width: 18%; } /* 심볼 */
+.market-table th:nth-child(2) { width: 12%; } /* 기초 코인 */
+.market-table th:nth-child(3) { width: 14%; } /* 현재가 */
+.market-table th:nth-child(4) { width: 14%; } /* 24시간 변동률 */
+.market-table th:nth-child(5) { width: 14%; } /* 24시간 최고가 */
+.market-table th:nth-child(6) { width: 14%; } /* 24시간 최저가 */
+.market-table th:nth-child(7) { width: 14%; } /* 24시간 거래량 */
 
 .market-table thead {
     background-color: #f8f9fa;
@@ -403,6 +403,14 @@ body {
     text-transform: uppercase;
     font-size: 0.75rem;
     letter-spacing: 0.5px;
+}
+
+/* 대시보드 스크롤 시 컬럼 헤더 상단 고정 */
+.dashboard-scroll-wrapper .market-table th {
+    position: sticky;
+    top: 0;
+    background-color: #f8f9fa;
+    z-index: 1;
 }
 
 .market-table tbody tr {
@@ -502,6 +510,42 @@ body {
     position: relative; /* 범위 선택 오버레이 기준 */
     width: 100%;
     min-height: 500px; /* ApexCharts height와 동일하게 보장 */
+}
+
+/* 차트 좌우 스크롤바 (보이는 범위가 전체 캔들보다 좁을 때 표시) */
+.chart-scroll {
+    padding: 0 12px 8px;
+}
+
+.chart-scroll input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    background: #e9ecef;
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+}
+
+.chart-scroll input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 48px;
+    height: 10px;
+    background: #adb5bd;
+    border-radius: 5px;
+}
+
+.chart-scroll input[type="range"]::-moz-range-thumb {
+    width: 48px;
+    height: 10px;
+    background: #adb5bd;
+    border: none;
+    border-radius: 5px;
+}
+
+.chart-scroll input[type="range"]:hover::-webkit-slider-thumb {
+    background: #868e96;
 }
 
 /* 범위 측정 정보 오버레이 (캔들 클릭 시 해당 위치에 표시) */
@@ -685,6 +729,18 @@ body {
     background-color: #f8f9fa;
 }
 
+/* 호가 칸 폭 고정 (수량/총합 자릿수가 바뀌어도 칸 위치 유지) — 가격 왼쪽, 수량·총합 오른쪽 정렬 */
+.ob-side-header > span,
+.ob-row > span {
+    flex: 1;
+    text-align: right;
+}
+
+.ob-side-header > span:first-child,
+.ob-row > span:first-child {
+    text-align: left;
+}
+
 .ob-price {
     font-weight: 600;
 }
@@ -816,6 +872,16 @@ body {
     font-weight: 600;
 }
 
+/* 오토스탑 모드 사용 뱃지 */
+.auto-stop-badge {
+    font-size: 0.75rem;
+    color: #6f42c1;
+    background-color: #f3ecff;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
 /* 거래량 급변 중지 예약 뱃지 */
 .volume-stop-badge {
     font-size: 0.75rem;
@@ -854,12 +920,40 @@ body {
 
 /* 트리거 상태 정보 (경과시간, 변동률) */
 .trigger-state-info {
-    color: #dc2626;
-    font-size: 0.8rem;
-    font-weight: 600;
-    padding: 4px 10px;
-    text-align: right;
+    margin: 8px 0;
+    padding: 6px 12px;
+    background-color: #f8f9fb;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
 }
+
+/* 상태 항목 한 줄: 항목명(좌) · 값(우) */
+.trigger-state-info .ts-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 3px 0;
+}
+
+.trigger-state-info .ts-row + .ts-row {
+    border-top: 1px dashed #e9ecef;
+}
+
+.trigger-state-info .ts-label {
+    font-size: 0.72rem;
+    color: #868e96;
+}
+
+.trigger-state-info .ts-value {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #212529;
+    font-variant-numeric: tabular-nums; /* 숫자 폭 고정 (1초 갱신 시 흔들림 방지) */
+}
+
+.trigger-state-info .ts-value.up { color: #16a34a; }
+.trigger-state-info .ts-value.down { color: #dc2626; }
+.trigger-state-info .ts-value.muted { color: #adb5bd; font-weight: 500; }
 
 /* 현재 실행 중인 큐 카드 표시 (자동매매 실행 중) */
 
@@ -936,94 +1030,64 @@ body {
     margin-bottom: 10px;
 }
 
-.trigger-input-row {
-    display: flex;
-    gap: 8px;
+/* 트리거 설정 토글 (사이클/오토스탑) — 헤더 토글과 분리해 작게 표시 */
+.trigger-settings .toggle-switch {
+    width: 28px;
+    height: 16px;
+    flex-shrink: 0;
 }
 
-.trigger-input-group {
-    flex: 1;
+.trigger-settings .toggle-slider:before {
+    height: 12px;
+    width: 12px;
+    left: 2px;
+    bottom: 2px;
 }
 
-.trigger-input-group label {
-    display: block;
+.trigger-settings .toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(12px);
+}
+
+/* 토글 문구 (상승/하락률 라벨과 동일 크기) */
+.toggle-label {
     font-size: 0.75rem;
     color: #495057;
-    margin-bottom: 4px;
+    cursor: pointer;
 }
 
-.trigger-input-group input {
-    width: 100%;
+/* 도움말 ? 뱃지 — 호버 시 data-tip 설명 말풍선 표시 */
+.help-badge {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #adb5bd;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+}
+
+.help-badge:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: 18px;
+    left: -8px;
+    z-index: 10;
+    width: 240px;
     padding: 6px 8px;
-    box-sizing: border-box;
-    border: 1px solid #ced4da;
     border-radius: 4px;
-    font-size: 0.85rem;
-}
-
-/* 단계 빌더 */
-.step-builder {
-    border-top: 1px solid #e9ecef;
-    padding-top: 10px;
-}
-
-/* 패턴 입력 그룹 */
-.pattern-input-group {
-    border: 1px solid #e9ecef;
-    border-radius: 6px;
-    padding: 8px;
-    margin-bottom: 8px;
-    background-color: #fcfcfd;
-}
-
-.pattern-input-header {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: #343a40;
-    margin-bottom: 6px;
-}
-
-/* 현재 단계에 추가된 패턴 미리보기 */
-.pending-patterns-preview {
-    margin-bottom: 8px;
-}
-
-.pending-pattern-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 8px;
-    background-color: #e8f4fd;
-    border: 1px solid #bee5eb;
-    border-radius: 5px;
-    margin-bottom: 4px;
-    flex-wrap: wrap;
-}
-
-/* 블록 빌더 행 (조건 블록 + 콜론 + 리프 블록) */
-.block-builder-row {
-    margin-bottom: 6px;
-}
-
-.block-area {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-/* 조건 블록 영역 */
-.condition-blocks {
-    flex: 1;
-    min-height: 32px;
-    min-width: 60px;
-}
-
-/* 리프 블록 영역 */
-.leaf-block {
-    min-height: 32px;
-    min-width: 40px;
-    max-width: 60px;
-    border-color: #ffc107;
+    background-color: #343a40;
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 400;
+    line-height: 1.4;
+    white-space: normal;
+    word-break: keep-all; /* 한글 단어 중간 줄바꿈 방지 */
 }
 
 /* 콜론 구분자 (입력 영역) */
@@ -1035,21 +1099,6 @@ body {
     flex-shrink: 0;
 }
 
-/* 버튼 구분자 */
-.btn-separator {
-    display: flex;
-    align-items: center;
-    color: #ced4da;
-    font-size: 0.9rem;
-    padding: 0 2px;
-}
-
-/* 리프 버튼 스타일 (약간 작게) */
-.leaf-btn {
-    font-size: 0.72rem !important;
-    padding: 6px !important;
-}
-
 /* 패턴 설정 행 (금액, 레버리지, 손절, 익절) */
 .pattern-settings-row {
     display: flex;
@@ -1059,22 +1108,6 @@ body {
 
 .pattern-setting-item {
     flex: 1;
-}
-
-/* 손절/익절 안내 문구 (레버리지별 손절 한도) */
-.sl-limit-hint {
-    font-size: 0.68rem;
-    color: #6c757d;
-    line-height: 1.5;
-    margin: 0 0 6px 0;
-}
-
-.sl-limit-hint strong {
-    color: #495057;
-}
-
-.sl-limit-hint .sl-limit-warn {
-    color: #dc3545;
 }
 
 .pattern-setting-item label {
@@ -1163,41 +1196,11 @@ body {
     text-decoration: underline;
 }
 
+.pattern-delete-btn:disabled,
 .pattern-edit-btn:disabled {
     color: #adb5bd;
     cursor: not-allowed;
     text-decoration: none;
-}
-
-/* 큐 수정 모달 - 단계 카드 */
-.edit-step-card {
-    border: 1px solid #e9ecef;
-    border-radius: 6px;
-    padding: 8px;
-    margin-bottom: 8px;
-    background: #fcfcfd;
-}
-
-.edit-pattern-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 4px 0;
-    border-bottom: 1px solid #f1f3f5;
-}
-
-.edit-pattern-row:last-child {
-    border-bottom: none;
-}
-
-/* 인라인 패턴 편집 폼 */
-.edit-pattern-form {
-    border: 1px solid #e9ecef;
-    border-radius: 4px;
-    padding: 8px;
-    margin-top: 6px;
-    background: #fff;
 }
 
 /* 큐 토글 버튼 */
@@ -1325,11 +1328,6 @@ body {
     margin-bottom: 10px;
 }
 
-.pattern-empty-msg {
-    color: #adb5bd;
-    font-size: 0.75rem;
-}
-
 .builder-input-row {
     display: flex;
     gap: 8px;
@@ -1350,35 +1348,6 @@ body {
     border: 1px solid #ced4da;
     border-radius: 4px;
     font-size: 0.85rem;
-}
-
-.builder-btn-row {
-    display: flex;
-    gap: 8px;
-}
-
-.builder-add-btn {
-    flex: 1;
-    padding: 8px;
-    border: none;
-    border-radius: 4px;
-    color: #fff;
-    font-weight: 600;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: opacity 0.2s;
-}
-
-.builder-add-btn:hover {
-    opacity: 0.9;
-}
-
-.long-btn {
-    background-color: #28a745;
-}
-
-.short-btn {
-    background-color: #dc3545;
 }
 
 /* 상태 표시 */
@@ -2157,6 +2126,72 @@ body {
     margin: 0 0 12px 0;
 }
 
+/* 큐 등록/수정 모달 - 단계 구성 패널이 열리면 오른쪽으로 확장 */
+.queue-modal-box {
+    width: 520px;
+}
+
+.queue-modal-box.with-builder {
+    width: 1120px;
+    max-width: 96vw;
+}
+
+/* 좌(큐 설정 + 단계 목록) / 우(단계 구성 패널) 분할 — 각각 독립 스크롤 */
+.queue-modal-split {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.queue-modal-split > .import-modal-body {
+    min-width: 0;
+}
+
+/* 단계 구성 패널 (등록/수정 모달 공용) */
+.step-builder-panel {
+    width: 600px;
+    flex-shrink: 0;
+    padding: 16px 20px;
+    border-left: 1px solid #dee2e6;
+    background-color: #fcfcfd;
+    overflow-y: auto;
+}
+
+.step-builder-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+/* 패널에서 구성 중인 단계 카드 강조 */
+.step-card.step-editing {
+    border-color: #007bff;
+}
+
+/* 단계 추가(+) 버튼 — 마지막 단계 다음 자리에만 표시 */
+.step-add-btn {
+    width: 100%;
+    padding: 10px;
+    border: 2px dashed #ced4da;
+    border-radius: 6px;
+    background-color: #fff;
+    color: #495057;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.step-add-btn:hover:not(:disabled) {
+    border-color: #007bff;
+    color: #007bff;
+}
+
+.step-add-btn:disabled {
+    color: #adb5bd;
+    cursor: not-allowed;
+}
+
 /* 큐 목록 테이블 */
 .import-queue-table {
     width: 100%;
@@ -2658,4 +2693,281 @@ body {
     color: #adb5bd;
     cursor: default;
     border-color: #dee2e6;
+}
+
+/* ───────── 큐 등록/수정 폼 (트리거 한 줄 · 요약 · 저장 안내) ───────── */
+
+/* 트리거 설정 한 줄: 상승/하락률 입력 | 사이클 | 오토스탑 */
+.trigger-inline-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* 단위 붙은 입력칸 (예: [  5 ] %) */
+.input-unit {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: #6c757d;
+}
+
+.input-unit input {
+    width: 64px;
+    padding: 4px 6px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+
+/* 입력 그룹 사이 세로 구분선 */
+.trigger-inline-sep {
+    width: 1px;
+    height: 14px;
+    background-color: #dee2e6;
+}
+
+/* 잘못 입력된 칸 강조 */
+input.is-invalid {
+    border-color: #dc3545 !important;
+    background-color: #fff5f5;
+}
+
+/* 단계 목록 위 요약 줄 */
+.queue-summary {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 0.75rem;
+    color: #6c757d;
+    margin-bottom: 8px;
+}
+
+.queue-summary strong {
+    color: #343a40;
+}
+
+/* 버튼 비활성 사유 등 안내 문구 */
+.form-hint {
+    font-size: 0.72rem;
+    color: #e8590c;
+    min-height: 1em;
+}
+
+/* 거래소별 손절 주의 문구 */
+.sl-limit-warn {
+    font-size: 0.72rem;
+    color: #dc3545;
+    line-height: 1.5;
+}
+
+.sl-limit-warn:not(:empty) {
+    margin-bottom: 6px;
+}
+
+/* 모달 하단: 안내 문구(좌) + 버튼(우) */
+.queue-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid #dee2e6;
+}
+
+.queue-modal-footer-btns {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.queue-modal-footer-btns .trade-btn {
+    min-width: 110px;
+    padding: 10px 16px;
+    white-space: nowrap;
+}
+
+.trade-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ───────── 단계 카드 패턴 표 (정렬된 열) ───────── */
+.step-pattern-grid {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr) 74px 76px 56px 56px;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+}
+
+/* 시작 방향 배지 (▲ L시작 / ▼ S시작) */
+.dir-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.dir-badge.long { color: #28a745; }
+.dir-badge.short { color: #dc3545; }
+
+/* 진입 방향 배지 — 조건 블록(칠한 칩)과 구분되도록 테두리형 */
+.entry-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border: 1.5px solid;
+    border-radius: 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.entry-badge.long { color: #28a745; border-color: #28a745; }
+.entry-badge.short { color: #dc3545; border-color: #dc3545; }
+
+/* 숫자 열 (금액·레버리지·SL·TP) */
+.grid-num {
+    font-size: 0.7rem;
+    font-family: monospace;
+    color: #495057;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.grid-num.sl { color: #dc3545; }
+.grid-num.tp { color: #28a745; }
+
+/* ───────── 단계 구성 패널: L 시작 / S 시작 고정 슬롯 ───────── */
+.slot-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 8px 0;
+}
+
+.pattern-slot {
+    border: 1.5px solid #dee2e6;
+    border-radius: 6px;
+    padding: 8px 10px;
+    background-color: #fff;
+}
+
+/* 입력 완료된 슬롯 */
+.pattern-slot.slot-done {
+    border-color: #28a745;
+}
+
+.slot-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.slot-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.slot-title.long { color: #28a745; }
+.slot-title.short { color: #dc3545; }
+
+/* 슬롯 상태: 완료 / 입력 확인 / 미입력 */
+.slot-status {
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+
+.slot-status .ok { color: #28a745; }
+.slot-status .warn { color: #dc3545; }
+.slot-status .todo { color: #adb5bd; }
+
+.slot-field {
+    margin-bottom: 6px;
+}
+
+.slot-field > label {
+    display: block;
+    font-size: 0.7rem;
+    color: #495057;
+    margin-bottom: 2px;
+}
+
+.slot-cond-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.slot-cond {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    flex: 1;
+    min-height: 26px;
+    align-items: center;
+    padding: 2px 4px;
+    border: 1px dashed #ced4da;
+    border-radius: 4px;
+    background-color: #f8f9fa;
+}
+
+/* 첫 조건 블록 (슬롯 방향 고정, 삭제 불가) */
+.block-tag.block-fixed {
+    box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.6);
+}
+
+/* 조건 블록 +L / +S 버튼 */
+.slot-add-btn {
+    padding: 3px 6px;
+    border: 1px solid;
+    border-radius: 4px;
+    background-color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.slot-add-btn.long { color: #28a745; border-color: #28a745; }
+.slot-add-btn.short { color: #dc3545; border-color: #dc3545; }
+
+.slot-add-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 진입 방향 토글 (⇒ LONG / ⇒ SHORT) */
+.entry-toggle {
+    display: flex;
+    gap: 4px;
+}
+
+.entry-btn {
+    flex: 1;
+    padding: 4px;
+    border: 1.5px solid #ced4da;
+    border-radius: 12px;
+    background-color: #fff;
+    color: #868e96;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.entry-btn.long.active { border-color: #28a745; background-color: #28a745; color: #fff; }
+.entry-btn.short.active { border-color: #dc3545; background-color: #dc3545; color: #fff; }
+
+/* 슬롯 오류 문구 */
+.slot-errors {
+    font-size: 0.68rem;
+    color: #dc3545;
+    line-height: 1.4;
+}
+
+/* S 시작 슬롯(오른쪽)의 ? 말풍선은 왼쪽으로 펼쳐 모달 밖으로 넘치지 않게 */
+#slot-SHORT .help-badge:hover::after {
+    left: auto;
+    right: -8px;
 }

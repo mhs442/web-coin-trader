@@ -80,7 +80,6 @@ public class AutoTradeService {
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
     private final ExecutorService closeRecordExecutor;     // 청산 후처리(체결 조회·이력 저장) 전용 실행기 (AsyncConfig)
     private final ExecutorService sessionLaneExecutor;     // 세션별 가격 처리 레인 실행기 (AsyncConfig, 고정 4개)
-    private final VolumeMonitorService volumeMonitor;      // 거래량 급변 감시용 최근 60초 체결량 집계
 
     // 활성 세션 관리 (키: "userId:exchangeType:symbol:tradeMode")
     private final ConcurrentHashMap<String, AutoTradeSessionDTO> activeSessions = new ConcurrentHashMap<>();
@@ -108,7 +107,7 @@ public class AutoTradeService {
     private static final String HISTORY_SAVE_FAILED_PREFIX = "[이력 저장 실패] 체결은 완료됨 — ";
     // 앱이 보낸 매도/청산 주문의 orderLinkId (q{큐ID}-S/L-{millis}) — 외부 청산 판단에서 제외
     // (진입 E는 거래소 TP/SL 발동 주문이 원주문 링크를 이어받을 가능성이 있어 제외 대상에 넣지 않음)
-    // [사용자 정책 2026-10-29] 거래량 급변 판정: 진입 기준 대비 0.5배 이하(급감) 또는 1.5배 이상(급증)
+    // [사용자 정책 2026-10-29] 거래량 급변 판정: 24시간 거래량(대시보드 값)이 진입 기준 대비 0.5배 이하(급감) 또는 1.5배 이상(급증)
     private static final double VOLUME_DROP_RATIO = 0.5;
     private static final double VOLUME_SURGE_RATIO = 1.5;
     private static final java.util.regex.Pattern OWN_CLOSE_LINK_ID = java.util.regex.Pattern.compile("^q\\d+-[SL]-\\d+$");
@@ -537,6 +536,7 @@ public class AutoTradeService {
         String entryPrice = null; // 진입 시점 체결가 (포지션 보유 중일 때 세팅)
         BigDecimal tpPrice = null; // 익절가 (POSITION_HOLDING 시 노출)
         BigDecimal slPrice = null; // 손절가 (POSITION_HOLDING 시 노출)
+        Double entryVolume = null; // 진입 시점 거래량 (오토스탑 큐 POSITION_HOLDING 시 노출)
 
         // 포지션 보유 여부·익절 지정가 대기는 시세와 무관하게 상태로 판단
         List<Long> holdingQueueIds = session.getQueues().stream()
@@ -586,6 +586,8 @@ public class AutoTradeService {
                 }
                 tpPrice = state.getTpPrice();
                 slPrice = state.getSlPrice();
+                // 오토스탑 판정 기준 24시간 거래량 (오토스탑 꺼짐·미확정이면 null)
+                entryVolume = state.getVolumeBaseline();
                 Pattern activePattern = findPatternById(firstQueue, state.getActivePatternId());
                 if (activePattern != null) {
                     amount = activePattern.getAmount();
@@ -609,6 +611,7 @@ public class AutoTradeService {
                 .entryPrice(entryPrice)
                 .tpPrice(tpPrice)
                 .slPrice(slPrice)
+                .entryVolume(entryVolume)
                 .tpOrderPending(tpOrderPending)
                 .holdingQueueIds(holdingQueueIds)
                 .build();
@@ -1121,9 +1124,8 @@ public class AutoTradeService {
                     + ", TP=" + tpPrice.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
                     + ", SL=" + slPrice.setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + ")");
 
-            // 거래량 급변 판정 기준: 진입 시점 최근 60초 체결량 (워밍업 중이면 null → 창이 찰 때 확정)
-            state.setVolumeBaseline(queue.isVolumeStopEnabled()
-                    ? volumeMonitor.getVolume(session.getExchangeType(), session.getSymbol()) : null);
+            // 거래량 급변 판정 기준: 진입 시점 24시간 거래량 (시세 미수신이면 null → 처음 받을 때 확정)
+            state.setVolumeBaseline(queue.isVolumeStopEnabled() ? getVolume24h(session) : null);
 
             // POSITION_HOLDING 페이즈로 전환 (이후 실시간 가격 vs TP/SL 비교)
             state.setPhase(TradePhase.POSITION_HOLDING);
@@ -1367,9 +1369,9 @@ public class AutoTradeService {
     }
 
     /**
-     * 보유 중 최근 60초 거래량을 진입 기준과 비교해 급변이면 중지를 예약한다. (1회만)
+     * 보유 중 24시간 거래량을 진입 기준과 비교해 급변이면 중지를 예약한다. (1회만)
      * [사용자 정책 2026-10-29] 감지해도 포지션은 그대로 두고 현재 단계는 TP/SL대로 진행, 단계가 끝나면 큐를 중지한다.
-     * 진입 시 워밍업 중이라 기준이 없으면 창이 찬 첫 시점의 거래량으로 기준을 확정한다. (B안)
+     * 진입 시 시세 미수신으로 기준이 없으면 처음 받은 거래량으로 기준을 확정한다.
      * 예약은 재시작 후에도 남도록 DB에 저장한다.
      *
      * @param queue   대상 큐
@@ -1381,18 +1383,18 @@ public class AutoTradeService {
         if (!queue.isVolumeStopEnabled() || queue.getVolumeStopReason() != null) {
             return;
         }
-        Double current = volumeMonitor.getVolume(session.getExchangeType(), session.getSymbol());
+        Double current = getVolume24h(session);
         if (current == null) {
-            return; // 워밍업 중
+            return; // 시세 미수신
         }
         Double baseline = state.getVolumeBaseline();
         if (baseline == null) {
-            // 워밍업 후 첫 확정 (B안)
+            // 진입 시 미수신 → 처음 받은 값으로 확정
             state.setVolumeBaseline(current);
             return;
         }
         if (baseline <= 0) {
-            return; // 진입 시 체결이 없었으면 배수 판정 불가
+            return; // 기준 거래량이 0이면 배수 판정 불가
         }
         double ratio = current / baseline;
         boolean drop = ratio <= VOLUME_DROP_RATIO;
@@ -1408,6 +1410,26 @@ public class AutoTradeService {
         queue.setVolumeStopReason(reason);
         session.addLog(now() + " [중지 예약] " + reason + " — 현재 단계가 끝나면 큐를 중지합니다 (큐 #" + queue.getId() + ")");
         log.warn("거래량 급변 중지 예약: queueId={}, {}", queue.getId(), reason);
+    }
+
+    /**
+     * 세션 심볼의 24시간 거래량을 시세 캐시에서 읽는다. (대시보드 표시값과 동일)
+     *
+     * @param session 세션 (거래소·심볼)
+     * @return 24시간 거래량 (코인 기준), 시세 미수신·파싱 실패 시 null
+     */
+    private Double getVolume24h(AutoTradeSessionDTO session) {
+        TickerDTO ticker = marketService.getTicker(session.getExchangeType(), session.getSymbol());
+        if (ticker == null || ticker.getVolume24h() == null) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(ticker.getVolume24h());
+        } catch (NumberFormatException e) {
+            log.warn("[거래량 감시] 24시간 거래량 파싱 실패: {} {} volume24h={}",
+                    session.getExchangeType(), session.getSymbol(), ticker.getVolume24h());
+            return null;
+        }
     }
 
     /** 체결량 표시용 문자열 (소수 4자리 반올림, 끝 0 제거) */
@@ -3048,15 +3070,6 @@ public class AutoTradeService {
         for (ExchangeMarketClient market : adapterRegistry.markets()) {
             market.syncSubscriptions(symbolsByExchange.getOrDefault(market.getExchangeType(), Set.of()));
         }
-
-        // 체결 스트림: 거래량 급변 감시를 켠 큐가 있는 심볼만 구독 (SIM 포함)
-        Map<ExchangeType, Set<String>> volumeSymbolsByExchange = activeSessions.values().stream()
-                .filter(s -> s.getQueues().stream().anyMatch(PatternQueue::isVolumeStopEnabled))
-                .collect(Collectors.groupingBy(
-                        AutoTradeSessionDTO::getExchangeType,
-                        Collectors.mapping(AutoTradeSessionDTO::getSymbol, Collectors.toSet())
-                ));
-        volumeMonitor.syncSubscriptions(volumeSymbolsByExchange);
 
         // private 스트림: 거래소별 MAIN 세션 사용자만 연결 (미지원 거래소는 no-op, REST 체결 조회만 사용)
         for (ExchangeTradeClient trade : adapterRegistry.trades()) {

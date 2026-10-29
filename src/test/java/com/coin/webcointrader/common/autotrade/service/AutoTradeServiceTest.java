@@ -104,9 +104,6 @@ class AutoTradeServiceTest {
     @Mock
     private ExecutorService sessionLaneExecutor;
 
-    @Mock
-    private VolumeMonitorService volumeMonitor;
-
     // 가짜 거래소 포지션 수량 (setUp의 placeOrder 기본 응답이 갱신)
     private final java.util.concurrent.atomic.AtomicReference<BigDecimal> fakePositionSize =
             new java.util.concurrent.atomic.AtomicReference<>(BigDecimal.ZERO);
@@ -3436,6 +3433,58 @@ class AutoTradeServiceTest {
         }
 
         @Test
+        @DisplayName("오토스탑 큐 POSITION_HOLDING 시 진입 시점 거래량(entryVolume)을 반환한다")
+        void returnsEntryVolumeOnPositionHolding() {
+            Long userId = 1L;
+            String symbol = "BTCUSDT";
+            PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+            queue.setVolumeStopEnabled(true);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, ExchangeType.BYBIT, symbol, TradeMode.MAIN);
+
+            var state = autoTradeService.getSession(userId, ExchangeType.BYBIT, symbol, TradeMode.MAIN).getQueueStates().get(1L);
+            state.setPhase(TradePhase.POSITION_HOLDING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+            state.setVolumeBaseline(12.5); // 진입 시점 24시간 거래량
+
+            TickerDTO wsTicker = TickerDTO.builder().lastPrice("52500.00").build();
+            given(marketService.getTicker(ExchangeType.BYBIT, symbol)).willReturn(wsTicker);
+
+            var response = autoTradeService.getStatusResponse(userId, ExchangeType.BYBIT, symbol, TradeMode.MAIN);
+
+            assertThat(response.getEntryVolume()).isEqualTo(12.5);
+        }
+
+        @Test
+        @DisplayName("진입 시점 거래량이 아직 확정 전(시세 미수신)이면 entryVolume은 null이다")
+        void returnsNullEntryVolumeWhileWarmingUp() {
+            Long userId = 1L;
+            String symbol = "BTCUSDT";
+            PatternQueue queue = makePatternQueue(1L, userId, symbol, Side.LONG);
+            queue.setVolumeStopEnabled(true);
+            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
+                    userId, symbol, true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(queue));
+            autoTradeService.syncSession(userId, ExchangeType.BYBIT, symbol, TradeMode.MAIN);
+
+            var state = autoTradeService.getSession(userId, ExchangeType.BYBIT, symbol, TradeMode.MAIN).getQueueStates().get(1L);
+            state.setPhase(TradePhase.POSITION_HOLDING);
+            state.setDirection(Side.LONG);
+            state.setEntryPrice("50000.00");
+            state.setActivePatternId(10L);
+            state.setVolumeBaseline(null); // 시세 미수신으로 미확정
+
+            TickerDTO wsTicker = TickerDTO.builder().lastPrice("52500.00").build();
+            given(marketService.getTicker(ExchangeType.BYBIT, symbol)).willReturn(wsTicker);
+
+            var response = autoTradeService.getStatusResponse(userId, ExchangeType.BYBIT, symbol, TradeMode.MAIN);
+
+            assertThat(response.getEntryVolume()).isNull();
+        }
+
+        @Test
         @DisplayName("익절 지정가 대기 중이면 tpOrderPending=true, 보유 큐 ID를 반환한다 (시세 없어도)")
         void returnsTpOrderPendingAndHoldingQueueIds() {
             Long userId = 1L;
@@ -3566,6 +3615,12 @@ class AutoTradeServiceTest {
             return state;
         }
 
+        /** 대시보드와 같은 시세의 24시간 거래량을 모의한다. (null = 시세 미수신) */
+        private void givenVolume24h(String volume24h) {
+            given(marketService.getTicker(ExchangeType.BYBIT, "BTCUSDT")).willReturn(volume24h == null ? null
+                    : TickerDTO.builder().symbol("BTCUSDT").lastPrice("51000").volume24h(volume24h).build());
+        }
+
         private PatternQueue enabledQueue() {
             PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
             queue.setVolumeStopEnabled(true);
@@ -3586,7 +3641,7 @@ class AutoTradeServiceTest {
             PatternQueue queue = enabledQueue();
             QueueStateDTO state = holding(Side.LONG, 100.0);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(40.0);
+            givenVolume24h("40");
 
             autoTradeService.processPositionHolding(queue, state, session, "51000.00");
 
@@ -3605,7 +3660,7 @@ class AutoTradeServiceTest {
             PatternQueue queue = enabledQueue();
             QueueStateDTO state = holding(Side.LONG, 100.0);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(150.0);
+            givenVolume24h("150");
 
             autoTradeService.processPositionHolding(queue, state, session, "51000.00");
 
@@ -3619,7 +3674,7 @@ class AutoTradeServiceTest {
             PatternQueue queue = enabledQueue();
             QueueStateDTO state = holding(Side.LONG, 100.0);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(149.0);
+            givenVolume24h("149");
 
             autoTradeService.processPositionHolding(queue, state, session, "51000.00");
 
@@ -3639,31 +3694,31 @@ class AutoTradeServiceTest {
             autoTradeService.processPositionHolding(disabled, holding(Side.LONG, 100.0),
                     makeSession(1L, "BTCUSDT", disabled), "51000.00");
 
-            then(volumeMonitor).should(never()).getVolume(any(), any());
+            then(marketService).should(never()).getTicker(any(), any());
             then(patternQueueRepository).should(never()).updateVolumeStopReason(any(), any());
         }
 
         @Test
-        @DisplayName("워밍업(B안): 진입 기준이 없으면 창이 찬 첫 시점의 거래량을 기준으로 확정하고 판정하지 않는다")
+        @DisplayName("진입 시 시세 미수신으로 기준이 없으면 처음 받은 24시간 거래량을 기준으로 확정하고 판정하지 않는다")
         void warmup_fixesBaselineWhenWindowFull() {
             PatternQueue queue = enabledQueue();
             QueueStateDTO state = holding(Side.LONG, null);
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
 
-            // 창이 아직 안 참 → 기준 미확정
-            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(null);
+            // 시세 미수신 → 기준 미확정
+            givenVolume24h(null);
             autoTradeService.processPositionHolding(queue, state, session, "51000.00");
             assertThat(state.getVolumeBaseline()).isNull();
 
-            // 창이 참 → 그 값으로 기준 확정
-            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(80.0);
+            // 시세 수신 → 그 값으로 기준 확정
+            givenVolume24h("80");
             autoTradeService.processPositionHolding(queue, state, session, "51000.00");
             assertThat(state.getVolumeBaseline()).isEqualTo(80.0);
             then(patternQueueRepository).should(never()).updateVolumeStopReason(any(), any());
         }
 
         @Test
-        @DisplayName("진입 시 그 시점의 60초 거래량을 기준으로 저장한다")
+        @DisplayName("진입 시 그 시점의 24시간 거래량(대시보드 값)을 기준으로 저장한다")
         void entry_savesBaseline() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
             queue.setVolumeStopEnabled(true);
@@ -3675,7 +3730,7 @@ class AutoTradeServiceTest {
             state.setVolumeBaseline(999.0); // 이전 진입의 기준
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
             given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
-            given(volumeMonitor.getVolume(ExchangeType.BYBIT, "BTCUSDT")).willReturn(120.0);
+            givenVolume24h("120");
 
             autoTradeService.processBlockMatching(queue, state, session, "50000.00");
 
@@ -3731,23 +3786,6 @@ class AutoTradeServiceTest {
             assertThat(queue.isActive()).isFalse();
             assertThat(queue.getVolumeStopReason()).isNull();
             assertThat(state.getCurrentStepLevel()).isNotEqualTo(2);
-        }
-
-        @Test
-        @DisplayName("syncSession: 거래량 감시를 켠 큐의 심볼만 체결 구독 대상으로 동기화한다")
-        void syncSession_syncsVolumeSubscriptions() {
-            PatternQueue on = makePatternQueue(1L, 1L, "BTCUSDT", Side.LONG);
-            on.setVolumeStopEnabled(true);
-            PatternQueue off = makePatternQueue(2L, 1L, "ETHUSDT", Side.LONG);
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
-                    1L, "BTCUSDT", true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(on));
-            given(patternQueueRepository.findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
-                    1L, "ETHUSDT", true, TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(List.of(off));
-
-            autoTradeService.syncSession(1L, ExchangeType.BYBIT, "BTCUSDT", TradeMode.MAIN);
-            autoTradeService.syncSession(1L, ExchangeType.BYBIT, "ETHUSDT", TradeMode.MAIN);
-
-            then(volumeMonitor).should(times(2)).syncSubscriptions(Map.of(ExchangeType.BYBIT, Set.of("BTCUSDT")));
         }
     }
 
