@@ -17,13 +17,13 @@ public final class HistoryAggregateMapper {
     private HistoryAggregateMapper() {
     }
 
-    /** [수익 합, 손실 합] 단일 행 → DTO. 행이 없으면 0/0. */
+    /** [수익 합, 손실 합, 투입 금액 합] 단일 행 → DTO. 행이 없으면 모두 0. */
     public static ProfitLossSummaryDTO toSummary(List<Object[]> rows) {
         if (rows == null || rows.isEmpty()) {
-            return new ProfitLossSummaryDTO(BigDecimal.ZERO, BigDecimal.ZERO);
+            return new ProfitLossSummaryDTO(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
         Object[] row = rows.get(0);
-        return new ProfitLossSummaryDTO(toBigDecimal(row[0]), toBigDecimal(row[1]));
+        return new ProfitLossSummaryDTO(toBigDecimal(row[0]), toBigDecimal(row[1]), toBigDecimal(row[2]));
     }
 
     /** [승, 패, 전체] 단일 행 → DTO. 행이 없거나 SUM 결과가 null(데이터 없음)이면 0으로 처리. */

@@ -12,8 +12,8 @@ public class TradeHistoryResponse {
     private String amount;          // 주문 금액 (USDT)
     private String executedPrice;   // 체결 가격
     private String fee;             // 거래 수수료 (실수수료 또는 거래소 taker 수수료율 추정값, 기존 데이터는 null)
-    private String orderType;       // 주문 유형 (ENTRY / SELL / LIQUIDATION)
+    private String orderType;       // 주문 유형 (entry / sell / liquidation / stop)
     private String orderStatus;     // 주문 결과 (SUCCESS / FAILED)
-    private String errorMessage;    // 오류 메시지 (FAILED 시)
+    private String errorMessage;    // 실패·중지 사유
     private String createdAt;       // 거래 일시 (yyyy-MM-dd HH:mm:ss)
 }

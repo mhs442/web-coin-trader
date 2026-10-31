@@ -113,9 +113,18 @@ public class SimHistoryService implements HistoryService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Page<TradeHistoryDTO> findFailedOrStoppedTrades(Long userId, ExchangeType exchangeType, String symbol,
+                                                           LocalDateTime start, LocalDateTime end, Pageable pageable) {
+        // 빈 키워드는 null로 넘겨 심볼 조건 없이 조회
+        return simTradeHistoryRepository.findFailedOrStopped(userId, exchangeType, hasValue(symbol) ? symbol : null, start, end, pageable)
+                .map(SimHistoryService::toDto);
+    }
+
+    @Override
     @Transactional
     public void deleteTrades(List<Long> ids, Long userId) {
-        simTradeHistoryRepository.deleteAllByIdInAndUserId(ids, userId);
+        simTradeHistoryRepository.deleteFailedOrStoppedByIdInAndUserId(ids, userId);
     }
 
     @Override

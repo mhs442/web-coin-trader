@@ -135,6 +135,55 @@ class MyPageServiceTest {
     }
 
     // ─────────────────────────────────────────────
+    // getFailedTrades (실패·중지 기록)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getFailedTrades: SIM 모드·거래소·심볼을 넘겨 조회하고 사유를 포함한 응답으로 변환한다")
+    void getFailedTrades_mapsResponse() {
+        // given
+        Long userId = 1L;
+        TradeHistoryDTO failed = TradeHistoryDTO.builder()
+                .id(7L).symbol("BTCUSDT").side(Side.SHORT).exchangeType(ExchangeType.BYBIT)
+                .amount(new BigDecimal("100.00")).executedPrice(BigDecimal.ZERO)
+                .orderType("entry").orderResult(OrderResult.FAILED).errorMessage("모의투자 잔고 부족")
+                .createdAt(LocalDateTime.of(2026, 10, 30, 9, 5, 0))
+                .build();
+        given(simHistory.findFailedOrStoppedTrades(eq(userId), eq(ExchangeType.BYBIT), eq("BTC"), any(), any(), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of(failed)));
+
+        TradeHistoryRequest request = new TradeHistoryRequest();
+        request.setExchange("BYBIT");
+        request.setSymbol("BTC");
+        request.setMode("sim");
+
+        // when
+        PageResponse<TradeHistoryResponse> result = myPageService.getFailedTrades(userId, request);
+
+        // then
+        assertThat(result.getContent()).hasSize(1);
+        TradeHistoryResponse r = result.getContent().get(0);
+        assertThat(r.getId()).isEqualTo(7L);
+        assertThat(r.getSide()).isEqualTo("SHORT");
+        assertThat(r.getAmount()).isEqualTo("100");
+        assertThat(r.getOrderType()).isEqualTo("entry");
+        assertThat(r.getOrderStatus()).isEqualTo("FAILED");
+        assertThat(r.getErrorMessage()).isEqualTo("모의투자 잔고 부족");
+        assertThat(r.getCreatedAt()).isEqualTo("2026-10-30 09:05:00");
+        then(mainHistory).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("getFailedTrades: 거래소를 넘기지 않으면 EXCHANGE_TYPE_REQUIRED 예외")
+    void getFailedTrades_requiresExchange() {
+        // when & then
+        assertThatThrownBy(() -> myPageService.getFailedTrades(1L, new TradeHistoryRequest()))
+                .isInstanceOf(CustomException.class)
+                .satisfies(e -> assertThat(((CustomException) e).getExceptionMessage())
+                        .isEqualTo(ExceptionMessage.EXCHANGE_TYPE_REQUIRED));
+    }
+
+    // ─────────────────────────────────────────────
     // getInvestmentHistories
     // ─────────────────────────────────────────────
 
@@ -147,7 +196,7 @@ class MyPageServiceTest {
         given(mainHistory.findInvestments(eq(userId), eq(ExchangeType.BYBIT), isNull(), any(), any(), any(Pageable.class))).willReturn(page);
         // 합산 모킹: 이익 500, 손해 -300
         given(mainHistory.sumProfitLoss(eq(userId), eq(ExchangeType.BYBIT), isNull(), any(), any()))
-                .willReturn(new ProfitLossSummaryDTO(new BigDecimal("500"), new BigDecimal("-300")));
+                .willReturn(new ProfitLossSummaryDTO(new BigDecimal("500"), new BigDecimal("-300"), new BigDecimal("1500.00")));
         given(mainHistory.countWinLoss(eq(userId), eq(ExchangeType.BYBIT), any(), any())).willReturn(new WinLossCountDTO(3, 1, 4));
 
         // when
@@ -165,6 +214,7 @@ class MyPageServiceTest {
 
         // then - 합산 통계 검증 (승률 3/4 = 75.0%)
         assertThat(result.getSummary().getTotalProfit()).isEqualTo("500");
+        assertThat(result.getSummary().getTotalAmount()).isEqualTo("1500");  // 필터 전체 기준 투입 금액(마진) 합
         assertThat(result.getSummary().getTotalLoss()).isEqualTo("-300");
         assertThat(result.getSummary().getNetTotal()).isEqualTo("200");
         assertThat(result.getSummary().getWinRate()).isEqualTo("75.0");
@@ -178,7 +228,7 @@ class MyPageServiceTest {
         Page<InvestmentHistoryDTO> page = new PageImpl<>(List.of(makeInvestmentHistory(2L, userId, "ETHUSDT")));
         given(mainHistory.findInvestments(eq(userId), eq(ExchangeType.BYBIT), eq("ETH"), any(), any(), any(Pageable.class))).willReturn(page);
         given(mainHistory.sumProfitLoss(eq(userId), eq(ExchangeType.BYBIT), eq("ETH"), any(), any()))
-                .willReturn(new ProfitLossSummaryDTO(new BigDecimal("200"), BigDecimal.ZERO));
+                .willReturn(new ProfitLossSummaryDTO(new BigDecimal("200"), BigDecimal.ZERO, BigDecimal.ZERO));
         given(mainHistory.countWinLoss(eq(userId), eq(ExchangeType.BYBIT), any(), any())).willReturn(new WinLossCountDTO(0, 0, 0));
 
         InvestmentHistoryRequest request = new InvestmentHistoryRequest();
@@ -205,7 +255,7 @@ class MyPageServiceTest {
         given(mainHistory.findInvestments(eq(userId), eq(ExchangeType.BYBIT), any(), any(), any(), any(Pageable.class)))
                 .willReturn(new PageImpl<>(List.of()));
         given(mainHistory.sumProfitLoss(eq(userId), eq(ExchangeType.BYBIT), any(), any(), any()))
-                .willReturn(new ProfitLossSummaryDTO(BigDecimal.ZERO, BigDecimal.ZERO));
+                .willReturn(new ProfitLossSummaryDTO(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
         given(mainHistory.countWinLoss(eq(userId), eq(ExchangeType.BYBIT), any(), any())).willReturn(new WinLossCountDTO(0, 0, 0));
 
         // when
@@ -227,7 +277,7 @@ class MyPageServiceTest {
         given(simHistory.findInvestments(eq(userId), eq(ExchangeType.BYBIT), any(), any(), any(), any(Pageable.class)))
                 .willReturn(new PageImpl<>(List.of(makeInvestmentHistory(9L, userId, "BTCUSDT"))));
         given(simHistory.sumProfitLoss(eq(userId), eq(ExchangeType.BYBIT), any(), any(), any()))
-                .willReturn(new ProfitLossSummaryDTO(BigDecimal.TEN, BigDecimal.ZERO));
+                .willReturn(new ProfitLossSummaryDTO(BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO));
         given(simHistory.countWinLoss(eq(userId), eq(ExchangeType.BYBIT), any(), any())).willReturn(new WinLossCountDTO(1, 0, 1));
 
         InvestmentHistoryRequest request = new InvestmentHistoryRequest();

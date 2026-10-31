@@ -114,6 +114,15 @@
             };
 
             /**
+             * 현재 거래소·모드 표시 문구를 반환한다. (확인 창·배지에서 대상 범위 안내용)
+             * @returns {string} 예: 'Bybit · 실전'
+             */
+            window.getTradeContextLabel = function() {
+                const exchangeName = window.exchangeType ? window.getExchangeName(window.exchangeType) : '거래소 미선택';
+                return exchangeName + ' · ' + (window.tradeMode === 'sim' ? '모의' : '실전');
+            };
+
+            /**
              * 실전 모드 + 키 미등록이면 잔고 대신 등록 안내를 표시한다. (모의 모드는 키 없이 사용)
              * @returns {boolean} 안내를 표시했으면 true
              */
@@ -275,6 +284,12 @@
                 // 거래 모드 토글 이벤트
                 $('#trade-mode-switch').on('change', function() {
                     var isSim = $(this).is(':checked');
+
+                    // 모의 → 실전 전환은 확인 후 진행 (취소 시 스위치를 모의로 되돌림)
+                    if (!isSim && !confirm('실전 모드로 전환합니다.\n이후 주문·큐 동작은 실제 자금으로 처리됩니다. 진행하시겠습니까?')) {
+                        $(this).prop('checked', true);
+                        return;
+                    }
                     window.tradeMode = isSim ? 'sim' : 'main';
 
                     // localStorage에 저장 (페이지 이동 시에도 유지)

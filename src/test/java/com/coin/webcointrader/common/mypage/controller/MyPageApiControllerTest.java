@@ -19,6 +19,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.contract.wiremock.AutoConfigureWireMock;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -154,6 +155,62 @@ class MyPageApiControllerTest {
                 .andExpect(jsonPath("$[1].profitLoss").value("11.4"))
                 .andExpect(jsonPath("$[2].orderType").value("liquidation"))
                 .andExpect(jsonPath("$[2].profitLoss").value("-8.4"));
+    }
+
+    @Test
+    @DisplayName("GET /api/mypage/trades/failed: 실패 거래와 중지 기록만 사유와 함께 반환한다")
+    void getFailedTrades_onlyFailedAndStop() throws Exception {
+        // given - 성공 진입(제외) / 실패 진입 / 중지 기록
+        tradeHistoryRepository.save(makeTrade("entry", "100", "50000", "0.5"));
+        TradeHistory failed = makeTrade("entry", "100", "0", "0");
+        failed.setOrderResult(OrderResult.FAILED);
+        failed.setErrorMessage("[110007] 잔고 부족");
+        Long failedId = tradeHistoryRepository.save(failed).getId();
+        TradeHistory stop = makeTrade("stop", "0", "0", "0");
+        stop.setErrorMessage("거래량 급변으로 큐 중지");
+        Long stopId = tradeHistoryRepository.save(stop).getId();
+        // 정렬 확인용 시각 고정 (중지가 더 최근)
+        setCreatedAt("trade_history", failedId, "2026-10-30 09:00:00");
+        setCreatedAt("trade_history", stopId, "2026-10-30 10:00:00");
+
+        // when & then - 최신순
+        mockMvc.perform(get("/api/mypage/trades/failed")
+                        .param("exchange", "BYBIT").param("mode", "main")
+                        .param("startDate", "2026-10-30T00:00:00").param("endDate", "2026-10-30T23:59:59")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.content[0].orderType").value("stop"))
+                .andExpect(jsonPath("$.content[0].errorMessage").value("거래량 급변으로 큐 중지"))
+                .andExpect(jsonPath("$.content[1].orderStatus").value("FAILED"))
+                .andExpect(jsonPath("$.content[1].errorMessage").value("[110007] 잔고 부족"));
+    }
+
+    @Test
+    @DisplayName("GET /api/mypage/trades/failed: 거래소를 보내지 않으면 400")
+    void getFailedTrades_missingExchange() throws Exception {
+        mockMvc.perform(get("/api/mypage/trades/failed").with(authentication(auth)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/mypage/trades: 실패·중지 기록만 지우고 성공 거래는 ID가 섞여도 남긴다")
+    void deleteTrades_onlyFailedAndStop() throws Exception {
+        // given
+        Long successId = tradeHistoryRepository.save(makeTrade("entry", "100", "50000", "0.5")).getId();
+        TradeHistory failed = makeTrade("entry", "100", "0", "0");
+        failed.setOrderResult(OrderResult.FAILED);
+        Long failedId = tradeHistoryRepository.save(failed).getId();
+
+        // when
+        mockMvc.perform(delete("/api/mypage/trades")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[" + successId + "," + failedId + "],\"mode\":\"main\"}")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk());
+
+        // then - 성공 거래만 남음
+        assertThat(tradeHistoryRepository.findAll()).extracting(TradeHistory::getId).containsExactly(successId);
     }
 
     private TradeHistory makeTrade(String orderType, String amount, String price, String fee) {

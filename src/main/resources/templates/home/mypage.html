@@ -130,6 +130,7 @@
         <div class="history-view-toggle">
             <button id="btn-list-view" class="view-toggle-btn active" onclick="switchHistoryView('list')">📋 리스트</button>
             <button id="btn-chart-view" class="view-toggle-btn" onclick="switchHistoryView('chart')">📊 차트</button>
+            <button id="btn-failed-view" class="view-toggle-btn" onclick="switchHistoryView('failed')">⚠️ 실패·중지</button>
         </div>
 
         <!-- ===== 리스트 뷰 ===== -->
@@ -191,6 +192,21 @@
             </div>
         </div>
 
+        <!-- ===== 실패·중지 뷰 (주문 실패 + 큐 중지 기록) ===== -->
+        <div id="history-view-failed" style="display: none;">
+            <!-- 삭제 버튼 (전체 삭제는 헤더 전체선택 체크박스로 대신 — 화면에 불러온 행만 대상) -->
+            <div class="history-action-bar">
+                <button class="filter-btn delete-selected-btn" onclick="deleteSelectedFailedTrades()">선택 삭제</button>
+            </div>
+
+            <div id="failed-table-wrapper">
+                <div class="mypage-empty">데이터를 불러오는 중...</div>
+            </div>
+
+            <!-- 무한 스크롤 로딩 인디케이터 -->
+            <div id="failed-scroll-loading" class="scroll-loading" style="display:none;">데이터 로딩 중...</div>
+        </div>
+
     </div><!-- /tab-history -->
 </div>
 
@@ -207,7 +223,12 @@
     let histPage = 0;
     let histLast = false;
     let histLoading = false;
-    let currentHistView = 'list'; // 'list' | 'chart'
+    let currentHistView = 'list'; // 'list' | 'chart' | 'failed'
+
+    // ─── 실패·중지 뷰 상태 ───
+    let failedPage = 0;
+    let failedLast = false;
+    let failedLoading = false;
 
     // ApexCharts 인스턴스 (재렌더링 시 destroy 필요)
     let chartLine = null;
@@ -229,6 +250,12 @@
         $('#hist-filter-start').val(toDateInputValue(weekAgo));
         $('#hist-filter-end').val(toDateInputValue(today));
     }
+
+    // 날짜를 직접 바꾸면 기간 버튼 선택 해제 (선택된 기간과 실제 조회 기간이 달라 보이지 않도록)
+    // selectPeriod·초기화는 .val()로 값을 넣어 change 이벤트가 발생하지 않으므로 영향 없음
+    $(document).on('change', '#hist-filter-start, #hist-filter-end', function() {
+        $('.chart-period-btn').removeClass('active');
+    });
 
     // 기간 선택 버튼 (리스트/차트 공통, days=0이면 전체)
     function selectPeriod(days, btn) {
@@ -265,12 +292,18 @@
         currentHistView = view;
         document.getElementById('history-view-list').style.display = (view === 'list') ? 'block' : 'none';
         document.getElementById('history-view-chart').style.display = (view === 'chart') ? 'block' : 'none';
+        document.getElementById('history-view-failed').style.display = (view === 'failed') ? 'block' : 'none';
         document.getElementById('btn-list-view').classList.toggle('active', view === 'list');
         document.getElementById('btn-chart-view').classList.toggle('active', view === 'chart');
+        document.getElementById('btn-failed-view').classList.toggle('active', view === 'failed');
 
         // 차트 뷰로 전환 시 차트 데이터 로드
         if (view === 'chart') {
             loadHistoryChart();
+        }
+        // 실패·중지 뷰로 전환 시 첫 페이지부터 다시 로드
+        if (view === 'failed') {
+            reloadFailedTrades();
         }
     }
 
@@ -303,6 +336,8 @@
         histLoading = false;
         if (currentHistView === 'list') {
             loadInvestments(0);
+        } else if (currentHistView === 'failed') {
+            reloadFailedTrades();
         } else {
             loadHistoryChart();
         }
@@ -340,7 +375,7 @@
 
                 // 첫 페이지: 요약 카드 + 테이블 초기화
                 if (page === 0) {
-                    updateSummaryCards(summary, investments);
+                    updateSummaryCards(summary);
                     if (investments.length === 0) {
                         $wrapper.html('<div class="mypage-empty">투자 내역이 없습니다.</div>');
                         histLast = true;
@@ -356,7 +391,7 @@
                                     '<th>일시</th>' +
                                     '<th>코인</th>' +
                                     '<th>방향</th>' +
-                                    '<th>투입금(마진)</th>' +
+                                    '<th>투자금</th>' +
                                     '<th>레버리지</th>' +
                                     '<th>진입가</th>' +
                                     '<th>청산가</th>' +
@@ -415,7 +450,7 @@
             },
             error: function() {
                 if (histPage === 0) {
-                    $('#investment-table-wrapper').html('<div class="mypage-empty">데이터 로드에 실패했습니다.</div>');
+                    $('#investment-table-wrapper').html('<div class="mypage-empty">데이터 로드에 실패했습니다. <button type="button" class="retry-btn" onclick="loadInvestments(0)">다시 시도</button></div>');
                 }
                 histLoading = false;
                 $('#investment-scroll-loading').hide();
@@ -472,7 +507,7 @@
                     if (trades.length === 0) {
                         $body.html('<div class="trade-detail-empty">연결된 거래 내역이 없습니다.</div>');
                     } else {
-                        // 전체 수수료 합산 → 총손익(순수익) = 실세 손익금 + 총수수료
+                        // 전체 수수료 합산 → 총손익(수수료 전) = 순손익 + 총수수료
                         const totalFee = trades.reduce(function(s, t) { return s + (parseFloat(t.fee) || 0); }, 0);
                         const netPL = parseFloat(netProfitLoss) || 0;
                         // grossPL: 수수료·펀딩비 차감 전 순수 매매 차익 (closedPnl + taker_fees + fundingFee)
@@ -512,17 +547,17 @@
                                 '<thead><tr>' +
                                     '<th>유형</th>' +
                                     '<th>체결가</th>' +
-                                    '<th>투입금</th>' +
+                                    '<th>투자금</th>' +
                                     '<th>레버리지</th>' +
-                                    '<th>순수익</th>' +
+                                    '<th>총손익(수수료 전)</th>' +
                                     '<th>수수료</th>' +
-                                    '<th>실세 손익금</th>' +
+                                    '<th>순손익</th>' +
                                     '<th>일시</th>' +
                                 '</tr></thead>' +
                                 '<tbody>';
 
                         trades.forEach(function(t) {
-                            const orderTypeMap = { 'entry': '진입', 'sell': '매도', 'liquidation': '청산', 'stop': '중지' };
+                            const orderTypeMap = { 'entry': '진입', 'sell': '익절', 'liquidation': '청산', 'stop': '중지' };
                             const typeClassMap = { 'entry': 'type-entry', 'sell': 'type-sell', 'liquidation': 'type-liquidation', 'stop': 'type-stop' };
                             const typeLabel = orderTypeMap[t.orderType] || t.orderType;
                             const typeClass = typeClassMap[t.orderType] || 'type-liquidation';
@@ -532,15 +567,15 @@
                             const rowGross = t.grossProfitLoss != null ? parseFloat(t.grossProfitLoss) : grossPL;
                             const rowNet = t.profitLoss != null ? parseFloat(t.profitLoss) : netPL;
 
-                            // 순수익(총손익): 매도/청산 행에만 표시
+                            // 총손익(수수료 전): 익절/청산 행에만 표시
                             const grossCell = isExit
                                 ? '<span class="' + (rowGross >= 0 ? 'status-active' : 'status-failed') + '">'
                                     + (rowGross >= 0 ? '+' : '') + rowGross.toFixed(4) + ' USDT</span>'
                                 : '-';
 
-                            // 실세 손익금:
+                            // 순손익(수수료 후):
                             //   진입 행 → 진입 수수료를 비용으로 표시 (사용자가 진입+매도 수수료를 합산해 볼 수 있도록)
-                            //   매도/청산 행 → 진입+청산 수수료 모두 차감된 순손익
+                            //   익절/청산 행 → 진입+청산 수수료 모두 차감된 순손익
                             const tradeFeeNum = parseFloat(t.fee) || 0;
                             const netCell = isExit
                                 ? '<span class="' + (rowNet >= 0 ? 'status-active' : 'status-failed') + '">'
@@ -598,9 +633,8 @@
     // ─────────────────────────────────────────────
     // 요약 카드 업데이트
     // ─────────────────────────────────────────────
-    function updateSummaryCards(summary, investments) {
-        // 총 투자금 = 현재 페이지 amount 합산 (서버에서 별도 집계 없음)
-        // → netTotal / winRate / totalCount 는 summary에서
+    function updateSummaryCards(summary) {
+        // 모든 카드는 서버 summary(필터 전체 기준)로 표시
         const net = parseFloat(summary.netTotal);
         const netPrefix = net > 0 ? '+' : '';
         const netClass = net > 0 ? 'text-green' : (net < 0 ? 'text-red' : '');
@@ -613,14 +647,8 @@
         $('#card-win-rate').text(summary.winRate + '%');
         $('#card-total-count').text(summary.winCount + ' / ' + summary.totalCount + ' 건');
 
-        // 총 투자금은 현재 페이지 amount 합산으로 표시
-        let totalInvest = 0;
-        if (investments && investments.length > 0) {
-            investments.forEach(function(inv) {
-                totalInvest += parseFloat(inv.amount) || 0;
-            });
-        }
-        $('#card-total-invest').text(totalInvest.toFixed(2) + ' USDT');
+        // 총 투자금: 투입 금액(마진) 합 (첫 페이지만이 아닌 필터 전체 기준)
+        $('#card-total-invest').text(parseFloat(summary.totalAmount).toFixed(2) + ' USDT');
     }
 
     // ─────────────────────────────────────────────
@@ -778,7 +806,7 @@
             ids.push(parseInt($(this).val()));
         });
         if (ids.length === 0) { alert('삭제할 항목을 선택해주세요.'); return; }
-        if (!confirm(ids.length + '건을 삭제하시겠습니까?')) return;
+        if (!confirm('[' + getTradeContextLabel() + '] 선택한 투자 히스토리 ' + ids.length + '건을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) return;
 
         $.ajax({
             url: '/api/mypage/investments',
@@ -791,13 +819,136 @@
     }
 
     function deleteAllInvestments() {
-        if (!confirm('전체 투자 히스토리를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) return;
+        if (!confirm('[' + getTradeContextLabel() + '] 투자 히스토리 전체를 삭제합니다. (검색 조건과 무관)\n이 작업은 되돌릴 수 없습니다. 진행하시겠습니까?')) return;
 
         $.ajax({
             url: '/api/mypage/investments/all',
             type: 'DELETE',
             data: { mode: getTradeMode(), exchange: getExchange() },   // 선택한 거래소 데이터만 삭제
-            success: function() { loadInvestments(0); },
+            // 무한 스크롤 상태 초기화 후 재조회 (마지막 페이지 도달 상태면 재조회가 막히므로)
+            success: function() { histPage = 0; histLast = false; histLoading = false; loadInvestments(0); },
+            error: function(xhr) { alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText)); }
+        });
+    }
+
+    // ─────────────────────────────────────────────
+    // 실패·중지 기록 (주문 실패 + 큐 중지)
+    // ─────────────────────────────────────────────
+
+    // 사유에 거래소 원문 메시지가 들어오므로 HTML 이스케이프 후 출력
+    function escapeHtml(text) {
+        return $('<div>').text(text == null ? '' : text).html();
+    }
+
+    // 상태 초기화 후 첫 페이지부터 다시 로드
+    function reloadFailedTrades() {
+        failedPage = 0;
+        failedLast = false;
+        failedLoading = false;
+        loadFailedTrades(0);
+    }
+
+    function loadFailedTrades(page) {
+        if (failedLoading || failedLast) return;
+        failedLoading = true;
+        $('#failed-scroll-loading').show();
+
+        $.ajax({
+            url: '/api/mypage/trades/failed?' + getHistParams(page).toString(),
+            type: 'GET',
+            success: function(pageData) {
+                const trades = pageData.content;
+                const $wrapper = $('#failed-table-wrapper');
+
+                // 첫 페이지: 테이블 초기화 (체크박스는 행 맨 뒤, 헤더 체크박스 = 불러온 행 전체선택)
+                if (page === 0) {
+                    if (trades.length === 0) {
+                        $wrapper.html('<div class="mypage-empty">실패·중지 기록이 없습니다.</div>');
+                        failedLast = true;
+                        failedLoading = false;
+                        $('#failed-scroll-loading').hide();
+                        return;
+                    }
+                    $wrapper.html(
+                        '<div class="mypage-table-wrapper">' +
+                            '<table class="mypage-table">' +
+                                '<thead><tr>' +
+                                    '<th>일시</th>' +
+                                    '<th>코인</th>' +
+                                    '<th>방향</th>' +
+                                    '<th>유형</th>' +
+                                    '<th>결과</th>' +
+                                    '<th>사유</th>' +
+                                    '<th><input type="checkbox" id="failed-check-all" onchange="toggleAllFailedChecks(this)"></th>' +
+                                '</tr></thead>' +
+                                '<tbody id="failed-tbody"></tbody>' +
+                            '</table>' +
+                        '</div>'
+                    );
+                }
+
+                const orderTypeMap = { 'entry': '진입', 'sell': '익절', 'liquidation': '청산', 'stop': '중지' };
+                const typeClassMap = { 'entry': 'type-entry', 'sell': 'type-sell', 'liquidation': 'type-liquidation', 'stop': 'type-stop' };
+                let rows = '';
+                trades.forEach(function(t) {
+                    const type = (t.orderType || '').toLowerCase();
+                    const sideClass = t.side === 'LONG' ? 'text-green' : 'text-red';
+                    // 결과: 주문 실패(FAILED)는 '실패', 그 외(중지 기록은 SUCCESS로 저장)는 '중지'
+                    const resultCell = t.orderStatus === 'FAILED'
+                        ? '<span class="status-failed">실패</span>'
+                        : '<span class="order-type-badge type-stop">중지</span>';
+
+                    rows +=
+                        '<tr>' +
+                            '<td>' + t.createdAt + '</td>' +
+                            '<td><strong>' + t.symbol + '</strong></td>' +
+                            '<td class="' + sideClass + '">' + (t.side || '-') + '</td>' +
+                            '<td><span class="order-type-badge ' + (typeClassMap[type] || 'type-liquidation') + '">' +
+                                (orderTypeMap[type] || t.orderType) + '</span></td>' +
+                            '<td>' + resultCell + '</td>' +
+                            '<td class="failed-reason-cell">' + (t.errorMessage ? escapeHtml(t.errorMessage) : '-') + '</td>' +
+                            '<td><input type="checkbox" class="failed-check" value="' + t.id + '"></td>' +
+                        '</tr>';
+                });
+                $('#failed-tbody').append(rows);
+                // 전체선택 상태에서 다음 페이지를 불러오면 체크 해제 (새 행은 선택되지 않았으므로)
+                $('#failed-check-all').prop('checked', false);
+
+                failedPage = pageData.page;
+                failedLast = pageData.last;
+                failedLoading = false;
+                $('#failed-scroll-loading').hide();
+            },
+            error: function() {
+                if (page === 0) {
+                    $('#failed-table-wrapper').html('<div class="mypage-empty">데이터 로드에 실패했습니다. <button type="button" class="retry-btn" onclick="loadFailedTrades(0)">다시 시도</button></div>');
+                }
+                failedLoading = false;
+                $('#failed-scroll-loading').hide();
+            }
+        });
+    }
+
+    // 헤더 체크박스: 화면에 불러온 행 전체선택/해제
+    function toggleAllFailedChecks(checkbox) {
+        $('#failed-tbody .failed-check').prop('checked', checkbox.checked);
+    }
+
+    // 선택 삭제 (전체선택 후 삭제 = 화면에 불러온 기록 전체 삭제)
+    function deleteSelectedFailedTrades() {
+        const ids = [];
+        $('#failed-tbody .failed-check:checked').each(function() {
+            ids.push(parseInt($(this).val()));
+        });
+        if (ids.length === 0) { alert('삭제할 항목을 선택해주세요.'); return; }
+        if (!confirm('[' + getTradeContextLabel() + '] 화면에 표시된 실패·중지 기록 중 ' + ids.length + '건을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) return;
+
+        $.ajax({
+            url: '/api/mypage/trades',
+            type: 'DELETE',
+            contentType: 'application/json',
+            data: JSON.stringify({ ids: ids, mode: getTradeMode() }),
+            success: function() { reloadFailedTrades(); },
             error: function(xhr) { alert('삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText)); }
         });
     }
@@ -831,7 +982,11 @@
         loadingEl.style.display = 'block';
 
         fetch('/api/mypage/patterns?' + params.toString())
-            .then(res => res.json())
+            .then(res => {
+                // 서버 오류 응답(4xx·5xx)은 실패로 처리 (정상 응답처럼 파싱하다 조용히 멈추는 것 방지)
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.json();
+            })
             .then(response => {
                 const container = document.getElementById('pattern-container');
                 const patterns = response.content;
@@ -890,7 +1045,9 @@
                         const toggleBtnText = p.active ? 'ON' : 'OFF';
                         const actionBtns =
                             '<button id="toggle-' + p.id + '" class="' + toggleBtnClass + '" onclick="event.stopPropagation(); toggleQueueActive(' + p.id + ', \'' + p.symbol + '\')">' + toggleBtnText + '</button> ' +
-                            '<button class="pattern-delete-btn" onclick="event.stopPropagation(); deleteQueue(' + p.id + ', \'' + p.symbol + '\')">삭제</button>';
+                            // [사용자 정책 2026-10-30] 활성 큐는 삭제 불가 — 비활성화 후 삭제
+                            '<button id="delete-' + p.id + '" class="pattern-delete-btn" ' + (p.active ? 'disabled title="비활성화 후 삭제하세요" ' : '')
+                                + 'onclick="event.stopPropagation(); deleteQueue(' + p.id + ', \'' + p.symbol + '\')">삭제</button>';
 
                         const summaryRow = document.createElement('tr');
                         summaryRow.className = 'pattern-summary-row';
@@ -924,7 +1081,7 @@
                             step.patterns.forEach(pat => {
                                 detailHtml += '<div class="pattern-detail-pattern"><div class="pattern-detail-pattern-header">패턴 ' + pat.patternOrder + '</div>';
                                 detailHtml += '<div class="pattern-detail-meta">' +
-                                    '<span class="pattern-detail-meta-item">금액: ' + pat.amount + ' USDT</span>' +
+                                    '<span class="pattern-detail-meta-item">투자금: ' + pat.amount + ' USDT</span>' +
                                     '<span class="pattern-detail-meta-item">레버리지: ' + pat.leverage + 'x</span>' +
                                     '<span class="pattern-detail-meta-item tp">익절: ' + (pat.takeProfitRate || '-') + '%</span>' +
                                     '<span class="pattern-detail-meta-item sl">손절: ' + (pat.stopLossRate || '-') + '%</span>' +
@@ -956,6 +1113,11 @@
             .catch(() => {
                 document.getElementById('pattern-scroll-loading').style.display = 'none';
                 patternLoading = false;
+                // 첫 페이지 실패 시 빈 화면 대신 실패 문구 + 다시 시도 버튼
+                if (page === 0) {
+                    document.getElementById('pattern-container').innerHTML =
+                        '<div class="mypage-empty">데이터 로드에 실패했습니다. <button type="button" class="retry-btn" onclick="loadPatterns(0)">다시 시도</button></div>';
+                }
             });
     }
 
@@ -994,20 +1156,28 @@
             });
             return;
         }
+        // 실전 모드에서 켤 때는 실제 자금 주문이 시작되므로 확인 (모의는 바로 켬)
+        if (getTradeMode() === 'main'
+            && !confirm('[' + getTradeContextLabel() + '] ' + symbol + ' 큐 자동매매를 시작합니다.\n실제 자금으로 주문이 나갑니다. 진행하시겠습니까?')) return;
         requestToggleQueue(queueId);
     }
 
     /** 큐 on/off 토글 요청 후 행의 상태·버튼을 갱신한다. */
     function requestToggleQueue(queueId) {
+        // 요청 중 버튼 비활성 (연속 클릭 시 토글 요청이 두 번 나가 원래 상태로 돌아가는 것 방지)
+        const $toggleBtn = $('#toggle-' + queueId).prop('disabled', true);
         $.ajax({
             url: '/api/autotrade/patterns/' + queueId + '/toggle',
             type: 'PATCH',
+            complete: function() { $toggleBtn.prop('disabled', false); },
             success: function(data) {
                 const isActive = data.active;
                 $('#status-' + queueId).attr('class', isActive ? 'status-active' : 'status-inactive')
                     .text(isActive ? '활성' : '비활성');
                 $('#toggle-' + queueId).attr('class', isActive ? 'queue-toggle-btn toggle-on' : 'queue-toggle-btn toggle-off')
                     .text(isActive ? 'ON' : 'OFF');
+                // 활성 큐는 삭제 불가 — 삭제 버튼 상태 동기화
+                $('#delete-' + queueId).prop('disabled', isActive).attr('title', isActive ? '비활성화 후 삭제하세요' : '');
             },
             error: function(xhr) { alert('상태 변경에 실패했습니다: ' + (xhr.responseJSON?.message || xhr.statusText)); }
         });
@@ -1016,7 +1186,8 @@
     function deleteQueue(queueId, symbol) {
         checkQueueHolding(queueId, symbol, function(holding) {
             // 보유 중이면 청산 안내, 아니면 기존 삭제 확인
-            const ok = holding ? confirmCloseHolding('삭제') : confirm('해당 큐를 삭제하시겠습니까?');
+            const ok = holding ? confirmCloseHolding('삭제')
+                : confirm('[' + getTradeContextLabel() + '] ' + symbol + ' 큐를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.');
             if (!ok) return;
             $.ajax({
                 url: '/api/autotrade/patterns/' + queueId + '?symbol=' + symbol + '&mode=' + getTradeMode()
@@ -1075,6 +1246,10 @@
             // 히스토리 탭 + 리스트 뷰일 때만 무한 스크롤
             if (historyTab.style.display !== 'none' && currentHistView === 'list' && !histLast && !histLoading) {
                 loadInvestments(histPage + 1);
+            }
+            // 히스토리 탭 + 실패·중지 뷰 무한 스크롤
+            if (historyTab.style.display !== 'none' && currentHistView === 'failed' && !failedLast && !failedLoading) {
+                loadFailedTrades(failedPage + 1);
             }
         }
     });

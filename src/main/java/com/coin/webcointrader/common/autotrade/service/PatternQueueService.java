@@ -184,21 +184,33 @@ public class PatternQueueService {
     }
 
     /**
-     * 패턴 큐를 삭제한다.
+     * 큐를 삭제할 수 있는지 검사한다. (권한 확인 + 활성 큐 삭제 금지)
+     * 삭제 전 포지션 청산보다 먼저 호출해, 활성 큐에 대해 청산만 되고 삭제는 거부되는 일이 없게 한다.
      *
      * @param userId  사용자 ID (권한 검증용)
      * @param queueId 삭제할 큐 ID
+     * @return 삭제 가능한 큐 엔티티
+     * @throws CustomException 큐 없음(QUEUE_NOT_FOUND), 타인 큐(QUEUE_UNAUTHORIZED), 활성 큐(QUEUE_ACTIVE_CANNOT_DELETE)
+     */
+    public PatternQueue validateDeletable(Long userId, Long queueId) {
+        PatternQueue queue = getQueue(userId, queueId);
+        // [사용자 정책 2026-10-30] 활성(ON) 큐는 삭제 불가 — 먼저 비활성화해야 삭제 가능
+        if (queue.isActive()) {
+            throw new CustomException(ExceptionMessage.QUEUE_ACTIVE_CANNOT_DELETE);
+        }
+        return queue;
+    }
+
+    /**
+     * 패턴 큐를 삭제한다. (활성 큐는 삭제하지 않음)
+     *
+     * @param userId  사용자 ID (권한 검증용)
+     * @param queueId 삭제할 큐 ID
+     * @throws CustomException 큐 없음, 타인 큐, 활성 큐(QUEUE_ACTIVE_CANNOT_DELETE)
      */
     @Transactional
     public void deleteQueue(Long userId, Long queueId) {
-        PatternQueue queue = patternQueueRepository.findById(queueId)
-                .orElseThrow(() -> new CustomException(ExceptionMessage.QUEUE_NOT_FOUND));
-
-        if (!queue.getUserId().equals(userId)) {
-            throw new CustomException(ExceptionMessage.QUEUE_UNAUTHORIZED);
-        }
-
-        patternQueueRepository.delete(queue);
+        patternQueueRepository.delete(validateDeletable(userId, queueId));
     }
 
     /**
@@ -520,7 +532,7 @@ public class PatternQueueService {
     }
 
     /**
-     * 개별 패턴 검증 (금액, 레버리지, 손절률·강제청산 한도, 블록 구조, side)
+     * 개별 패턴 검증 (금액, 레버리지, 손절률·익절률·강제청산 한도, 블록 구조, side)
      */
     private void validatePattern(AddPatternRequest.PatternRequest pattern) {
         // 금액 검증
@@ -537,6 +549,10 @@ public class PatternQueueService {
                     || pattern.getStopLossRate().compareTo(BigDecimal.valueOf(100)) >= 0) {
                 throw new CustomException(ExceptionMessage.INVALID_STOP_LOSS_RATE);
             }
+        }
+        // 익절율 0% 초과 검증 — 0 이하면 익절 지정가가 진입가 반대편에 걸려 즉시 체결될 수 있음
+        if (pattern.getTakeProfitRate() != null && pattern.getTakeProfitRate().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new CustomException(ExceptionMessage.INVALID_TAKE_PROFIT_RATE);
         }
         // 손절률 강제청산 한도 검증 — 거래소 안전망 손절(+0.5%p)이 강제청산가보다 안쪽이어야 함
         // 미입력이면 기본값(가격 8%)을 투자금 기준으로 환산해 검사

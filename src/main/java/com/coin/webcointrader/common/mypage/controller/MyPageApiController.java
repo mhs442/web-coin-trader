@@ -103,7 +103,20 @@ public class MyPageApiController {
     }
 
     /**
-     * 선택한 거래 히스토리를 삭제한다. (거래 내역 상세 삭제용)
+     * 실패·중지 기록(주문 실패 + 큐 중지)을 페이징하여 조회한다. (히스토리 탭 실패·중지 뷰)
+     *
+     * @param user    인증된 사용자 정보
+     * @param request 검색조건을 담은 객체 (exchange 필수)
+     * @return 페이징된 실패·중지 기록 응답 (사유 포함)
+     */
+    @GetMapping("/trades/failed")
+    public PageResponse<TradeHistoryResponse> getFailedTrades(
+            @AuthenticationPrincipal UserDTO user, TradeHistoryRequest request) {
+        return myPageService.getFailedTrades(user.getId(), request);
+    }
+
+    /**
+     * 선택한 실패·중지 기록을 삭제한다. (성공 거래는 ID가 섞여 와도 삭제하지 않음)
      *
      * @param request 삭제할 ID 목록과 거래 모드
      * @param user    인증된 사용자 정보

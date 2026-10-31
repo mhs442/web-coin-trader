@@ -79,6 +79,8 @@ public class AutoTradeController {
                                              @AuthenticationPrincipal UserDTO user) {
         TradeMode tradeMode = "sim".equalsIgnoreCase(mode) ? TradeMode.SIM : TradeMode.MAIN;
         ExchangeType exchangeType = ExchangeType.from(exchange);
+        // [사용자 정책 2026-10-30] 활성 큐는 삭제 불가 — 청산보다 먼저 검사 (활성 큐가 청산만 되는 일 방지)
+        patternQueueService.validateDeletable(user.getId(), id);
         // [사용자 정책 2026-10-29] 삭제 전 보유 포지션 청산 (실패 시 예외 → 삭제하지 않고 큐 유지)
         autoTradeService.closeQueuePosition(user.getId(), id);
         patternQueueService.deleteQueue(user.getId(), id);

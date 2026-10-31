@@ -118,6 +118,19 @@ class PatternQueueServiceUpdateTest {
     // ─────────────────────────────────────────────
 
     @Test
+    @DisplayName("updateQueue: 익절률이 음수면 INVALID_TAKE_PROFIT_RATE 예외")
+    void updateQueue_negativeTakeProfitRate_throws() {
+        PatternQueue existing = makeInactiveQueue(10L, 1L, "BTCUSDT", new BigDecimal("1.0"));
+        UpdatePatternRequest request = makeUpdateRequest(new BigDecimal("1.0"), 1);
+        request.getPatterns().get(0).setTakeProfitRate(new BigDecimal("-1"));
+        given(patternQueueRepository.findById(10L)).willReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> patternQueueService.updateQueue(1L, 10L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.INVALID_TAKE_PROFIT_RATE.getMessage());
+    }
+
+    @Test
     @DisplayName("updateQueue: 존재하지 않는 큐면 QUEUE_NOT_FOUND 예외")
     void updateQueue_notFound() {
         given(patternQueueRepository.findById(999L)).willReturn(Optional.empty());

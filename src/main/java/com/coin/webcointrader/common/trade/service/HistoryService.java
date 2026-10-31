@@ -146,7 +146,21 @@ public interface HistoryService {
      */
     List<TradeHistoryDTO> findTradesUpTo(Long patternId, Long userId, LocalDateTime upperBound);
 
-    /** 선택한 거래 히스토리를 삭제한다. (본인 데이터만) */
+    /**
+     * 마이페이지 실패·중지 기록(주문 실패 + 큐 중지)을 페이징 조회한다.
+     *
+     * @param userId       사용자 ID
+     * @param exchangeType 거래소 타입
+     * @param symbol       심볼 키워드 (부분일치, 비어 있으면 전체)
+     * @param start        조회 시작일시
+     * @param end          조회 종료일시
+     * @param pageable     페이징·정렬 조건
+     * @return 실패·중지 거래 히스토리 페이지 (사유는 errorMessage)
+     */
+    Page<TradeHistoryDTO> findFailedOrStoppedTrades(Long userId, ExchangeType exchangeType, String symbol,
+                                                    LocalDateTime start, LocalDateTime end, Pageable pageable);
+
+    /** 선택한 거래 히스토리 중 실패·중지 기록만 삭제한다. (본인 데이터만, 성공 거래는 유지) */
     void deleteTrades(List<Long> ids, Long userId);
 
     /** 사용자의 선택 거래소 전체 거래 히스토리를 삭제한다. (다른 거래소 데이터는 유지) */

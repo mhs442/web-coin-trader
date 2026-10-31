@@ -245,6 +245,42 @@ class AutoTradeControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    @DisplayName("POST /api/autotrade/patterns: 익절률이 음수면 400을 반환한다")
+    void addPattern_negativeTakeProfitRate_returns400() throws Exception {
+        mockMvc.perform(post("/api/autotrade/patterns")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                    "symbol": "BTCUSDT",
+                                    "exchangeType": "BYBIT",
+                                    "triggerRate": 1.0,
+                                    "patterns": [
+                                        {
+                                            "stepLevel": 1,
+                                            "amount": 10,
+                                            "leverage": 5,
+                                            "stopLossRate": 1.0,
+                                            "takeProfitRate": -2,
+                                            "conditionBlocks": ["LONG"],
+                                            "leafBlock": "LONG"
+                                        },
+                                        {
+                                            "stepLevel": 1,
+                                            "amount": 10,
+                                            "leverage": 5,
+                                            "stopLossRate": 1.0,
+                                            "conditionBlocks": ["SHORT"],
+                                            "leafBlock": "SHORT"
+                                        }
+                                    ]
+                                }
+                                """)
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(ExceptionMessage.INVALID_TAKE_PROFIT_RATE.getMessage()));
+    }
+
     // ─────────────────────────────────────────────
     // DELETE /api/autotrade/patterns/{id}
     // ─────────────────────────────────────────────
@@ -290,6 +326,24 @@ class AutoTradeControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("포지션 청산에 실패해 큐를 유지합니다: 청산 주문 실패"));
 
+        assertThat(patternQueueRepository.findById(q.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("DELETE /api/autotrade/patterns/{id}: 활성 큐는 400을 반환하고 청산·삭제 모두 하지 않는다")
+    void deletePattern_activeQueue_rejected() throws Exception {
+        PatternQueue active = makePatternQueue(USER_ID, "BTCUSDT");
+        active.setActive(true);
+        PatternQueue q = patternQueueRepository.save(active);
+
+        mockMvc.perform(delete("/api/autotrade/patterns/" + q.getId()).param("exchange", "BYBIT")
+                        .param("symbol", "BTCUSDT")
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(ExceptionMessage.QUEUE_ACTIVE_CANNOT_DELETE.getMessage()));
+
+        // 활성 여부 검사가 청산보다 먼저 — 포지션을 청산하지 않고 큐도 유지
+        verify(autoTradeService, never()).closeQueuePosition(USER_ID, q.getId());
         assertThat(patternQueueRepository.findById(q.getId())).isPresent();
     }
 

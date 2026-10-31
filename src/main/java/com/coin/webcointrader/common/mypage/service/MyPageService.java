@@ -96,6 +96,24 @@ public class MyPageService {
     }
 
     /**
+     * 사용자의 실패·중지 기록(주문 실패 + 큐 중지)을 페이징 조회한다.
+     * 성공 거래는 투자 상세에서 보이므로 제외하고, 화면에서 볼 수 없던 실패·중지 사유만 모아 보여준다.
+     *
+     * @param userId  사용자 ID
+     * @param request 검색조건을 담은 객체 (심볼·기간·정렬·페이지·모드·거래소)
+     * @return 페이징된 실패·중지 기록 응답 (사유 포함)
+     * @throws CustomException 거래소 미전달(EXCHANGE_TYPE_REQUIRED) 또는 지원하지 않는 거래소(INVALID_EXCHANGE_TYPE)
+     */
+    public PageResponse<TradeHistoryResponse> getFailedTrades(Long userId, TradeHistoryRequest request) {
+        ExchangeType exchangeType = ExchangeType.from(request.getExchange()); // 헤더에서 선택한 거래소만 조회
+        Pageable pageable = PageRequest.of(request.getPage(), request.getSize(), buildSort("createdAt", request.getSort()));
+
+        Page<TradeHistoryDTO> page = historyService(request.getMode()).findFailedOrStoppedTrades(
+                userId, exchangeType, request.getSymbol(), request.getStartDate(), request.getEndDate(), pageable);
+        return PageResponse.from(page, this::toTradeHistoryResponse);
+    }
+
+    /**
      * 투자 1건(investmentId)에 해당하는 거래 내역만 조회한다.
      *
      * <p>Pattern.id는 큐 사이클이 반복돼도 재사용되므로, 같은 패턴의 모든 거래를
@@ -359,7 +377,7 @@ public class MyPageService {
     /**
      * 손익 합계 + 승패 카운트로 합산 통계 응답을 생성한다.
      *
-     * @param pl 수익 합 / 손실 합
+     * @param pl 수익 합 / 손실 합 / 투입 금액 합
      * @param wl 승 / 패 / 전체 건수
      * @return 합산 통계 응답 DTO
      */
@@ -380,6 +398,7 @@ public class MyPageService {
                 .totalProfit(totalProfit.stripTrailingZeros().toPlainString())
                 .totalLoss(totalLoss.stripTrailingZeros().toPlainString())
                 .netTotal(netTotal.stripTrailingZeros().toPlainString())
+                .totalAmount(pl.getTotalAmount().stripTrailingZeros().toPlainString())
                 .totalCount(totalCount)
                 .winCount(winCount)
                 .winRate(winRate)
@@ -480,6 +499,27 @@ public class MyPageService {
                 .profitLoss(h.getProfitLoss().stripTrailingZeros().toPlainString())
                 .fundingFee(h.getFundingFee() != null ? h.getFundingFee().stripTrailingZeros().toPlainString() : null) // SIM은 null
                 .patternId(h.getPatternId())
+                .createdAt(h.getCreatedAt().format(DT_FMT))
+                .build();
+    }
+
+    /**
+     * TradeHistoryDTO → TradeHistoryResponse 변환 (실패·중지 기록)
+     *
+     * @param h 거래 히스토리 DTO
+     * @return 실패·중지 기록 응답 DTO
+     */
+    private TradeHistoryResponse toTradeHistoryResponse(TradeHistoryDTO h) {
+        return TradeHistoryResponse.builder()
+                .id(h.getId())
+                .symbol(h.getSymbol())
+                .side(h.getSide() != null ? h.getSide().name() : null)
+                .amount(h.getAmount() != null ? h.getAmount().stripTrailingZeros().toPlainString() : null)
+                .executedPrice(h.getExecutedPrice() != null ? h.getExecutedPrice().stripTrailingZeros().toPlainString() : null)
+                .fee(h.getFee() != null ? h.getFee().stripTrailingZeros().toPlainString() : null)
+                .orderType(h.getOrderType())
+                .orderStatus(h.getOrderResult().name())
+                .errorMessage(h.getErrorMessage())
                 .createdAt(h.getCreatedAt().format(DT_FMT))
                 .build();
     }

@@ -107,6 +107,8 @@ class InvestmentHistoryRepositoryTest {
     private void assertSum(List<Object[]> rows) {
         assertThat((BigDecimal) rows.get(0)[0]).isEqualByComparingTo("10");
         assertThat((BigDecimal) rows.get(0)[1]).isEqualByComparingTo("-3");
+        // 투입 금액(마진) 합: 선택 거래소 2건 × 100 (다른 거래소 100은 제외)
+        assertThat((BigDecimal) rows.get(0)[2]).isEqualByComparingTo("200");
     }
 
     /** 승 1, 패 1, 전체 2 */

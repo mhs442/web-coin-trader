@@ -156,7 +156,7 @@ class SimHistoryServiceTest {
     void aggregates_mapToDto() {
         // given
         given(simInvestmentHistoryRepository.sumProfitLossByUserIdAndCreatedAtBetweenAndSymbol(USER_ID, EX, START, END, "BTC"))
-                .willReturn(List.<Object[]>of(new Object[]{new BigDecimal("4"), new BigDecimal("-2")}));
+                .willReturn(List.<Object[]>of(new Object[]{new BigDecimal("4"), new BigDecimal("-2"), new BigDecimal("40")}));
         given(simInvestmentHistoryRepository.countWinLoss(USER_ID, EX, START, END))
                 .willReturn(List.<Object[]>of(new Object[]{1L, 2L, 3L}));
 
@@ -167,6 +167,7 @@ class SimHistoryServiceTest {
         // then
         assertThat(sum.getTotalProfit()).isEqualByComparingTo("4");
         assertThat(sum.getTotalLoss()).isEqualByComparingTo("-2");
+        assertThat(sum.getTotalAmount()).isEqualByComparingTo("40");
         assertThat(wl.getWinCount()).isEqualTo(1);
         assertThat(wl.getLossCount()).isEqualTo(2);
         assertThat(wl.getTotalCount()).isEqualTo(3);
@@ -201,6 +202,49 @@ class SimHistoryServiceTest {
     }
 
     @Test
+    @DisplayName("findFailedOrStoppedTrades: 빈 심볼은 null(전체)로 넘기고, 실패·중지 기록을 사유와 함께 DTO로 변환한다")
+    void findFailedOrStoppedTrades_mapsWithReason() {
+        // given
+        SimTradeHistory e = new SimTradeHistory();
+        e.setExchangeType(EX);
+        e.setUserId(USER_ID);
+        e.setSymbol("BTCUSDT");
+        e.setSide(Side.LONG);
+        e.setAmount(new BigDecimal("100"));
+        e.setExecutedPrice(BigDecimal.ZERO);
+        e.setOrderType("entry");
+        e.setOrderResult(OrderResult.FAILED);
+        e.setErrorMessage("잔고 부족");
+        ReflectionTestUtils.setField(e, "createdAt", START);
+        Pageable pageable = PageRequest.of(0, 20);
+        given(simTradeHistoryRepository.findFailedOrStopped(USER_ID, EX, null, START, END, pageable))
+                .willReturn(new PageImpl<>(List.of(e), pageable, 1));
+
+        // when - 공백 심볼
+        Page<TradeHistoryDTO> result = service.findFailedOrStoppedTrades(USER_ID, EX, "  ", START, END, pageable);
+
+        // then
+        assertThat(result.getContent()).hasSize(1);
+        assertThat(result.getContent().get(0).getOrderResult()).isEqualTo(OrderResult.FAILED);
+        assertThat(result.getContent().get(0).getErrorMessage()).isEqualTo("잔고 부족");
+    }
+
+    @Test
+    @DisplayName("findFailedOrStoppedTrades: 심볼 키워드가 있으면 그대로 Repository에 넘긴다")
+    void findFailedOrStoppedTrades_passesSymbol() {
+        // given
+        Pageable pageable = PageRequest.of(0, 20);
+        given(simTradeHistoryRepository.findFailedOrStopped(USER_ID, EX, "btc", START, END, pageable))
+                .willReturn(Page.empty(pageable));
+
+        // when
+        Page<TradeHistoryDTO> result = service.findFailedOrStoppedTrades(USER_ID, EX, "btc", START, END, pageable);
+
+        // then
+        assertThat(result.getContent()).isEmpty();
+    }
+
+    @Test
     @DisplayName("삭제 메서드는 각 Repository 삭제로 위임한다")
     void delete_delegatesToRepositories() {
         // when
@@ -210,7 +254,7 @@ class SimHistoryServiceTest {
         service.deleteAllInvestments(USER_ID, EX);
 
         // then
-        then(simTradeHistoryRepository).should().deleteAllByIdInAndUserId(List.of(1L), USER_ID);
+        then(simTradeHistoryRepository).should().deleteFailedOrStoppedByIdInAndUserId(List.of(1L), USER_ID);
         then(simTradeHistoryRepository).should().deleteAllByUserIdAndExchangeType(USER_ID, EX);
         then(simInvestmentHistoryRepository).should().deleteAllByIdInAndUserId(List.of(2L), USER_ID);
         then(simInvestmentHistoryRepository).should().deleteAllByUserIdAndExchangeType(USER_ID, EX);

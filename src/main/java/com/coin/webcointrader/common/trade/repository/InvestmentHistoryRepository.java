@@ -52,11 +52,12 @@ public interface InvestmentHistoryRepository extends JpaRepository<InvestmentHis
      * @param exchangeType 거래소 타입
      * @param start  조회 시작일시
      * @param end    조회 종료일시
-     * @return List containing single Object[] { totalProfit, totalLoss }
+     * @return List containing single Object[] { totalProfit, totalLoss, totalAmount }
      */
     @Query("SELECT " +
             "COALESCE(SUM(CASE WHEN h.profitLoss > 0 THEN h.profitLoss ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN h.profitLoss < 0 THEN h.profitLoss ELSE 0 END), 0) " +
+            "COALESCE(SUM(CASE WHEN h.profitLoss < 0 THEN h.profitLoss ELSE 0 END), 0), " +
+            "COALESCE(SUM(h.amount), 0) " +   // 투입 금액(마진) 합 — 요약 카드 '총 투자금'용
             "FROM InvestmentHistory h " +
             "WHERE h.userId = :userId AND h.exchangeType = :exchangeType AND h.createdAt BETWEEN :start AND :end")
     List<Object[]> sumProfitLossByUserIdAndCreatedAtBetween(
@@ -74,11 +75,12 @@ public interface InvestmentHistoryRepository extends JpaRepository<InvestmentHis
      * @param start  조회 시작일시
      * @param end    조회 종료일시
      * @param symbol 코인 심볼 (LIKE 패턴)
-     * @return List containing single Object[] { totalProfit, totalLoss }
+     * @return List containing single Object[] { totalProfit, totalLoss, totalAmount }
      */
     @Query("SELECT " +
             "COALESCE(SUM(CASE WHEN h.profitLoss > 0 THEN h.profitLoss ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN h.profitLoss < 0 THEN h.profitLoss ELSE 0 END), 0) " +
+            "COALESCE(SUM(CASE WHEN h.profitLoss < 0 THEN h.profitLoss ELSE 0 END), 0), " +
+            "COALESCE(SUM(h.amount), 0) " +   // 투입 금액(마진) 합 — 요약 카드 '총 투자금'용
             "FROM InvestmentHistory h " +
             "WHERE h.userId = :userId AND h.exchangeType = :exchangeType AND h.createdAt BETWEEN :start AND :end " +
             "AND UPPER(h.symbol) LIKE UPPER(CONCAT('%', :symbol, '%'))")

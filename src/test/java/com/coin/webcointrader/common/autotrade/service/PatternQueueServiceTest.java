@@ -245,6 +245,28 @@ class PatternQueueServiceTest {
     }
 
     @Test
+    @DisplayName("addQueue: 익절률이 0이면 INVALID_TAKE_PROFIT_RATE 예외")
+    void addQueue_zeroTakeProfitRate_throws() {
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.getPatterns().get(0).setTakeProfitRate(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.INVALID_TAKE_PROFIT_RATE.getMessage());
+    }
+
+    @Test
+    @DisplayName("addQueue: 익절률이 음수면 INVALID_TAKE_PROFIT_RATE 예외")
+    void addQueue_negativeTakeProfitRate_throws() {
+        AddPatternRequest request = makeFullRequest("BTCUSDT");
+        request.getPatterns().get(0).setTakeProfitRate(new BigDecimal("-1.5"));
+
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.INVALID_TAKE_PROFIT_RATE.getMessage());
+    }
+
+    @Test
     @DisplayName("addQueue: 단계 번호(stepLevel)가 없으면 CustomException 발생")
     void addQueue_nullStepLevel() {
         // given
@@ -327,7 +349,7 @@ class PatternQueueServiceTest {
         // when & then
         assertThatThrownBy(() -> patternQueueService.addQueue(userId, request))
                 .isInstanceOf(CustomException.class)
-                .hasMessageContaining("금액");
+                .hasMessageContaining("투자금");
     }
 
     @Test
@@ -948,6 +970,53 @@ class PatternQueueServiceTest {
         pattern.setConditionBlocks(List.of("SHORT"));
         pattern.setLeafBlock("SHORT");
         return pattern;
+    }
+
+    // ─────────────────────────────────────────────
+    // 큐 삭제 (활성 큐 삭제 금지)
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("validateDeletable: 활성 큐면 QUEUE_ACTIVE_CANNOT_DELETE 예외")
+    void validateDeletable_activeQueue_throws() {
+        // given
+        PatternQueue queue = makePatternQueue(10L, 1L, "BTCUSDT");
+        queue.setActive(true);
+        given(patternQueueRepository.findById(10L)).willReturn(java.util.Optional.of(queue));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.validateDeletable(1L, 10L))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.QUEUE_ACTIVE_CANNOT_DELETE.getMessage());
+    }
+
+    @Test
+    @DisplayName("deleteQueue: 활성 큐는 삭제하지 않고 예외")
+    void deleteQueue_activeQueue_notDeleted() {
+        // given
+        PatternQueue queue = makePatternQueue(10L, 1L, "BTCUSDT");
+        queue.setActive(true);
+        given(patternQueueRepository.findById(10L)).willReturn(java.util.Optional.of(queue));
+
+        // when & then
+        assertThatThrownBy(() -> patternQueueService.deleteQueue(1L, 10L))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.QUEUE_ACTIVE_CANNOT_DELETE.getMessage());
+        then(patternQueueRepository).should(never()).delete(any(PatternQueue.class));
+    }
+
+    @Test
+    @DisplayName("deleteQueue: 비활성 큐는 삭제한다")
+    void deleteQueue_inactiveQueue_deleted() {
+        // given
+        PatternQueue queue = makePatternQueue(10L, 1L, "BTCUSDT");
+        given(patternQueueRepository.findById(10L)).willReturn(java.util.Optional.of(queue));
+
+        // when
+        patternQueueService.deleteQueue(1L, 10L);
+
+        // then
+        then(patternQueueRepository).should().delete(queue);
     }
 
     /**
