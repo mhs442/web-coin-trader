@@ -1498,9 +1498,9 @@ class AutoTradeServiceTest {
             assertThat(orderCaptor.getAllValues().get(0).getSide()).isEqualTo(OrderSide.SELL);
         }
 
-        // ── 투자금 기준 TP/SL + 거래소 안전망 TP/SL ──
+        // ── 가격 기준 TP/SL + 거래소 안전망 TP/SL ──
 
-        /** 큐의 첫 패턴에 익절/손절률(투자금 기준 %) 설정 */
+        /** 큐의 첫 패턴에 익절/손절률(가격 변동 기준 %) 설정 */
         private void setRates(PatternQueue queue, String tpRate, String slRate) {
             Pattern pattern = queue.getPatterns().get(0);
             pattern.setTakeProfitRate(tpRate != null ? new BigDecimal(tpRate) : null);
@@ -1516,10 +1516,10 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("익절/손절률은 투자금 기준 — 10배, 익절 50% / 손절 30% → 가격 +5% / -3%")
-        void tpSlRatesAreRoiBased() {
+        @DisplayName("[사용자 정책 2026-10-31] 익절/손절률은 가격 변동 기준 — 10배, 익절 5% / 손절 3% → 가격 +5% / -3%")
+        void tpSlRatesArePriceBased() {
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            setRates(queue, "50", "30");
+            setRates(queue, "5", "3");
             QueueStateDTO state = leafReadyState();
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
             given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
@@ -1605,9 +1605,9 @@ class AutoTradeServiceTest {
         @Test
         @DisplayName("손절률이 강제청산 한도를 넘는 기존 패턴은 거래소 SL만 빼고 진입한다 (TP는 유지)")
         void stopLossOverLimit_omitsExchangeSlOnly() {
-            // 10배 한도 85% → 손절 90%는 초과
+            // 10배 한도 가격 8.5% → 손절 9%는 초과
             PatternQueue queue = makePatternQueueWithLeverage(1L, 1L, "BTCUSDT", Side.LONG, 10);
-            setRates(queue, null, "90");
+            setRates(queue, null, "9");
             QueueStateDTO state = leafReadyState();
             AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
             given(marketService.convertUsdtToQty(any(), any(), any(), any())).willReturn("0.002");
@@ -2092,13 +2092,13 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("매도: 투자 이력의 익절/손절 예상가도 투자금 기준으로 계산한다")
-        void sell_expectedPricesAreRoiBased() {
+        @DisplayName("매도: 투자 이력의 익절/손절 예상가도 가격 변동 기준으로 계산한다")
+        void sell_expectedPricesArePriceBased() {
             PatternQueue queue = makeBothPatternQueueWithLeverage(1L, 1L, "BTCUSDT", 10);
-            // 10배, 익절 50% / 손절 30% → 진입가 50000 기준 52500 / 48500
+            // 10배, 익절 가격 5% / 손절 가격 3% → 진입가 50000 기준 52500 / 48500
             queue.getPatterns().forEach(p -> {
-                p.setTakeProfitRate(new BigDecimal("50"));
-                p.setStopLossRate(new BigDecimal("30"));
+                p.setTakeProfitRate(new BigDecimal("5"));
+                p.setStopLossRate(new BigDecimal("3"));
             });
             QueueStateDTO state = holdingState(Side.LONG,
                     new BigDecimal("52500"), new BigDecimal("48500"));
@@ -3655,21 +3655,23 @@ class AutoTradeServiceTest {
         }
 
         @Test
-        @DisplayName("보유 중 거래량이 진입 기준의 1.5배 이상으로 늘면 급증 중지를 예약한다")
-        void surge_reservesStop() {
-            PatternQueue queue = enabledQueue();
-            QueueStateDTO state = holding(Side.LONG, 100.0);
-            AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
-            givenVolume24h("150");
+        @DisplayName("[사용자 정책 2026-10-31] 거래량이 진입 기준의 1.5배 이상으로 늘어도 예약하지 않는다 (감소만 판정)")
+        void surge_noReservation() {
+            for (String volume : new String[]{"150", "300"}) {
+                PatternQueue queue = enabledQueue();
+                QueueStateDTO state = holding(Side.LONG, 100.0);
+                AutoTradeSessionDTO session = makeSession(1L, "BTCUSDT", queue);
+                givenVolume24h(volume);
 
-            autoTradeService.processPositionHolding(queue, state, session, "51000.00");
+                autoTradeService.processPositionHolding(queue, state, session, "51000.00");
 
-            then(patternQueueRepository).should().updateVolumeStopReason(eq(1L),
-                    argThat(r -> r.startsWith("[거래량 급증 중지]") && r.contains("100 → 150 (+50%)")));
+                assertThat(queue.getVolumeStopReason()).isNull();
+            }
+            then(patternQueueRepository).should(never()).updateVolumeStopReason(any(), any());
         }
 
         @Test
-        @DisplayName("0.5배 초과 ~ 1.5배 미만이면 예약하지 않는다")
+        @DisplayName("0.5배 초과면 예약하지 않는다")
         void withinRange_noReservation() {
             PatternQueue queue = enabledQueue();
             QueueStateDTO state = holding(Side.LONG, 100.0);

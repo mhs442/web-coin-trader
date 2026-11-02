@@ -12,14 +12,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TradeCalculatorTest {
 
     @Nested
-    @DisplayName("resolveRoiRate (투자금 기준 비율 결정)")
+    @DisplayName("resolveRoiRate (가격 기준 입력 → 투자금 기준 비율 환산)")
     class ResolveRoiRateTest {
 
         @Test
-        @DisplayName("입력값이 있으면 그대로 투자금 기준 비율로 사용한다")
-        void returnsInputAsIs() {
-            assertThat(TradeCalculator.resolveRoiRate(new BigDecimal("50"), 10))
+        @DisplayName("[사용자 정책 2026-10-31] 입력값은 가격 변동률 — 레버리지를 곱해 투자금 기준으로 환산한다 (10배, 가격 5% → 50%)")
+        void convertsPriceRateToRoi() {
+            assertThat(TradeCalculator.resolveRoiRate(new BigDecimal("5"), 10))
                     .isEqualByComparingTo("50");
+            // 20배, 익절 가격 1.3% → 투자금 26%
+            assertThat(TradeCalculator.resolveRoiRate(new BigDecimal("1.3"), 20))
+                    .isEqualByComparingTo("26");
         }
 
         @Test
@@ -119,6 +122,22 @@ class TradeCalculatorTest {
         void withinLimit() {
             assertThat(TradeCalculator.isStopLossWithinLimit(new BigDecimal("85"), 10)).isTrue();
             assertThat(TradeCalculator.isStopLossWithinLimit(new BigDecimal("85.1"), 10)).isFalse();
+        }
+
+        @Test
+        @DisplayName("가격 기준 입력값을 환산해 판정한다 — 20배는 가격 3.5%까지 허용, 4%는 초과")
+        void priceRateLimit() {
+            assertThat(TradeCalculator.isStopLossWithinLimit(TradeCalculator.resolveRoiRate(new BigDecimal("3.5"), 20), 20)).isTrue();
+            assertThat(TradeCalculator.isStopLossWithinLimit(TradeCalculator.resolveRoiRate(new BigDecimal("4"), 20), 20)).isFalse();
+        }
+
+        @Test
+        @DisplayName("가격 기준 손절률 최대 = 100 ÷ 레버리지 - 1.5 (소수 2자리 내림)")
+        void maxPriceRateByLeverage() {
+            assertThat(TradeCalculator.maxStopLossPriceRate(10)).isEqualByComparingTo("8.5");
+            assertThat(TradeCalculator.maxStopLossPriceRate(20)).isEqualByComparingTo("3.5");
+            assertThat(TradeCalculator.maxStopLossPriceRate(30)).isEqualByComparingTo("1.83");
+            assertThat(TradeCalculator.maxStopLossPriceRate(67).signum()).isNegative();
         }
 
         @Test

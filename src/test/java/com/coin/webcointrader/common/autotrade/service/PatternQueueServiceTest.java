@@ -384,9 +384,9 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("addQueue: 손절률이 한도와 같으면 통과한다 (10배 → 최대 85%)")
+    @DisplayName("addQueue: 손절률(가격 기준)이 한도와 같으면 통과한다 (10배 → 최대 가격 8.5%)")
     void addQueue_stopLossAtLimit() {
-        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, "85");
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, "8.5");
         given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(1L, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
         given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
 
@@ -394,11 +394,25 @@ class PatternQueueServiceTest {
     }
 
     @Test
-    @DisplayName("addQueue: 손절률이 강제청산 한도를 넘으면 CustomException 발생 (10배, 86%)")
+    @DisplayName("addQueue: 손절률이 강제청산 한도를 넘으면 CustomException 발생 (10배, 가격 8.6%)")
     void addQueue_stopLossOverLimit() {
-        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, "86");
+        AddPatternRequest request = makeRequestWithLeverageAndStopLoss(10, "8.6");
 
         assertThatThrownBy(() -> patternQueueService.addQueue(1L, request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining("강제청산");
+    }
+
+    @Test
+    @DisplayName("[사용자 정책 2026-10-31] addQueue: 20배는 가격 기준 손절 3.5%까지 통과, 4%는 강제청산 한도 초과")
+    void addQueue_stopLossPriceBasedLimit_20x() {
+        AddPatternRequest atLimit = makeRequestWithLeverageAndStopLoss(20, "3.5");
+        given(patternQueueRepository.countByUserIdAndSymbolAndTradeModeAndExchangeType(1L, "BTCUSDT", TradeMode.MAIN, ExchangeType.BYBIT)).willReturn(0L);
+        given(patternQueueRepository.save(any(PatternQueue.class))).willAnswer(inv -> inv.getArgument(0));
+        assertThat(patternQueueService.addQueue(1L, atLimit)).isNotNull();
+
+        AddPatternRequest over = makeRequestWithLeverageAndStopLoss(20, "4");
+        assertThatThrownBy(() -> patternQueueService.addQueue(1L, over))
                 .isInstanceOf(CustomException.class)
                 .hasMessageContaining("강제청산");
     }

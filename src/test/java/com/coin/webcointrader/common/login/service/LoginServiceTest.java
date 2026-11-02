@@ -184,6 +184,38 @@ class LoginServiceTest {
         then(exchangeKeyRegisterService).should().saveKey(1L, ExchangeType.BYBIT, "apiKey", "apiSecret");
     }
 
+    @Test
+    @DisplayName("signup: API Key·Secret을 모두 비우면 키 등록 없이 가입하고 모의 지갑만 만든다")
+    void signup_withoutApiKey() {
+        SignupRequest request = makeRequest("tester", "01012345678",
+                "password1!", "password1!", "", "  ");
+        given(loginRepository.findByPhoneNumber("01012345678")).willReturn(Optional.empty());
+        given(loginRepository.save(any(User.class))).willAnswer(inv -> {
+            User saved = inv.getArgument(0);
+            saved.setId(1L);
+            return saved;
+        });
+
+        loginService.signup(request);
+
+        then(exchangeKeyRegisterService).shouldHaveNoInteractions();
+        then(simWalletService).should().createWallet(1L);
+    }
+
+    @Test
+    @DisplayName("signup: API Key·Secret 중 하나만 입력하면 사용자 저장 없이 CustomException(API_KEY_PAIR_REQUIRED) 발생")
+    void signup_apiKeyWithoutSecret() {
+        SignupRequest request = makeRequest("tester", "01012345678",
+                "password1!", "password1!", "apiKey", "");
+        given(loginRepository.findByPhoneNumber("01012345678")).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> loginService.signup(request))
+                .isInstanceOf(CustomException.class)
+                .hasMessageContaining(ExceptionMessage.API_KEY_PAIR_REQUIRED.getMessage());
+        then(loginRepository).should(never()).save(any(User.class));
+        then(exchangeKeyRegisterService).shouldHaveNoInteractions();
+    }
+
     // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────

@@ -3053,3 +3053,130 @@ input.is-invalid {
     left: auto;
     right: -8px;
 }
+
+/* ===== 토스트 알림 (alert 대체) ===== */
+.toast-container {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 10000;                /* 모달 위에 표시 */
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(380px, calc(100vw - 32px));
+}
+.toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    border-left: 4px solid #2196f3;
+    background: #fff;
+    color: #222;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.toast-message {
+    flex: 1;
+    white-space: pre-line;         /* \n 줄바꿈 유지 */
+    word-break: break-word;
+}
+.toast-close {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0;
+    line-height: 1.5;
+}
+.toast-close:hover { color: #222; }
+.toast-success { border-left-color: #4caf50; }
+.toast-info    { border-left-color: #2196f3; }
+.toast-warn    { border-left-color: #ff9800; }
+.toast-error   { border-left-color: #f44336; background: #fff5f5; }
+
+/* ===== 회원가입 입력 안내 ===== */
+.auth-hint {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #888;
+}
+.auth-hint:empty { display: none; }
+.auth-hint-ok    { color: #2e7d32; }
+.auth-hint-error { color: #c62828; }
+
+/* ===== 키보드 포커스 표시 (마우스 클릭에는 표시하지 않음) ===== */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input[type="checkbox"]:focus-visible {
+    outline: 2px solid #4285f4;
+    outline-offset: 2px;
+}
+
+/* =====================================================
+   반응형 — 노트북 폭 대응 (모바일은 대상 아님)
+   ===================================================== */
+
+/* 1200px 이하: 큐 등록/수정 모달의 단계 구성 패널을 단계 목록 아래로 내림 (600px 고정 폭으로 좌측이 눌리는 문제) */
+@media (max-width: 1200px) {
+    .queue-modal-split {
+        flex-direction: column;
+        overflow-y: auto;          /* 세로로 쌓이면 분할 영역 전체가 한 번에 스크롤 */
+    }
+    .queue-modal-split > .import-modal-body,
+    .queue-modal-split > .step-builder-panel {
+        flex: none;
+        overflow-y: visible;
+    }
+    .step-builder-panel {
+        width: auto;
+        border-left: none;
+        border-top: 1px solid #dee2e6;
+    }
+}
+
+/* 1024px 이하: 차트 페이지 우측 큐 패널을 차트 아래로, 헤더 항목은 줄바꿈 허용 */
+@media (max-width: 1024px) {
+    .trade-layout-container {
+        flex-direction: column;
+        overflow-y: auto;          /* 세로로 쌓인 차트 + 큐 패널을 함께 스크롤 */
+    }
+    .main-content {
+        flex: none;
+        overflow-y: visible;
+    }
+    .side-panel {
+        width: auto;
+        min-width: 0;
+        border-left: none;
+        border-top: 1px solid #dee2e6;
+    }
+    .wallet-header {
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 8px 16px;
+    }
+}
+
+/* ── 마이페이지 큐 가져오기(동기화) ── */
+.sync-queue-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.sync-queue-actions .filter-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sync-exists-note {
+    margin-left: 4px;
+    font-size: 0.75rem;
+    color: #868e96;
+}

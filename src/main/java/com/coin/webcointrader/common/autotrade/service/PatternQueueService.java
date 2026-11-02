@@ -543,7 +543,7 @@ public class PatternQueueService {
         if (pattern.getLeverage() == null || pattern.getLeverage() <= 0) {
             throw new CustomException(ExceptionMessage.INVALID_LEVERAGE);
         }
-        // 손절율 0% 초과 100% 미만 검증 — 투자금 기준이므로 100% 이상이면 전액 손실
+        // 손절율 0% 초과 100% 미만 검증 — 가격 변동 기준 (실제 상한은 아래 강제청산 한도에서 레버리지별로 제한)
         if (pattern.getStopLossRate() != null) {
             if (pattern.getStopLossRate().compareTo(BigDecimal.ZERO) <= 0
                     || pattern.getStopLossRate().compareTo(BigDecimal.valueOf(100)) >= 0) {
@@ -555,7 +555,7 @@ public class PatternQueueService {
             throw new CustomException(ExceptionMessage.INVALID_TAKE_PROFIT_RATE);
         }
         // 손절률 강제청산 한도 검증 — 거래소 안전망 손절(+0.5%p)이 강제청산가보다 안쪽이어야 함
-        // 미입력이면 기본값(가격 8%)을 투자금 기준으로 환산해 검사
+        // 입력값(가격 기준)·미입력 기본값(가격 8%) 모두 투자금 기준으로 환산해 검사
         BigDecimal resolvedStopLoss = TradeCalculator.resolveRoiRate(pattern.getStopLossRate(), pattern.getLeverage());
         if (!TradeCalculator.isStopLossWithinLimit(resolvedStopLoss, pattern.getLeverage())) {
             throw new CustomException(pattern.getStopLossRate() == null

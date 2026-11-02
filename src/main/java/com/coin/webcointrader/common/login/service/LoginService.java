@@ -13,6 +13,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 /**
  * Spring Security 사용자 인증 서비스.
@@ -50,12 +51,14 @@ public class LoginService implements UserDetailsService {
     /**
      * 회원가입을 처리한다.
      * 비밀번호 일치 확인 → 전화번호 중복 확인 → 거래소 확인 → 사용자 저장 → 거래소 API Key 등록 순서로 진행된다.
+     * API Key·Secret은 선택 입력이다. 둘 다 비우면 키 등록 없이 가입(모의투자 전용)하고, 하나만 입력하면 거부한다.
      * 비밀번호는 BCrypt로 해싱하고, API Key 검증·암호화·저장은 {@link ExchangeKeyRegisterService}에 위임한다.
      * 키 검증이 실패하면 예외로 트랜잭션이 롤백되어 사용자도 저장되지 않는다.
      *
      * @param request 회원가입 요청 (username, phoneNumber, password, passwordConfirm,
-     *                apiKey, apiSecret, exchangeType 포함; exchangeType 필수)
+     *                apiKey, apiSecret, exchangeType 포함; exchangeType 필수, apiKey·apiSecret 선택)
      * @throws CustomException 비밀번호 불일치(PASSWORD_MISMATCH), 전화번호 중복(DUPLICATE_PHONE_NUMBER),
+     *                         API Key·Secret 중 하나만 입력(API_KEY_PAIR_REQUIRED),
      *                         미지원 거래소(INVALID_EXCHANGE_TYPE), API Key 무효(INVALID_API_KEY) 시 예외 발생
      */
     @Transactional
@@ -73,6 +76,13 @@ public class LoginService implements UserDetailsService {
         // 3. 거래소 확인 (미입력이면 EXCHANGE_TYPE_REQUIRED, 미지원 값이면 INVALID_EXCHANGE_TYPE) — 사용자 저장 전에 판별
         ExchangeType exchangeType = ExchangeType.from(request.getExchangeType());
 
+        // [사용자 정책 2026-10-31] API Key는 선택 입력 — 둘 다 비우면 모의투자 전용 가입, 하나만 입력하면 거부 (사용자 저장 전에 판별)
+        boolean hasApiKey = StringUtils.hasText(request.getApiKey());
+        boolean hasApiSecret = StringUtils.hasText(request.getApiSecret());
+        if (hasApiKey != hasApiSecret) {
+            throw new CustomException(ExceptionMessage.API_KEY_PAIR_REQUIRED);
+        }
+
         // 4. User 저장 (비밀번호 BCrypt 해싱) — API Key는 UserExchangeKey로 분리 저장
         User user = new User();
         user.setUsername(request.getUsername());
@@ -83,7 +93,10 @@ public class LoginService implements UserDetailsService {
         loginRepository.save(user);
 
         // 5. 거래소 API Key 검증 후 암호화 저장 (실패 시 INVALID_API_KEY → 사용자 저장까지 롤백)
-        exchangeKeyRegisterService.saveKey(user.getId(), exchangeType, request.getApiKey(), request.getApiSecret());
+        //    키를 입력하지 않은 경우 건너뜀 — 마이페이지에서 나중에 등록
+        if (hasApiKey) {
+            exchangeKeyRegisterService.saveKey(user.getId(), exchangeType, request.getApiKey(), request.getApiSecret());
+        }
 
         // 6. 모의투자 가상 지갑 생성 (기본 잔고 10,000 USDT)
         simWalletService.createWallet(user.getId());

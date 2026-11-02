@@ -98,7 +98,7 @@
         <div class="import-modal-box queue-modal-box">
             <div class="import-modal-header">
                 <h3>큐 등록 <span class="context-badge" data-context-badge></span></h3>
-                <button class="import-modal-close" onclick="requestCloseRegisterQueueModal()">✕</button>
+                <button class="import-modal-close" aria-label="닫기" onclick="requestCloseRegisterQueueModal()">✕</button>
             </div>
             <!-- 좌: 큐 설정 + 단계 목록 / 우: 단계 구성 패널 (+ 클릭 시 표시) -->
             <div class="queue-modal-split">
@@ -124,7 +124,7 @@
                             <span class="toggle-slider"></span>
                         </label>
                         <label for="volume-stop-toggle" class="toggle-label">오토스탑 모드</label>
-                        <span class="help-badge" data-tip="진입 시점 대비 24시간 거래량이 절반 이하 또는 1.5배 이상이 되면, 현재 단계를 마친 뒤 큐를 중지합니다.">?</span>
+                        <span class="help-badge" data-tip="진입 시점 대비 24시간 거래량이 절반 이하로 줄면, 현재 단계를 마친 뒤 큐를 중지합니다.">?</span>
                     </div>
                 </div>
                 <!-- 구성 요약 (단계 수 · 금액/레버리지 범위) -->
@@ -149,7 +149,7 @@
         <div class="import-modal-box queue-modal-box">
             <div class="import-modal-header">
                 <h3>큐 수정 <span class="context-badge" data-context-badge></span></h3>
-                <button class="import-modal-close" onclick="requestCancelEditQueue()">✕</button>
+                <button class="import-modal-close" aria-label="닫기" onclick="requestCancelEditQueue()">✕</button>
             </div>
             <!-- 좌: 큐 설정 + 단계 목록 / 우: 단계 구성 패널 (+ 클릭 시 표시) -->
             <div class="queue-modal-split">
@@ -175,7 +175,7 @@
                             <span class="toggle-slider"></span>
                         </label>
                         <label for="edit-volume-stop-toggle" class="toggle-label">오토스탑 모드</label>
-                        <span class="help-badge" data-tip="진입 시점 대비 24시간 거래량이 절반 이하 또는 1.5배 이상이 되면, 현재 단계를 마친 뒤 큐를 중지합니다.">?</span>
+                        <span class="help-badge" data-tip="진입 시점 대비 24시간 거래량이 절반 이하로 줄면, 현재 단계를 마친 뒤 큐를 중지합니다.">?</span>
                     </div>
                 </div>
                 <!-- 구성 요약 (단계 수 · 금액/레버리지 범위) -->
@@ -200,7 +200,7 @@
     <div id="step-builder-panel" class="step-builder-panel" style="display:none;">
         <div class="step-builder-header">
             <span id="step-builder-title" class="builder-label">1단계 추가</span>
-            <button class="import-modal-close" onclick="closeStepBuilder()">✕</button>
+            <button class="import-modal-close" aria-label="닫기" onclick="closeStepBuilder()">✕</button>
         </div>
         <div class="slot-grid">
             <div id="slot-LONG" class="pattern-slot" data-side="LONG"></div>
@@ -988,9 +988,12 @@
         const LIQUIDATION_MARGIN_RATE = 1;     // 강제청산 여유분 (가격 %p, 유지증거금 근사)
         const DEFAULT_PRICE_RATE = 8;          // 손절/익절 미입력 시 기본값 (가격 %)
 
-        /** 레버리지별 손절률 최대값 (투자금 기준 %) = 100 - 1.5 × 레버리지 */
+        /**
+         * 레버리지별 손절률 최대값 (가격 변동 기준 %) = 100 ÷ 레버리지 - 1.5, 소수 2자리 내림
+         * [사용자 정책 2026-10-31] 익절/손절 입력값은 가격 변동률 기준
+         */
         function maxStopLossRate(lev) {
-            return 100 - (EXCHANGE_TPSL_BUFFER_RATE + LIQUIDATION_MARGIN_RATE) * lev;
+            return Math.floor((100 / lev - (EXCHANGE_TPSL_BUFFER_RATE + LIQUIDATION_MARGIN_RATE)) * 100) / 100;
         }
 
         /** 손절 설정 가능한 최대 레버리지 (손절률 최대값이 0보다 커야 함) */
@@ -1015,8 +1018,8 @@
                 return '레버리지 ' + lev + '배에서 손절률은 최대 ' + max + '%까지 설정할 수 있습니다.\n'
                     + '(거래소 안전 손절이 강제청산보다 먼저 발동되도록 하기 위함)';
             }
-            // 미입력 시 기본값(가격 8% = 투자금 8 × 레버리지 %)이 한도 초과
-            if (!stopLoss && DEFAULT_PRICE_RATE * lev > max) {
+            // 미입력 시 기본값(가격 8%)이 한도 초과
+            if (!stopLoss && DEFAULT_PRICE_RATE > max) {
                 return '레버리지 ' + lev + '배에서는 손절률을 입력해주세요. (최대 ' + max + '%)\n'
                     + '(미입력 시 기본 손절인 가격 ' + DEFAULT_PRICE_RATE + '%가 강제청산 한도를 넘습니다)';
             }
@@ -1024,8 +1027,8 @@
         }
 
         /** 손절 ? 뱃지 설명 (레버리지별 최대값은 손절 입력칸 placeholder로 표시) */
-        const STOP_LOSS_HELP = '손절/익절률은 투자금 기준입니다 (예: 손절 50% → 투자금 절반 손실 시 청산). '
-            + '서버 장애에 대비해 거래소에도 가격 기준 ' + EXCHANGE_TPSL_BUFFER_RATE + '% 더 바깥에 안전 손절/익절이 함께 설정됩니다. '
+        const STOP_LOSS_HELP = '손절/익절률은 가격 변동 기준입니다 (예: 10배, 손절 3% → 가격 3% 하락 시 청산, 투자금 30% 손실). '
+            + '서버 장애에 대비해 거래소에도 ' + EXCHANGE_TPSL_BUFFER_RATE + '% 더 바깥에 안전 손절/익절이 함께 설정됩니다. '
             + '손절 미입력 시 기본값은 가격 ' + DEFAULT_PRICE_RATE + '%입니다.';
 
         /** 거래소별 손절 주의 문구 (해당 없으면 빈 문자열) */
@@ -1043,7 +1046,7 @@
             const max = maxStopLossRate(lev);
             if (max <= 0) return '설정 불가';
             // 미입력 기본값이 한도를 넘으면 입력 필수
-            return (DEFAULT_PRICE_RATE * lev > max ? '필수 · 최대 ' : '최대 ') + max;
+            return (DEFAULT_PRICE_RATE > max ? '필수 · 최대 ' : '최대 ') + max;
         }
 
         $(function () {
@@ -1202,7 +1205,7 @@
                 var autoStopBadge = queue.volumeStopEnabled ? '<span class="auto-stop-badge">🛑 오토스탑</span>' : '';
                 // 거래량 급변 감지됨 → 현재 단계 종료 후 중지 예정
                 var volumeStopBadge = queue.volumeStopReserved
-                    ? '<span class="volume-stop-badge" title="거래량 급변이 감지되어 현재 단계가 끝나면 큐가 중지됩니다">⏸ 중지 예약</span>' : '';
+                    ? '<span class="volume-stop-badge" title="거래량 급감이 감지되어 현재 단계가 끝나면 큐가 중지됩니다">⏸ 중지 예약</span>' : '';
                 return '<div class="server-queue-card ' + (queue.active ? 'queue-active' : 'queue-inactive') + '" data-queue-id="' + queue.id + '">' +
                     '<div class="server-queue-header">' +
                     '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '">' + toggleLabel + '</button>' +
@@ -1440,7 +1443,7 @@
                 var isLong = block === 'LONG';
                 return '<span class="block-tag ' + (isLong ? 'block-long' : 'block-short') + (idx === 0 ? ' block-fixed' : '') + '">' +
                     (isLong ? 'L' : 'S') +
-                    (idx === 0 ? '' : '<button onclick="removeSlotBlock(\'' + side + '\',' + idx + ')" class="block-remove-btn">&times;</button>') +
+                    (idx === 0 ? '' : '<button onclick="removeSlotBlock(\'' + side + '\',' + idx + ')" class="block-remove-btn" aria-label="블록 삭제">&times;</button>') +
                     '</span>';
             }).join(''));
             $slot.find('[data-role=add-block]').prop('disabled', st.conditionBlocks.length >= MAX_CONDITION_BLOCKS);
@@ -1500,7 +1503,7 @@
                 errors.push({ field: 'takeprofit', msg: '익절률은 0%보다 커야 합니다.' });
             }
 
-            // 손절율 0 초과 100 미만 (투자금 기준 %)
+            // 손절율 0 초과 100 미만 (가격 변동 기준 %)
             if (stopLoss && (parseFloat(stopLoss) <= 0 || parseFloat(stopLoss) >= 100)) {
                 errors.push({ field: 'stoploss', msg: '손절률은 0% 초과 100% 미만으로 입력해주세요.' });
             } else if (!levInvalid) {
@@ -1593,18 +1596,18 @@
         function saveQueue() {
             // 패널에서 구성 중인 단계가 있으면 저장 차단 (확정 안 된 입력 누락 방지)
             if (builderOpen) {
-                alert('구성 중인 단계를 확정하거나 닫은 뒤 저장해주세요.');
+                showToast('구성 중인 단계를 확정하거나 닫은 뒤 저장해주세요.', 'warn');
                 return;
             }
             if (queueSteps.length === 0) {
-                alert('최소 1개의 단계를 추가해주세요.');
+                showToast('최소 1개의 단계를 추가해주세요.', 'warn');
                 return;
             }
 
             // 모든 단계가 정확히 2개 패턴을 가지는지 검증 (양방향 매칭 보장)
             for (let i = 0; i < queueSteps.length; i++) {
                 if (queueSteps[i].patterns.length !== MAX_PATTERNS_PER_STEP) {
-                    alert(`${i + 1}단계에 패턴이 ${queueSteps[i].patterns.length}개입니다. 각 단계에는 정확히 ${MAX_PATTERNS_PER_STEP}개의 패턴(LONG 시작 + SHORT 시작)이 필요합니다.`);
+                    showToast(`${i + 1}단계에 패턴이 ${queueSteps[i].patterns.length}개입니다. 각 단계에는 정확히 ${MAX_PATTERNS_PER_STEP}개의 패턴(LONG 시작 + SHORT 시작)이 필요합니다.`, 'warn');
                     return;
                 }
             }
@@ -1612,7 +1615,7 @@
             const triggerRate = document.getElementById('trigger-rate').value;
 
             if (!triggerRate || parseFloat(triggerRate) <= 0) {
-                alert('트리거 상승/하락률(%)을 입력해주세요.');
+                showToast('트리거 상승/하락률(%)을 입력해주세요.', 'warn');
                 return;
             }
 
@@ -1637,12 +1640,12 @@
                 contentType: 'application/json',
                 data: JSON.stringify(queueData),
                 success: function() {
-                    alert('큐가 등록되었습니다.');
+                    showToast('큐가 등록되었습니다.', 'success');
                     closeRegisterQueueModal();
                     loadPatterns();
                 },
                 error: function(xhr) {
-                    alert('큐 등록 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                    showToast('큐 등록 실패: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
                 },
                 complete: function() {
                     $saveBtn.prop('disabled', false);
@@ -1658,11 +1661,11 @@
         function startEditQueue(id) {
             var queue = serverQueues.find(function(q) { return q.id === id; });
             if (!queue) {
-                alert('큐 정보를 찾을 수 없습니다. 목록을 새로고침해주세요.');
+                showToast('큐 정보를 찾을 수 없습니다. 목록을 새로고침해주세요.', 'error');
                 return;
             }
             if (queue.active) {
-                alert('활성화된 큐는 수정할 수 없습니다. 먼저 OFF로 전환해주세요.');
+                showToast('활성화된 큐는 수정할 수 없습니다. 먼저 OFF로 전환해주세요.', 'warn');
                 return;
             }
 
@@ -1734,25 +1737,25 @@
         function saveEditQueue() {
             // 패널에서 구성 중인 단계가 있으면 저장 차단 (확정 안 된 입력 누락 방지)
             if (builderOpen) {
-                alert('구성 중인 단계를 확정하거나 닫은 뒤 저장해주세요.');
+                showToast('구성 중인 단계를 확정하거나 닫은 뒤 저장해주세요.', 'warn');
                 return;
             }
             if (editSteps.length === 0) {
-                alert('최소 1개의 단계를 추가해주세요.');
+                showToast('최소 1개의 단계를 추가해주세요.', 'warn');
                 return;
             }
 
             // 모든 단계가 정확히 2개 패턴을 가지는지 확인 (양방향 매칭 보장)
             for (var i = 0; i < editSteps.length; i++) {
                 if (editSteps[i].patterns.length !== MAX_PATTERNS_PER_STEP) {
-                    alert((i + 1) + '단계에 패턴이 ' + editSteps[i].patterns.length + '개입니다. 각 단계에는 정확히 ' + MAX_PATTERNS_PER_STEP + '개의 패턴(LONG 시작 + SHORT 시작)이 필요합니다.');
+                    showToast((i + 1) + '단계에 패턴이 ' + editSteps[i].patterns.length + '개입니다. 각 단계에는 정확히 ' + MAX_PATTERNS_PER_STEP + '개의 패턴(LONG 시작 + SHORT 시작)이 필요합니다.', 'warn');
                     return;
                 }
             }
 
             var triggerRate = document.getElementById('edit-trigger-rate').value;
             if (!triggerRate || parseFloat(triggerRate) <= 0) {
-                alert('트리거 상승/하락률(%)을 입력해주세요.');
+                showToast('트리거 상승/하락률(%)을 입력해주세요.', 'warn');
                 return;
             }
 
@@ -1767,12 +1770,12 @@
                 contentType: 'application/json',
                 data: JSON.stringify({ triggerRate: parseFloat(triggerRate), cycle: document.getElementById('edit-cycle-toggle').checked, volumeStopEnabled: $('#edit-volume-stop-toggle').prop('checked'), patterns: patternsData }),
                 success: function() {
-                    alert('큐가 수정되었습니다.');
+                    showToast('큐가 수정되었습니다.', 'success');
                     cancelEditQueue();
                     loadPatterns();
                 },
                 error: function(xhr) {
-                    alert('큐 수정 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                    showToast('큐 수정 실패: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
                 },
                 complete: function() {
                     $saveBtn.prop('disabled', false);
@@ -1818,7 +1821,7 @@
                 },
                 error: function(xhr) {
                     $btn.prop('disabled', false);
-                    alert('토글 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                    showToast('토글 실패: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
                 }
             });
         }
@@ -1841,7 +1844,7 @@
                     loadPatterns();
                 },
                 error: function(xhr) {
-                    alert('패턴 삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                    showToast('패턴 삭제 실패: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
                 }
             });
         }
@@ -2013,10 +2016,10 @@
                 success: function() {
                     closeImportQueueModal();
                     loadPatterns();
-                    alert('큐가 성공적으로 복사되었습니다.');
+                    showToast('큐가 성공적으로 복사되었습니다.', 'success');
                 },
                 error: function(xhr) {
-                    alert('큐 복사 실패: ' + (xhr.responseJSON?.message || xhr.statusText));
+                    showToast('큐 복사 실패: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
                 }
             });
         }
@@ -2129,7 +2132,7 @@
 
         /**
          * 본인 전용 /user/queue/autotrade.alert.{exchange}.{mode}.{symbol} 채널을 구독한다.
-         * 서버가 큐 비활성화 등 즉시 알림이 필요할 때 push하는 이벤트를 받아 alert으로 표시한다.
+         * 서버가 큐 비활성화 등 즉시 알림이 필요할 때 push하는 이벤트를 받아 토스트로 표시한다 (사유 확인을 위해 ✕ 전까지 유지).
          *
          * 수신 데이터: AutoTradeAlertResponse {queueId, symbol, reason, level, occurredAt}
          */
@@ -2142,7 +2145,7 @@
                 var levelLabel = alertData.level === 'ERROR' ? '⛔ 자동매매 오류' :
                                  alertData.level === 'WARN'  ? '⚠️ 자동매매 경고' : 'ℹ️ 자동매매 알림';
                 var msg = levelLabel + '\n\n[' + alertData.occurredAt + '] 큐 #' + alertData.queueId + ' 비활성화\n\n사유: ' + alertData.reason;
-                alert(msg);
+                showToast(msg, alertData.level === 'ERROR' ? 'error' : 'warn', true);
                 // 큐 목록 갱신 (비활성화 상태 즉시 반영)
                 loadPatterns();
             });
@@ -2474,7 +2477,7 @@
         <div class="import-modal-box">
             <div class="import-modal-header">
                 <h3>큐 가져오기</h3>
-                <button class="import-modal-close" onclick="closeImportQueueModal()">✕</button>
+                <button class="import-modal-close" aria-label="닫기" onclick="closeImportQueueModal()">✕</button>
             </div>
             <div class="import-modal-body">
                 <p class="import-modal-desc">가져올 큐를 선택하면 현재 코인에 동일한 큐가 복사됩니다.</p>

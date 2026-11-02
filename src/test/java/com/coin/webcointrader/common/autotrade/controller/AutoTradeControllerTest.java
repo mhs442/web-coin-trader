@@ -212,7 +212,7 @@ class AutoTradeControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/autotrade/patterns: 손절률이 강제청산 한도를 넘으면 400을 반환한다 (10배, 90%)")
+    @DisplayName("POST /api/autotrade/patterns: 손절률이 강제청산 한도를 넘으면 400을 반환한다 (10배, 가격 9%)")
     void addPattern_stopLossOverLiquidationLimit_returns400() throws Exception {
         mockMvc.perform(post("/api/autotrade/patterns")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -226,7 +226,7 @@ class AutoTradeControllerTest {
                                             "stepLevel": 1,
                                             "amount": 10,
                                             "leverage": 10,
-                                            "stopLossRate": 90,
+                                            "stopLossRate": 9,
                                             "conditionBlocks": ["LONG"],
                                             "leafBlock": "LONG"
                                         },

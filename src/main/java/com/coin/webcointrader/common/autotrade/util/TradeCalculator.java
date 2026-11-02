@@ -28,18 +28,17 @@ public final class TradeCalculator {
     private TradeCalculator() {}
 
     /**
-     * 익절/손절률(투자금 기준 %)을 결정한다.
-     * 입력값이 있으면 그대로, 미입력이면 가격 8% 기본값을 투자금 기준으로 환산(8 × leverage)한다.
+     * 패턴에 설정된 익절/손절률(가격 변동 기준 %)을 내부 계산용 투자금 기준 %로 환산한다.
+     * 입력값이 있으면 rate × leverage, 미입력이면 가격 8% 기본값 × leverage.
      *
-     * @param rate     패턴에 설정된 비율 (%, 투자금 기준, null 허용)
+     * @param rate     패턴에 설정된 비율 (%, 가격 변동 기준, null 허용)
      * @param leverage 레버리지
      * @return 투자금 기준 비율 (%)
      */
     public static BigDecimal resolveRoiRate(BigDecimal rate, int leverage) {
-        if (rate != null) {
-            return rate;
-        }
-        return DEFAULT_PRICE_RATE.multiply(BigDecimal.valueOf(leverage));
+        // [사용자 정책 2026-10-31] 익절/손절 입력값은 가격 변동률 기준 — 레버리지를 곱해 투자금 기준으로 환산
+        BigDecimal priceRate = rate != null ? rate : DEFAULT_PRICE_RATE;
+        return priceRate.multiply(BigDecimal.valueOf(leverage));
     }
 
     /**
@@ -94,6 +93,17 @@ public final class TradeCalculator {
     }
 
     /**
+     * 레버리지별 손절률 최대값(가격 변동 기준 %)을 계산한다. 사용자 안내 문구용.
+     * maxStopLossRate ÷ leverage = 100 ÷ leverage - 1.5, 소수 2자리 내림 (화면 계산과 동일)
+     *
+     * @param leverage 레버리지
+     * @return 가격 기준 손절률 최대값 (%), 0 이하면 해당 레버리지에서 설정 불가
+     */
+    public static BigDecimal maxStopLossPriceRate(int leverage) {
+        return maxStopLossRate(leverage).divide(BigDecimal.valueOf(leverage), 2, RoundingMode.FLOOR);
+    }
+
+    /**
      * 손절률이 강제청산 한도 이내인지 확인한다.
      *
      * @param rate     손절 비율 (%, 투자금 기준 — resolveRoiRate 결과)
@@ -137,7 +147,7 @@ public final class TradeCalculator {
      *
      * @param side       포지션 방향 (LONG/SHORT)
      * @param entryPrice 진입가
-     * @param rate       익절 비율 (%, 마진 기준)
+     * @param rate       익절 비율 (%, 투자금 기준 — resolveRoiRate 결과)
      * @param leverage   레버리지
      * @return 익절가
      */
@@ -158,7 +168,7 @@ public final class TradeCalculator {
      *
      * @param side       포지션 방향 (LONG/SHORT)
      * @param entryPrice 진입가
-     * @param rate       손절 비율 (%, 마진 기준)
+     * @param rate       손절 비율 (%, 투자금 기준 — resolveRoiRate 결과)
      * @param leverage   레버리지
      * @return 손절가
      */

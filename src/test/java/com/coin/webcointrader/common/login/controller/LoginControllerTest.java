@@ -2,6 +2,8 @@ package com.coin.webcointrader.common.login.controller;
 
 import com.coin.webcointrader.common.login.entity.User;
 import com.coin.webcointrader.common.login.repository.LoginRepository;
+import com.coin.webcointrader.common.login.repository.UserExchangeKeyRepository;
+import com.coin.webcointrader.common.sim.repository.SimWalletRepository;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +35,12 @@ class LoginControllerTest {
     @Autowired
     private LoginRepository loginRepository;
 
+    @Autowired
+    private UserExchangeKeyRepository userExchangeKeyRepository;
+
+    @Autowired
+    private SimWalletRepository simWalletRepository;
+
     @BeforeEach
     void setUp() {
         // 기본 티커 스텁 (백그라운드 스케줄러 대응)
@@ -44,6 +52,7 @@ class LoginControllerTest {
 
     @AfterEach
     void tearDown() {
+        simWalletRepository.deleteAll();   // 가입 성공 케이스가 만든 모의 지갑 (user 참조) 먼저 정리
         loginRepository.deleteAll();
         WireMock.reset();
     }
@@ -115,6 +124,27 @@ class LoginControllerTest {
 
         // 키 검증 실패 시 사용자 저장까지 롤백
         assertThat(loginRepository.findByPhoneNumber("01012345678")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("POST /signup: API Key 없이도 가입되고 로그인 페이지로 이동한다 (모의투자 전용 사용자)")
+    void signup_withoutApiKey_redirectsToLogin() throws Exception {
+        mockMvc.perform(post("/signup")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("username", "simUser")
+                        .param("phoneNumber", "01033334444")
+                        .param("password", "password1!")
+                        .param("passwordConfirm", "password1!")
+                        .param("email", "sim@test.com")
+                        .param("exchangeType", "BYBIT")
+                        .param("apiKey", "")
+                        .param("apiSecret", ""))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login?signupSuccess"));
+
+        User saved = loginRepository.findByPhoneNumber("01033334444").orElseThrow();
+        assertThat(userExchangeKeyRepository.findAll())
+                .noneMatch(k -> k.getUserId().equals(saved.getId()));
     }
 
     @Test

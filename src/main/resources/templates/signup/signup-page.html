@@ -18,29 +18,32 @@
             <div class="auth-field">
                 <label for="username">이름</label>
                 <input type="text" id="username" name="username"
-                       placeholder="이름" required
+                       placeholder="이름" autocomplete="name" required
                        th:value="${request?.username}">
             </div>
             <div class="auth-field">
                 <label for="phoneNumber">휴대폰 번호</label>
                 <input type="text" id="phoneNumber" name="phoneNumber"
-                       placeholder="휴대폰 번호" required
+                       placeholder="휴대폰 번호" autocomplete="username" required
                        th:value="${request?.phoneNumber}">
             </div>
             <div class="auth-field">
                 <label for="password">비밀번호</label>
                 <input type="password" id="password" name="password"
-                       placeholder="비밀번호" required>
+                       placeholder="비밀번호" autocomplete="new-password" required>
             </div>
             <div class="auth-field">
                 <label for="passwordConfirm">비밀번호 확인</label>
                 <input type="password" id="passwordConfirm" name="passwordConfirm"
-                       placeholder="비밀번호 확인" required>
+                       placeholder="비밀번호 확인" autocomplete="new-password" required>
+                <!-- 비밀번호 일치 여부 (입력 중 화면 검사, 서버도 PASSWORD_MISMATCH 로 재검증) -->
+                <div id="password-match-msg" class="auth-hint" aria-live="polite"></div>
             </div>
             <div class="auth-field">
-                <label for="passwordConfirm">이메일</label>
-                <input type="text" id="email" name="email"
-                       placeholder="이메일" required>
+                <label for="email">이메일</label>
+                <input type="email" id="email" name="email"
+                       placeholder="이메일" autocomplete="email" required
+                       th:value="${request?.email}">
             </div>
             <!-- 거래소 목록·표시명은 구현이 끝난 거래소(컨트롤러 exchangeTypes) 기준 (최초 라벨은 첫 거래소, 선택값과 다르면 아래 스크립트가 맞춤) -->
             <div class="auth-field">
@@ -56,13 +59,16 @@
             <div class="auth-field">
                 <label for="apiKey"><span id="apiKeyLabel" th:text="${exchangeTypes[0].displayName}"></span> API Key</label>
                 <input type="text" id="apiKey" name="apiKey"
-                       th:placeholder="${exchangeTypes[0].displayName + ' API Key'}" required
+                       th:placeholder="${exchangeTypes[0].displayName + ' API Key'}" autocomplete="off"
                        th:value="${request?.apiKey}">
             </div>
             <div class="auth-field">
                 <label for="apiSecret"><span id="apiSecretLabel" th:text="${exchangeTypes[0].displayName}"></span> API Secret</label>
                 <input type="password" id="apiSecret" name="apiSecret"
-                       th:placeholder="${exchangeTypes[0].displayName + ' API Secret'}" required>
+                       th:placeholder="${exchangeTypes[0].displayName + ' API Secret'}" autocomplete="new-password">
+                <!-- [사용자 정책 2026-10-31] API Key 는 선택 입력 (둘 다 비우면 모의투자 전용 가입) -->
+                <div class="auth-hint">모의투자만 이용하려면 비워두세요. 마이페이지에서 나중에 등록할 수 있습니다.</div>
+                <div id="api-key-pair-msg" class="auth-hint auth-hint-error" aria-live="polite"></div>
             </div>
             <div class="auth-buttons">
                 <button type="submit" class="auth-btn auth-btn-primary">가입하기</button>
@@ -79,6 +85,39 @@
         $('#apiKey').attr('placeholder', label + ' API Key');
         $('#apiSecret').attr('placeholder', label + ' API Secret');
     }).trigger('change');   // 가입 실패로 다시 열린 경우 선택값 기준으로 라벨 동기화
+
+    // 비밀번호 확인 일치 여부 표시 (확인 칸이 비어 있으면 표시하지 않음)
+    function checkPasswordMatch() {
+        const pw = $('#password').val();
+        const confirmPw = $('#passwordConfirm').val();
+        const $msg = $('#password-match-msg');
+        if (!confirmPw) {
+            $msg.text('').removeClass('auth-hint-ok auth-hint-error');
+            return true;
+        }
+        const matched = pw === confirmPw;
+        $msg.text(matched ? '비밀번호가 일치합니다.' : '비밀번호가 일치하지 않습니다.')
+            .toggleClass('auth-hint-ok', matched)
+            .toggleClass('auth-hint-error', !matched);
+        return matched;
+    }
+    $('#password, #passwordConfirm').on('input', checkPasswordMatch);
+
+    // 제출 전 화면 검사 — 비밀번호 불일치, API Key·Secret 중 하나만 입력한 경우 제출 차단
+    $('.auth-form').on('submit', function (e) {
+        if (!checkPasswordMatch()) {
+            e.preventDefault();
+            $('#passwordConfirm').focus();
+            return;
+        }
+        const hasKey = $.trim($('#apiKey').val()) !== '';
+        const hasSecret = $.trim($('#apiSecret').val()) !== '';
+        $('#api-key-pair-msg').text(hasKey !== hasSecret ? 'API Key와 Secret을 함께 입력해주세요.' : '');
+        if (hasKey !== hasSecret) {
+            e.preventDefault();
+            (hasKey ? $('#apiSecret') : $('#apiKey')).focus();
+        }
+    });
 </script>
 </body>
 </html>

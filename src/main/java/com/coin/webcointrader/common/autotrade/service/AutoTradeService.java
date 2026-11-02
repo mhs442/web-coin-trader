@@ -107,9 +107,8 @@ public class AutoTradeService {
     private static final String HISTORY_SAVE_FAILED_PREFIX = "[이력 저장 실패] 체결은 완료됨 — ";
     // 앱이 보낸 매도/청산 주문의 orderLinkId (q{큐ID}-S/L-{millis}) — 외부 청산 판단에서 제외
     // (진입 E는 거래소 TP/SL 발동 주문이 원주문 링크를 이어받을 가능성이 있어 제외 대상에 넣지 않음)
-    // [사용자 정책 2026-10-29] 거래량 급변 판정: 24시간 거래량(대시보드 값)이 진입 기준 대비 0.5배 이하(급감) 또는 1.5배 이상(급증)
+    // [사용자 정책 2026-10-31] 거래량 감소 판정만 사용: 24시간 거래량(대시보드 값)이 진입 기준 대비 0.5배 이하(급감)일 때만 중지 (급증은 무시)
     private static final double VOLUME_DROP_RATIO = 0.5;
-    private static final double VOLUME_SURGE_RATIO = 1.5;
     private static final java.util.regex.Pattern OWN_CLOSE_LINK_ID = java.util.regex.Pattern.compile("^q\\d+-[SL]-\\d+$");
 
     /**
@@ -1107,7 +1106,7 @@ public class AutoTradeService {
             // handleSellSuccess 1단계 재진입 등)이 실제 포지션 방향 기준으로 동작하도록 정합성 보장
             state.setDirection(entryDirection);
 
-            // 익절/손절 가격 계산 — 실체결가 기준, rate는 투자금 기준 (%), 미설정 시 가격 8%
+            // 익절/손절 가격 계산 — 실체결가 기준, rate는 가격 변동 기준 (%) → 투자금 기준 환산, 미설정 시 가격 8%
             BigDecimal entry = new BigDecimal(actualEntryPrice);
             int leverage = pattern.getLeverage();
             BigDecimal tpPrice = TradeCalculator.calcTpPrice(entryDirection, entry,
@@ -1202,8 +1201,9 @@ public class AutoTradeService {
         } else {
             log.warn("거래소 안전 SL 생략 (강제청산 한도 초과): queueId={}, slRate={}, leverage={}",
                     queue.getId(), slRate, leverage);
-            session.addLog(now() + " [경고] 손절률이 강제청산 한도("
-                    + TradeCalculator.maxStopLossRate(leverage).stripTrailingZeros().toPlainString()
+            // 사용자 안내는 입력값과 같은 가격 기준 한도로 표시
+            session.addLog(now() + " [경고] 손절률이 강제청산 한도(가격 "
+                    + TradeCalculator.maxStopLossPriceRate(leverage).stripTrailingZeros().toPlainString()
                     + "%)를 넘어 거래소 안전 손절 없이 진입합니다 (큐 #" + queue.getId() + ") — 큐 수정에서 손절률을 낮춰 주세요.");
         }
 
@@ -1369,7 +1369,7 @@ public class AutoTradeService {
     }
 
     /**
-     * 보유 중 24시간 거래량을 진입 기준과 비교해 급변이면 중지를 예약한다. (1회만)
+     * 보유 중 24시간 거래량을 진입 기준과 비교해 급감(0.5배 이하)이면 중지를 예약한다. (1회만, 급증은 판정하지 않음)
      * [사용자 정책 2026-10-29] 감지해도 포지션은 그대로 두고 현재 단계는 TP/SL대로 진행, 단계가 끝나면 큐를 중지한다.
      * 진입 시 시세 미수신으로 기준이 없으면 처음 받은 거래량으로 기준을 확정한다.
      * 예약은 재시작 후에도 남도록 DB에 저장한다.
@@ -1397,19 +1397,18 @@ public class AutoTradeService {
             return; // 기준 거래량이 0이면 배수 판정 불가
         }
         double ratio = current / baseline;
-        boolean drop = ratio <= VOLUME_DROP_RATIO;
-        if (!drop && ratio < VOLUME_SURGE_RATIO) {
-            return;
+        if (ratio > VOLUME_DROP_RATIO) {
+            return; // 급감 아님 (증가는 [사용자 정책 2026-10-31]에 따라 무시)
         }
-        String reason = "[거래량 " + (drop ? "급감" : "급증") + " 중지] 감지 " + now()
+        String reason = "[거래량 급감 중지] 감지 " + now()
                 + " · " + state.getDirection() + " 보유"
                 + " · 진입 기준 " + formatVolume(baseline) + " → " + formatVolume(current)
-                + " (" + (drop ? "" : "+") + BigDecimal.valueOf((ratio - 1) * 100).setScale(1, RoundingMode.HALF_UP)
+                + " (" + BigDecimal.valueOf((ratio - 1) * 100).setScale(1, RoundingMode.HALF_UP)
                         .stripTrailingZeros().toPlainString() + "%)";
         patternQueueRepository.updateVolumeStopReason(queue.getId(), reason);
         queue.setVolumeStopReason(reason);
         session.addLog(now() + " [중지 예약] " + reason + " — 현재 단계가 끝나면 큐를 중지합니다 (큐 #" + queue.getId() + ")");
-        log.warn("거래량 급변 중지 예약: queueId={}, {}", queue.getId(), reason);
+        log.warn("거래량 급감 중지 예약: queueId={}, {}", queue.getId(), reason);
     }
 
     /**
@@ -2645,7 +2644,7 @@ public class AutoTradeService {
                 ? actualPnl
                 : grossProfitLoss.subtract(entryFee.add(exitFee));
 
-        // 익절/손절 예상가 계산 — 진입가 기준, rate는 투자금 기준 (%), 미설정 시 가격 8%
+        // 익절/손절 예상가 계산 — 진입가 기준, rate는 가격 변동 기준 (%) → 투자금 기준 환산, 미설정 시 가격 8%
         BigDecimal tpPrice = TradeCalculator.calcTpPrice(side, entry,
                 TradeCalculator.resolveRoiRate(pattern.getTakeProfitRate(), leverage), leverage);
         BigDecimal slPrice = TradeCalculator.calcSlPrice(side, entry,
