@@ -4,7 +4,7 @@
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>회원가입</title>
-    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <th:block th:replace="~{fragments/head :: assets}"></th:block>
     <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
 </head>
 <body>
@@ -110,8 +110,8 @@
             $('#passwordConfirm').focus();
             return;
         }
-        const hasKey = $.trim($('#apiKey').val()) !== '';
-        const hasSecret = $.trim($('#apiSecret').val()) !== '';
+        const hasKey = ($('#apiKey').val() || '').trim() !== '';
+        const hasSecret = ($('#apiSecret').val() || '').trim() !== '';
         $('#api-key-pair-msg').text(hasKey !== hasSecret ? 'API Key와 Secret을 함께 입력해주세요.' : '');
         if (hasKey !== hasSecret) {
             e.preventDefault();

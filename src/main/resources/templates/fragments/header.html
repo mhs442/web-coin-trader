@@ -1,23 +1,35 @@
 <!DOCTYPE html>
 <html lang="ko" xmlns:th="http://www.thymeleaf.org">
 <body>
-<!-- 공통 헤더: 거래소 선택 + 거래 모드 토글 + 지갑 잔고 + 갱신 카운트다운 -->
-<div th:fragment="walletHeader" class="wallet-header" id="wallet-header">
-    <!-- 거래소 선택 + 실전/모의 모드 토글 -->
+<!-- 공통 틀: 모의 표시선 + 왼쪽 사이드바 + 상단 상태바(거래소 선택, 거래 모드, 지갑 잔고, 갱신 카운트다운) -->
+<div th:fragment="walletHeader" class="app-chrome">
+<!-- [사용자 정책 2026-11-02] 모의 모드 표시: 화면 맨 위 3px 주황 선 + 금액 이름 문구. 실전은 붉은 강조를 하지 않는다 -->
+<div class="mode-line" aria-hidden="true"></div>
+<nav class="app-sidebar" aria-label="주요 메뉴">
+    <a class="app-brand" href="/dashboard"><span class="app-brand-mark" aria-hidden="true">W</span>Web Coin Trader</a>
+    <div class="app-nav">
+        <a class="app-nav-link" data-nav="/dashboard" href="/dashboard">대시보드</a>
+        <a class="app-nav-link" data-nav="/chart" id="nav-chart" href="/dashboard">차트·자동매매</a>
+        <a class="app-nav-link" data-nav="/mypage" href="/mypage">마이페이지</a>
+    </div>
+</nav>
+<div class="wallet-header" id="wallet-header">
+    <!-- 거래소 선택 + 실전/모의 모드 전환 -->
     <div class="trade-mode-toggle">
         <select class="exchange-select" id="exchange-select" title="거래소 선택"></select>
-        <span class="trade-mode-label" id="trade-mode-label">실전</span>
-        <label class="toggle-switch">
-            <input type="checkbox" id="trade-mode-switch">
-            <span class="toggle-slider"></span>
-        </label>
+        <div class="trade-mode-seg" role="group" aria-label="거래 모드">
+            <button type="button" class="seg-btn" data-mode="main">실전</button>
+            <button type="button" class="seg-btn" data-mode="sim">모의</button>
+        </div>
+        <!-- 모의 모드 충전 버튼 (sim 모드일 때만 표시) -->
+        <button class="sim-charge-btn" id="sim-charge-btn" style="display:none;" title="모의 지갑 충전">충전</button>
     </div>
     <!-- 실전 모드에서 선택 거래소의 API 키가 없을 때 잔고 대신 표시 -->
     <a class="exchange-key-notice" id="exchange-key-notice" href="/mypage?tab=exchange-keys" style="display:none;">
         API 키 미등록 · 마이페이지에서 등록
     </a>
     <div class="wallet-info">
-        <span class="wallet-label">총 자산</span>
+        <span class="wallet-label wallet-mode" id="wallet-mode-label">실전 자산</span>
         <span class="wallet-balance" id="wallet-total-equity">--</span>
         <span class="wallet-unit">--</span>
     </div>
@@ -26,13 +38,13 @@
         <span class="wallet-balance" id="wallet-available">--</span>
         <span class="wallet-unit">--</span>
     </div>
-    <!-- 모의 모드 충전 버튼 (sim 모드일 때만 표시) -->
-    <button class="sim-charge-btn" id="sim-charge-btn" style="display:none;" title="모의 지갑 충전">충전</button>
 
     <div class="wallet-refresh">
-        <span class="wallet-refresh-icon" id="wallet-refresh-icon" title="잔고 갱신">&#x21bb;</span>
+        <span class="wallet-refresh-icon" id="wallet-refresh-icon" title="잔고 갱신"></span>
         <span class="wallet-countdown" id="wallet-countdown">5</span>
     </div>
+
+    <button type="button" class="theme-toggle-btn" id="theme-toggle-btn" title="라이트/다크 전환"></button>
 
     <!-- 충전 모달 -->
     <div class="charge-modal-overlay" id="charge-modal-overlay" style="display:none;">
@@ -48,6 +60,7 @@
             </div>
         </div>
     </div>
+</div>
 
     <script>
         /**
@@ -121,6 +134,30 @@
          */
         window.getExchange = function() {
             return window.exchangeType;
+        };
+
+        /**
+         * 코인 아이콘 HTML을 생성한다. (첫 영문자를 담은 원형, 코인별로 색이 고정됨)
+         * @param {string} baseCoin 기초 코인 (예: 'BTC', '1000PEPE')
+         * @returns {string} 아이콘 HTML
+         */
+        /**
+         * 가격 문자열에 천 단위 쉼표만 넣는다. (소수 자릿수는 거래소 값 그대로 유지)
+         * @param {string|number} value 가격
+         * @returns {string} 예: '78090.40' → '78,090.40'. 숫자 형식이 아니면 그대로 반환
+         */
+        window.formatPriceText = function(value) {
+            const match = String(value).match(/^(-?)(\d+)(\.\d+)?$/);
+            if (!match) return String(value);
+            return match[1] + match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (match[3] || '');
+        };
+
+        window.coinIconHtml = function(baseCoin) {
+            const name = baseCoin || '';
+            const letter = (name.match(/[A-Za-z]/) || ['?'])[0].toUpperCase();   // 숫자로 시작하는 코인은 첫 영문자 사용
+            let sum = 0;
+            for (let i = 0; i < name.length; i++) sum += name.charCodeAt(i);
+            return '<span class="coin-icon coin-hue-' + (sum % 6) + '" aria-hidden="true">' + letter + '</span>';
         };
 
         (function() {
@@ -215,13 +252,18 @@
                 // 거래소 확정 전에는 조회하지 않음 (기본 거래소 없음)
                 if (!window.exchangeType) return;
                 // 키 미등록 실전 거래소는 조회하지 않음 (API_KEY_NOT_FOUND 방지)
-                if (updateKeyNotice()) return;
+                if (updateKeyNotice()) {
+                    $(document).trigger('walletUpdated', [null]);
+                    return;
+                }
 
                 $.ajax({
                     url: '/api/wallet/balance',
                     method: 'GET',
                     data: { mode: window.tradeMode, exchange: window.exchangeType },
                     success: function(data) {
+                        // 같은 잔고를 쓰는 화면(대시보드 자산 타일)에 전달 — 잔고 API를 중복 호출하지 않기 위함
+                        $(document).trigger('walletUpdated', [data]);
                         if (data && data.totalEquity != null) {
                             // 총 자산 평가액
                             const equity = parseFloat(data.totalEquity);
@@ -247,6 +289,7 @@
                         }
                     },
                     error: function() {
+                        $(document).trigger('walletUpdated', [null]);
                         $('#wallet-total-equity').text('--');
                         $('#wallet-available').text('--');
                         $('.wallet-unit').text('--');
@@ -300,6 +343,65 @@
                 }
             }
 
+            /**
+             * 현재 거래 모드를 화면에 반영한다. (선택 버튼, 금액 이름, 모의 표시선)
+             */
+            function applyTradeModeView() {
+                const isSim = window.tradeMode === 'sim';
+                document.documentElement.dataset.mode = isSim ? 'sim' : 'main';
+                $('.trade-mode-seg .seg-btn').each(function() {
+                    $(this).toggleClass('active', $(this).data('mode') === window.tradeMode);
+                });
+                $('#wallet-mode-label').text(isSim ? '모의 자산' : '실전 자산');
+            }
+
+            /**
+             * 테마 버튼 문구를 전환 대상 테마 이름으로 맞춘다.
+             */
+            function updateThemeButton() {
+                $('#theme-toggle-btn').text(document.documentElement.dataset.theme === 'dark' ? '라이트 모드' : '다크 모드');
+            }
+
+            /**
+             * 사이드바 차트 메뉴의 이동 대상을 결정해 이동한다.
+             * [사용자 정책 2026-11-02] 순서: 마지막 본 심볼 → 첫 활성 큐 → 대시보드(안내 문구)
+             */
+            function openChartMenu() {
+                const lastSymbol = localStorage.getItem('lastChartSymbol');
+                if (lastSymbol) {
+                    window.location.href = '/chart?symbol=' + encodeURIComponent(lastSymbol);
+                    return;
+                }
+
+                // 심볼을 고를 수 없으면 대시보드에서 안내한다
+                const openDashboard = function() {
+                    const message = '대시보드에서 코인을 선택해 주세요.';
+                    if (window.location.pathname === '/dashboard') {
+                        showToast(message, 'info');
+                    } else {
+                        sessionStorage.setItem('pendingToast', message);
+                        window.location.href = '/dashboard';
+                    }
+                };
+
+                window.whenExchangeReady(function(exchange) {
+                    $.ajax({
+                        url: '/api/autotrade/patterns/all',
+                        method: 'GET',
+                        data: { mode: window.tradeMode, exchange: exchange },
+                        success: function(queues) {
+                            const active = (queues || []).find(function(q) { return q.active; });
+                            if (active) {
+                                window.location.href = '/chart?symbol=' + encodeURIComponent(active.symbol);
+                            } else {
+                                openDashboard();
+                            }
+                        },
+                        error: openDashboard
+                    });
+                });
+            }
+
             // 초기 로딩 + 카운트다운 시작
             $(document).ready(function() {
                 // 저장된 선택값이 있으면 목록을 먼저 채움 (등록 상태 응답 후 표시명 포함 전체 목록으로 교체)
@@ -311,36 +413,25 @@
                 startCountdown();
                 toggleChargeButton();
 
-                // localStorage 값에 따라 토글 UI 상태 복원
-                if (window.tradeMode === 'sim') {
-                    $('#trade-mode-switch').prop('checked', true);
-                    $('#trade-mode-label').text('모의');
-                    $('#wallet-header').addClass('sim-mode');
-                }
+                // localStorage 값에 따라 모드 표시 복원
+                applyTradeModeView();
 
-                // 거래 모드 토글 이벤트
-                $('#trade-mode-switch').on('change', function() {
-                    var isSim = $(this).is(':checked');
+                // 실전/모의 버튼 클릭
+                $('.trade-mode-seg .seg-btn').on('click', function() {
+                    const nextMode = $(this).data('mode');
+                    if (nextMode === window.tradeMode) return;    // 이미 선택된 모드
 
-                    // 모의 → 실전 전환은 확인 후 진행 (취소 시 스위치를 모의로 되돌림)
-                    if (!isSim && !confirm('실전 모드로 전환합니다.\n이후 주문·큐 동작은 실제 자금으로 처리됩니다. 진행하시겠습니까?')) {
-                        $(this).prop('checked', true);
+                    // 모의 → 실전 전환은 확인 후 진행 (취소 시 모의 유지)
+                    if (nextMode === 'main' && !confirm('실전 모드로 전환합니다.\n이후 주문·큐 동작은 실제 자금으로 처리됩니다. 진행하시겠습니까?')) {
                         return;
                     }
-                    window.tradeMode = isSim ? 'sim' : 'main';
+                    window.tradeMode = nextMode;
 
                     // localStorage에 저장 (페이지 이동 시에도 유지)
                     localStorage.setItem('tradeMode', window.tradeMode);
 
-                    // 모드 라벨 변경
-                    $('#trade-mode-label').text(isSim ? '모의' : '실전');
-
-                    // 헤더 배경색 변경 (모의 모드 시각적 구분)
-                    if (isSim) {
-                        $('#wallet-header').addClass('sim-mode');
-                    } else {
-                        $('#wallet-header').removeClass('sim-mode');
-                    }
+                    // 선택 버튼·금액 이름·모의 표시선 갱신
+                    applyTradeModeView();
 
                     // 충전 버튼 표시/숨김
                     toggleChargeButton();
@@ -351,6 +442,39 @@
                     // 모드 변경 이벤트 발행 (다른 페이지에서 수신 가능)
                     $(document).trigger('tradeModeChanged', [window.tradeMode]);
                 });
+
+                // 라이트/다크 전환: 저장 후 이벤트를 발행해 차트 등 CSS 변수를 직접 못 쓰는 화면이 다시 그리게 한다
+                updateThemeButton();
+                $('#theme-toggle-btn').on('click', function() {
+                    const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+                    document.documentElement.dataset.theme = nextTheme;
+                    localStorage.setItem('theme', nextTheme);
+                    updateThemeButton();
+                    $(document).trigger('themeChanged', [nextTheme]);
+                });
+
+                // 사이드바: 현재 화면 메뉴 표시 + 차트 화면이면 마지막 본 심볼 저장
+                const path = window.location.pathname;
+                $('.app-nav-link').each(function() {
+                    $(this).toggleClass('active', path === $(this).data('nav'));
+                });
+                if (path === '/chart') {
+                    const symbol = new URLSearchParams(window.location.search).get('symbol');
+                    if (symbol) localStorage.setItem('lastChartSymbol', symbol);
+                }
+
+                // 사이드바 차트 메뉴 클릭
+                $('#nav-chart').on('click', function(e) {
+                    e.preventDefault();
+                    openChartMenu();
+                });
+
+                // 다른 화면에서 넘어오며 남긴 안내 문구 표시 (차트 메뉴 → 대시보드 이동)
+                const pendingToast = sessionStorage.getItem('pendingToast');
+                if (pendingToast) {
+                    sessionStorage.removeItem('pendingToast');
+                    showToast(pendingToast, 'info');
+                }
 
                 // 거래소 선택 변경 이벤트
                 $('#exchange-select').on('change', function() {

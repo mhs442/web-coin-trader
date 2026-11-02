@@ -3,7 +3,7 @@
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>오류 - 코인 트레이더</title>
-    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <th:block th:replace="~{fragments/head :: assets}"></th:block>
     <style>
         .error-container {
             display: flex;
@@ -18,7 +18,7 @@
         .error-code {
             font-size: 6rem;
             font-weight: 700;
-            color: #dee2e6;
+            color: var(--line-strong);
             margin: 0;
             line-height: 1;
         }
@@ -26,22 +26,22 @@
         .error-message {
             font-size: 1.4rem;
             font-weight: 600;
-            color: #212529;
+            color: var(--text);
             margin: 16px 0 8px;
         }
 
         .error-description {
             font-size: 0.95rem;
-            color: #868e96;
+            color: var(--muted);
             margin: 0 0 32px;
         }
 
         .error-home-link {
             display: inline-block;
             padding: 10px 24px;
-            background-color: #212529;
-            color: #fff;
-            border-radius: 6px;
+            background-color: var(--accent);
+            color: var(--on-accent);
+            border-radius: 8px;
             text-decoration: none;
             font-weight: 600;
             font-size: 0.9rem;
@@ -49,7 +49,7 @@
         }
 
         .error-home-link:hover {
-            background-color: #343a40;
+            background-color: var(--accent-hover);
         }
     </style>
 </head>

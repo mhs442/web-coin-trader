@@ -3,6 +3,7 @@ package com.coin.webcointrader.common.market.controller;
 import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.market.dto.KlineResponse;
 import com.coin.webcointrader.common.market.dto.OrderBookResponse;
+import com.coin.webcointrader.common.market.dto.PriceTrendResponse;
 import com.coin.webcointrader.common.market.dto.TickerResponse;
 import com.coin.webcointrader.common.market.service.MarketService;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +37,15 @@ public class MarketController {
         return marketService.getDisplayTickers().stream()
                 .map(TickerResponse::from)
                 .toList();
+    }
+
+    /**
+     * 대시보드 미니 차트용 코인별 최근 1시간 가격 추세.
+     */
+    @GetMapping("/api/tickers/trends")
+    @ResponseBody
+    public List<PriceTrendResponse> getPriceTrendsApi() {
+        return marketService.getPriceTrends();
     }
 
     @GetMapping("/chart")

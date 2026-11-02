@@ -6,6 +6,7 @@ import com.coin.webcointrader.common.market.client.ExchangeMarketClient;
 import com.coin.webcointrader.common.market.dto.InstrumentDTO;
 import com.coin.webcointrader.common.market.dto.KlineDTO;
 import com.coin.webcointrader.common.market.dto.OrderBookDTO;
+import com.coin.webcointrader.common.market.dto.PriceTrendResponse;
 import com.coin.webcointrader.common.market.dto.TickerDTO;
 import com.coin.webcointrader.common.market.dto.TickerResponse;
 import jakarta.annotation.PostConstruct;
@@ -16,7 +17,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 시세 데이터 서비스. (거래소 중립)
@@ -34,9 +38,14 @@ public class MarketService {
     private static final int ORDER_BOOK_DEPTH = 50;
     // [사용자 정책 2026-10-27] 대시보드 거래 목록은 거래소 선택과 관계없이 Bybit 하나로 통일
     private static final ExchangeType DISPLAY_EXCHANGE = ExchangeType.BYBIT;
+    // [사용자 정책 2026-11-02] 대시보드 "최근 1시간 추세": 1분에 1번 저장, 코인별 최근 60개 보관
+    private static final long PRICE_TREND_INTERVAL_MS = 60_000L;
+    private static final int PRICE_TREND_SIZE = 60;
 
     private final ExchangeClientRegistry registry;
     private final SimpMessagingTemplate messagingTemplate; // STOMP 메시지 전송 템플릿 (서버 → 브라우저 push용)
+    // 심볼별 가격 기록. 스케줄 스레드가 쓰고 요청 스레드가 읽으므로 불변 맵을 통째로 교체한다
+    private volatile Map<String, List<BigDecimal>> priceTrends = Map.of();
 
     /**
      * 애플리케이션 시작 시 각 거래소 실시간 티커를 STOMP /topic/price.{exchange}.{symbol}로 push하도록 리스너를 등록한다.
@@ -57,6 +66,71 @@ public class MarketService {
     @Scheduled(fixedRate = 1000)
     public void refreshTickers() {
         registry.markets().forEach(ExchangeMarketClient::refreshTickers);
+    }
+
+    /**
+     * 1분마다 대시보드 목록의 현재가를 코인별로 저장한다. (최근 1시간 추세용, 거래소 추가 호출 없음)
+     * 메모리에만 보관하므로 재시작하면 기록이 사라지고 약 1시간에 걸쳐 다시 채워진다.
+     */
+    @Scheduled(fixedRate = PRICE_TREND_INTERVAL_MS)
+    public void recordPriceTrends() {
+        List<TickerDTO> tickers = getDisplayTickers();
+        // 빈 응답은 일시 오류로 보고 기존 기록 유지
+        if (tickers.isEmpty()) {
+            return;
+        }
+
+        // 현재 목록 기준으로 새로 만들어, 목록에서 사라진 코인의 기록은 자연히 제거된다
+        Map<String, List<BigDecimal>> next = new HashMap<>();
+        for (TickerDTO ticker : tickers) {
+            List<BigDecimal> history = priceTrends.getOrDefault(ticker.getSymbol(), List.of());
+            BigDecimal price = parsePrice(ticker.getLastPrice());
+            next.put(ticker.getSymbol(), price == null ? history : appendPrice(history, price));
+        }
+        priceTrends = Map.copyOf(next);
+    }
+
+    /**
+     * 코인별 최근 1시간 가격 추세를 반환한다.
+     *
+     * @return 심볼과 1분 간격 현재가(오래된 값부터, 최대 60개) 목록. 저장 전이면 빈 목록
+     */
+    public List<PriceTrendResponse> getPriceTrends() {
+        return priceTrends.entrySet().stream()
+                .map(entry -> new PriceTrendResponse(entry.getKey(), entry.getValue()))
+                .toList();
+    }
+
+    /**
+     * 현재가 문자열을 숫자로 바꾼다.
+     *
+     * @param lastPrice 거래소 현재가 문자열
+     * @return 양수 가격. 비어 있거나 숫자가 아니거나 0 이하면 null
+     */
+    private BigDecimal parsePrice(String lastPrice) {
+        if (lastPrice == null || lastPrice.isBlank()) {
+            return null;
+        }
+        try {
+            BigDecimal price = new BigDecimal(lastPrice);
+            return price.signum() > 0 ? price : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 기록 끝에 가격을 추가한 새 목록을 만든다. 보관 개수를 넘으면 가장 오래된 값부터 버린다.
+     *
+     * @param history 기존 기록 (오래된 값부터)
+     * @param price   추가할 가격
+     * @return 최대 PRICE_TREND_SIZE개의 불변 목록
+     */
+    private List<BigDecimal> appendPrice(List<BigDecimal> history, BigDecimal price) {
+        List<BigDecimal> updated = new ArrayList<>(history);
+        updated.add(price);
+        int from = Math.max(0, updated.size() - PRICE_TREND_SIZE);
+        return List.copyOf(updated.subList(from, updated.size()));
     }
 
     /**

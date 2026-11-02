@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+<!-- 모든 화면 공통 head: 테마를 첫 화면 그리기 전에 적용해 깜빡임을 막는다 -->
+<th:block th:fragment="assets">
+    <script>
+        (function() {
+            var root = document.documentElement;
+            var theme = null, mode = null;
+            // 저장소 접근이 막힌 환경에서도 기본값으로 화면이 뜨도록 예외를 삼킨다
+            try {
+                theme = localStorage.getItem('theme');
+                mode = localStorage.getItem('tradeMode');
+            } catch (e) { /* 기본값 사용 */ }
+            root.dataset.theme = theme === 'light' ? 'light' : 'dark';
+            root.dataset.mode = mode === 'sim' ? 'sim' : 'main';
+        })();
+
+        /**
+         * 현재 테마의 CSS 변수 값을 반환한다. (ApexCharts 등 CSS 변수를 직접 못 쓰는 곳에서 사용)
+         * @param {string} name 변수 이름 (앞의 -- 제외, 예: 'up')
+         * @returns {string} 색상 값
+         */
+        window.getThemeColor = function(name) {
+            return getComputedStyle(document.documentElement).getPropertyValue('--' + name).trim();
+        };
+    </script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+</th:block>
+</head>
+</html>

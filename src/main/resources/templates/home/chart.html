@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <title>코인 상세 차트</title>
-    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <th:block th:replace="~{fragments/head :: assets}"></th:block>
     <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@8.7.0"></script>
     <!-- STOMP WebSocket: 서버에서 실시간 데이터를 push 받기 위한 라이브러리 -->
     <script th:src="@{/_resources/js/sockjs.min.js}"></script>
     <script th:src="@{/_resources/js/stomp.min.js}"></script>
@@ -15,13 +15,26 @@
     <div class="trade-layout-container">
         <!-- 메인 콘텐츠 (차트) -->
         <div class="main-content">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-                <a href="/dashboard" class="back-link">← 대시보드로 돌아가기</a>
-                <a href="/mypage" class="mypage-link">마이페이지</a>
-            </div>
+            <!-- 심볼 머리글: 현재가·변동률·24시간 통계 (조회 실패 시 --) -->
+            <section class="sym-head">
+                <a class="back" href="/dashboard" aria-label="대시보드로 돌아가기">←</a>
+                <span id="sym-icon"></span>
+                <div class="sym-title">
+                    <h1><span th:text="${#strings.replace(symbol, 'USDT', '')}"></span><em>/USDT</em></h1>
+                    <span class="muted">무기한 선물</span>
+                </div>
+                <div class="sym-price">
+                    <span class="big-price" id="sym-price">--</span>
+                    <span class="pct-pill" id="sym-pct">--</span>
+                </div>
+                <dl class="sym-stats">
+                    <div><dt>24h 최고</dt><dd id="sym-high">--</dd></div>
+                    <div><dt>24h 최저</dt><dd id="sym-low">--</dd></div>
+                    <div><dt>24h 거래량</dt><dd id="sym-volume">--</dd></div>
+                </dl>
+            </section>
             <div class="chart-container">
                 <div class="chart-header">
-                    <h2 th:text="${symbol} + ' 상세 차트'"></h2>
                     <div class="interval-buttons">
                         <button onclick="loadChart('1')" id="btn-1">1분</button>
                         <button onclick="loadChart('5')" id="btn-5">5분</button>
@@ -29,6 +42,8 @@
                         <button onclick="loadChart('30')" id="btn-30">30분</button>
                         <button onclick="loadChart('60')" id="btn-60">1시간</button>
                     </div>
+                    <!-- 보유 중에만 표시 -->
+                    <span class="muted chart-hint" hidden>진입 · 익절 · 손절 가격 표시</span>
                 </div>
                 <!-- 캔들 조회 실패 안내 (1초 주기 재조회 성공 시 자동으로 숨김) -->
                 <div id="chart-load-error" class="load-error" style="display: none;">차트 데이터를 불러오지 못했습니다. 자동으로 다시 시도 중…</div>
@@ -41,14 +56,15 @@
 
             <!-- 호가창 (차트 하단, 매도/매수 좌우 배치) -->
             <div class="order-book-horizontal-panel">
-                <h3>호가창 (Order Book) <span id="ob-load-error" class="load-error-inline" style="display: none;">⚠ 갱신 실패 · 재시도 중</span></h3>
+                <h3>호가창 <span id="ob-load-error" class="load-error-inline" style="display: none;">⚠ 갱신 실패 · 재시도 중</span></h3>
                 <div class="order-book-last-price">
                     <span id="ob-last-price">...</span>
+                    <span class="muted">최종 체결가</span>
                 </div>
                 <div class="order-book-horizontal">
                     <!-- 매도 호가 (Asks) - 왼쪽 -->
                     <div class="ob-side ob-asks-side">
-                        <div class="ob-side-title ob-ask">매도 (Asks)</div>
+                        <div class="ob-side-title ob-ask">매도</div>
                         <div class="ob-side-header">
                             <span>가격(USDT)</span>
                             <span>수량</span>
@@ -60,7 +76,7 @@
                     </div>
                     <!-- 매수 호가 (Bids) - 오른쪽 -->
                     <div class="ob-side ob-bids-side">
-                        <div class="ob-side-title ob-bid">매수 (Bids)</div>
+                        <div class="ob-side-title ob-bid">매수</div>
                         <div class="ob-side-header">
                             <span>가격(USDT)</span>
                             <span>수량</span>
@@ -76,13 +92,22 @@
 
         <!-- 사이드 패널 -->
         <div class="side-panel">
-            <!-- 패턴 관리 큐 -->
+            <!-- [사용자 정책 2026-11-02] 카드 2개, 순서 고정: 위 = 패턴 관리 큐(전체 심볼), 아래 = 현재 심볼 큐. 접기 없음, 약 4줄 후 내부 스크롤 -->
+            <!-- 패턴 관리 큐: 현재 거래소·모드의 전체 심볼 목록 -->
+            <div class="my-queues">
+                <div class="my-queues-head">
+                    <h3>패턴 관리 큐</h3>
+                    <span class="my-queues-count" id="my-queues-count"></span>
+                </div>
+                <div class="my-queue-list" id="my-queue-list"></div>
+            </div>
+            <!-- 현재 심볼 큐 -->
             <div class="side-pattern-manage-panel">
                 <div class="pattern-manage-header">
-                    <h3>패턴 관리 큐 <span class="context-badge" data-context-badge></span></h3>
+                    <h3><span th:text="${symbol}"></span> 큐 <span class="context-badge" data-context-badge></span></h3>
                     <!-- 실시간(STOMP) 연결 상태 -->
                     <span id="stomp-status" class="stomp-status">● 연결 중</span>
-                    <div style="display:flex; gap:6px;">
+                    <div class="queue-actions">
                         <button class="import-queue-btn" onclick="openRegisterQueueModal()">큐 등록</button>
                         <button id="btn-import-queue" class="import-queue-btn" onclick="openImportQueueModal()">큐 가져오기</button>
                     </div>
@@ -227,6 +252,9 @@
         const CHART_HALF_CANDLES = 50;
         let followHalfMs = null;        // 따라가기 화면 반폭 (ms, null = 기본 50칸) — 스크롤바 오른쪽 끝 복귀 시 사용자 폭 유지
         let chartSeriesData = [];       // 캔들 데이터 캐시
+        let lastObPricePushAt = 0;      // 호가창 현재가를 시세 push로 마지막 갱신한 시각(ms)
+        // [사용자 정책 2026-11-02] 시세 push 후 3초 동안은 호가창 현재가에 캔들 폴링 값을 쓰지 않음
+        const OB_PRICE_PUSH_PRIORITY_MS = 3000;
         let rangeStartCandle = null;    // 범위 측정 시작 캔들
         let rangeEndCandle = null;      // 범위 측정 끝 캔들
         let rangeClickState = 0;        // 0: 대기, 1: 시작 선택됨, 2: 결과 표시 중
@@ -305,11 +333,11 @@
                 rows += triggerStateRow('경과', localElapsedSeconds + '초');
                 rows += changeRateRow('변동률');
             } else if (localPhase === 'BLOCK_MATCHING') {
-                rows += triggerStateRow('블록 대기', localBlockRemainingSeconds + '초');
+                rows += triggerStateRow('남은 시간', localBlockRemainingSeconds + '초');
                 if (localAmount !== null) rows += triggerStateRow('투자금', localAmount + ' USDT');
             } else if (localPhase === 'POSITION_HOLDING') {
                 // 진입가/현재 변동률 (TP/SL 가격은 차트 가로선으로만 표시)
-                if (localEntryPrice !== null) rows += triggerStateRow('진입가', localEntryPrice);
+                if (localEntryPrice !== null) rows += triggerStateRow('진입가', formatPriceText(localEntryPrice));
                 rows += changeRateRow('변동률');
                 // 오토스탑 큐: 진입 시점 24시간 거래량 (대시보드와 같은 표기, 시세 미수신이면 집계 중)
                 if (currentQueueVolumeStop) {
@@ -318,17 +346,28 @@
                         localEntryVolume === null ? 'muted' : '');
                 }
                 // 익절 지정가가 거래소에 걸려 체결 대기 중 (MAIN)
-                if (localTpOrderPending && localTpPrice !== null) rows += triggerStateRow('익절 지정가 대기', localTpPrice);
+                if (localTpOrderPending && localTpPrice !== null) rows += triggerStateRow('<i class="ts-spinner"></i>익절 지정가 대기', formatPriceText(localTpPrice));
             }
             return rows;
         }
 
-        /** trigger-state-info 내용만 갱신한다. (전체 DOM 재생성 없이 1초마다 호출) */
+        /**
+         * 현재 페이즈를 나타내는 "상태" 행을 만든다.
+         * @returns {string} 행 HTML (알 수 없는 페이즈면 빈 문자열)
+         */
+        function buildPhaseStateRow() {
+            if (localPhase === 'TRIGGER_WAIT') return triggerStateRow('상태', '<i class="ts-spinner"></i>트리거 대기');
+            if (localPhase === 'BLOCK_MATCHING') return triggerStateRow('상태', '<i class="ts-spinner"></i>블록 대기');
+            if (localPhase === 'POSITION_HOLDING') return triggerStateRow('상태', '<i class="ts-live-dot"></i>포지션 보유');
+            return '';
+        }
+
+        /** 상태 행 아래 항목만 갱신한다. (전체 DOM 재생성 없이 1초마다 호출, 값이 같으면 스피너가 끊기지 않도록 건드리지 않음) */
         function updateTriggerStateDisplay() {
-            var $info = $('.trigger-state-info');
-            if ($info.length === 0) return;
+            var $rest = $('.trigger-state-info .ts-rest');
+            if ($rest.length === 0) return;
             var rows = buildTriggerStateRows();
-            if (rows) $info.html(rows);
+            if ($rest.data('rows') !== rows) $rest.data('rows', rows).html(rows);
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -338,7 +377,12 @@
                 loadOrderBook();
                 loadPatterns();
                 connectStomp(); // STOMP WebSocket 연결 시작
+                loadSymbolHead();
+                setInterval(loadSymbolHead, 3000);   // 전체 티커 응답이 커서 차트(1초)보다 긴 간격으로 조회
             });
+
+            // 테마 전환 시 차트 색상과 주석선을 새 테마로 다시 적용
+            $(document).on('themeChanged', applyChartTheme);
 
             // 거래 모드 변경 시 자동매매 채널을 새 모드로 재구독 후 큐 목록 재조회
             $(document).on('tradeModeChanged', function() {
@@ -348,6 +392,7 @@
 
             // 헤더에서 거래소 변경 시 가격·자동매매 채널을 새 거래소로 재구독하고 차트·패턴을 다시 조회
             $(document).on('exchangeChanged', function() {
+                resetObLastPrice();
                 if (stompClient && stompClient.connected) subscribePriceTopic();
                 resubscribeAutoTradeChannels();
                 resetRangeInfo(); // 이전 거래소 차트의 범위 측정선 제거
@@ -355,6 +400,51 @@
                 loadPatterns();
             });
         });
+
+        /**
+         * 현재 테마의 ApexCharts 색상 옵션을 반환한다. (CSS 변수를 직접 쓸 수 없어 값을 읽어 전달)
+         * @returns {object} ApexCharts 옵션 일부
+         */
+        function chartThemeOptions() {
+            return {
+                theme: { mode: document.documentElement.dataset.theme },
+                chart: { background: 'transparent', foreColor: getThemeColor('muted') },
+                grid: { borderColor: getThemeColor('line') },
+                plotOptions: {
+                    candlestick: {
+                        colors: { upward: getThemeColor('up'), downward: getThemeColor('down') },
+                        wick: { useFillColor: true }
+                    }
+                }
+            };
+        }
+
+        /**
+         * 저장된 주석선의 색을 현재 테마로 바꾼다. (annotation.themeColor = CSS 변수 이름)
+         * @param annotation 주석선 설정 (없으면 무시)
+         */
+        function recolorAnnotation(annotation) {
+            if (!annotation) return;
+            const color = getThemeColor(annotation.themeColor);
+            annotation.borderColor = color;
+            annotation.label.borderColor = color;
+            annotation.label.style.background = color;
+            annotation.label.style.color = getThemeColor('on-accent');
+        }
+
+        /**
+         * 테마 전환 시 차트와 진입가·익절가·손절가·구간 측정 주석선을 새 색으로 다시 그린다.
+         */
+        function applyChartTheme() {
+            [entryPriceAnnotation, tpPriceAnnotation, slPriceAnnotation].concat(rangeAnnotations).forEach(recolorAnnotation);
+            if (!chart) return;
+            chart.updateOptions($.extend(true, chartThemeOptions(), {
+                annotations: {
+                    xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); }),
+                    yaxis: collectYAxisAnnotations()
+                }
+            }), false, false);
+        }
 
         function loadChart(interval) {
             // 시간 간격이 바뀌면 기존 차트 파괴 (타이틀 및 설정 초기화)
@@ -383,15 +473,20 @@
         }
 
         function fetchAndDraw(isInitial) {
+            var requestExchange = getExchange();   // 응답이 늦게 오는 사이 거래소가 바뀌었는지 판단하는 기준
             $.ajax({
                 url: '/api/kline',
                 type: 'GET',
-                data: { symbol: symbol, interval: currentInterval, exchange: getExchange() },
+                data: { symbol: symbol, interval: currentInterval, exchange: requestExchange },
                 success: function(data) {
                     // 응답: 시작 시각 오름차순 캔들 배열 (조회 실패 시 서버가 에러 상태 반환)
                     if (Array.isArray(data)) {
                         $('#chart-load-error').hide();
                         updateChart(data, isInitial);
+                        // 시세 push가 없는 코인도 호가창 현재가가 채워지도록 마지막 캔들 종가 사용 (이전 거래소의 늦은 응답은 제외)
+                        if (data.length > 0 && requestExchange === getExchange()) {
+                            updateObLastPriceFromPolling(data[data.length - 1].close);
+                        }
                     } else {
                         console.error('Failed to load data', data);
                         $('#chart-load-error').show();
@@ -608,6 +703,8 @@
                     var range = followRange(seriesData);
                     if (range) opts.xaxis = range;
                 }
+                var yaxis = holdingYAxisUpdate();
+                if (yaxis) opts.yaxis = yaxis;
                 chart.updateOptions(opts, false, false);
                 // 오버레이 복원 (DOM에서 제거되었을 경우)
                 restoreRangeOverlay();
@@ -629,8 +726,9 @@
                 }],
                 chart: {
                     type: 'candlestick',
-                    height: 500,
-                    toolbar: { show: true },
+                    height: 400,
+                    // 도구 막대가 오른쪽 세로축 맨 위 라벨을 가리지 않도록 그래프 위쪽으로 올린다
+                    toolbar: { show: true, offsetY: -6 },
                     animations: { enabled: false }, // 실시간 업데이트 시 애니메이션 끄기
                     zoom: {
                         type: 'xy', // X축과 Y축 모두 줌 가능
@@ -698,10 +796,6 @@
                         }
                     }]
                 },
-                title: {
-                    text: symbol + ' 가격 차트 (' + getIntervalLabel(currentInterval) + ')',
-                    align: 'left'
-                },
                 xaxis: {
                     type: 'datetime',
                     min: initialRange.min,
@@ -719,11 +813,8 @@
                         }
                     }
                 },
-                yaxis: {
-                    tooltip: {
-                        enabled: true
-                    }
-                },
+                yaxis: chartYAxisBase(),
+                grid: { padding: { top: 18 } },
                 tooltip: {
                     x: {
                         // 캔들 hover 시 표시되는 시각도 KST로 (브라우저 로컬 시간)
@@ -733,8 +824,8 @@
                 plotOptions: {
                     candlestick: {
                         colors: {
-                            upward: '#28a745',
-                            downward: '#dc3545'
+                            upward: getThemeColor('up'),
+                            downward: getThemeColor('down')
                         }
                     }
                 },
@@ -745,16 +836,12 @@
                 }
             };
 
+            $.extend(true, options, chartThemeOptions());
             chart = new ApexCharts(document.querySelector("#chart"), options);
             chart.render();
             syncChartScroll();
             // 차트 생성 전에 checkAutoTradeStatus가 먼저 응답한 경우 이미 설정된 annotation 복원
             refreshChartAnnotations();
-        }
-
-        function getIntervalLabel(interval) {
-            if (interval === '60') return '1시간';
-            return interval + '분';
         }
 
         /**
@@ -783,14 +870,15 @@
                 var startAnnotation = {
                     id: 'range-start',
                     x: clickedCandle.x.getTime(),
-                    borderColor: '#007bff',
+                    themeColor: 'accent',
+                    borderColor: getThemeColor('accent'),
                     strokeDashArray: 4,
                     label: {
                         text: '시작: ' + clickedCandle.y[3].toLocaleString(),
-                        borderColor: '#007bff',
+                        borderColor: getThemeColor('accent'),
                         style: {
-                            color: '#fff',
-                            background: '#007bff',
+                            color: getThemeColor('on-accent'),
+                            background: getThemeColor('accent'),
                             fontSize: '11px',
                             padding: { left: 6, right: 6, top: 2, bottom: 2 }
                         }
@@ -820,19 +908,21 @@
 
                 var sign = diff >= 0 ? '+' : '';
                 var colorClass = diff >= 0 ? 'range-up' : 'range-down';
-                var borderColor = diff >= 0 ? '#28a745' : '#dc3545';
+                var themeColor = diff >= 0 ? 'up' : 'down';
+                var borderColor = getThemeColor(themeColor);
 
                 // 끝 캔들 annotation 설정 저장 + 추가
                 var endAnnotation = {
                     id: 'range-end',
                     x: endCandle.x.getTime(),
+                    themeColor: themeColor,
                     borderColor: borderColor,
                     strokeDashArray: 4,
                     label: {
                         text: '끝: ' + endPrice.toLocaleString(),
                         borderColor: borderColor,
                         style: {
-                            color: '#fff',
+                            color: getThemeColor('on-accent'),
                             background: borderColor,
                             fontSize: '11px',
                             padding: { left: 6, right: 6, top: 2, bottom: 2 }
@@ -929,34 +1019,35 @@
             const asksContainer = document.getElementById('asks-list');
             const bidsContainer = document.getElementById('bids-list');
             
-            // 매도 호가 (asks) - API가 오름차순으로 주므로, 가장 좋은 8개 호가를 그대로 사용한다.
-            asksContainer.innerHTML = asks.slice(0, 8).map(ask => {
-                const price = parseFloat(ask.price);
-                const quantity = parseFloat(ask.qty);
-                const total = (price * quantity).toFixed(2);
-                return `
-                    <div class="ob-row">
-                        <span class="ob-price ob-ask">${price.toLocaleString()}</span>
-                        <span>${quantity}</span>
-                        <span>${total}</span>
-                    </div>
-                `;
-            }).join('');
+            // API가 매도는 오름차순, 매수는 내림차순으로 주므로 가장 좋은 8개 호가를 그대로 사용한다.
+            const topAsks = asks.slice(0, 8);
+            const topBids = bids.slice(0, 8);
+            const cumulativeQty = rows => rows.reduce((sum, row) => sum + parseFloat(row.qty), 0);
+            // 잔량 막대 기준: 양쪽 8호가 누적 수량 중 큰 값 (0이면 막대 없음)
+            const maxQty = Math.max(cumulativeQty(topAsks), cumulativeQty(topBids));
 
-            // 매수 호가 (bids) - API가 내림차순으로 주므로, 가장 좋은 8개 호가를 그대로 사용한다.
-            bidsContainer.innerHTML = bids.slice(0, 8).map(bid => {
-                const price = parseFloat(bid.price);
-                const quantity = parseFloat(bid.qty);
-                const total = (price * quantity).toFixed(2);
-                return `
+            const renderRows = (rows, sideClass, barClass) => {
+                let cumulative = 0;
+                return rows.map(row => {
+                    const price = parseFloat(row.price);
+                    const quantity = parseFloat(row.qty);
+                    const total = (price * quantity).toFixed(2);
+                    cumulative += quantity;
+                    const barWidth = maxQty > 0 ? (cumulative / maxQty * 100).toFixed(1) : 0;
+                    return `
                     <div class="ob-row">
-                        <span class="ob-price ob-bid">${price.toLocaleString()}</span>
+                        <i class="ob-bar ${barClass}" style="width:${barWidth}%"></i>
+                        <span class="ob-price ${sideClass}">${price.toLocaleString()}</span>
                         <span>${quantity}</span>
-                        <span>${total}</span>
+                        <span>${formatPriceText(total)}</span>
                     </div>
                 `;
-            }).join('');
-            // 마지막 체결가(ob-last-price)는 시세 수신 시 ticker.lastPrice로만 갱신한다
+                }).join('');
+            };
+
+            asksContainer.innerHTML = renderRows(topAsks, 'ob-ask', 'ob-bar-ask');
+            bidsContainer.innerHTML = renderRows(topBids, 'ob-bid', 'ob-bar-bid');
+            // 마지막 체결가(ob-last-price)는 시세 push와 캔들 폴링에서만 갱신한다 (updateObLastPrice)
         }
 
         // === 패턴 관리 큐 ===
@@ -1069,8 +1160,120 @@
             $('[data-context-badge]').text(getTradeContextLabel());
         }
 
+        /**
+         * 패턴 관리 큐 전체 목록을 조회한다. (현재 거래소·모드 기준)
+         */
+        function loadMyQueues() {
+            const requestKey = getTradeMode() + '/' + getExchange();
+            $.ajax({
+                url: '/api/autotrade/patterns/all',
+                type: 'GET',
+                data: { mode: getTradeMode(), exchange: getExchange() },
+                success: function(queues) {
+                    // 응답 전에 모드·거래소가 바뀌었으면 옛 목록을 표시하지 않음
+                    if (requestKey === getTradeMode() + '/' + getExchange()) renderMyQueues(queues || []);
+                },
+                error: function() {
+                    if (requestKey !== getTradeMode() + '/' + getExchange()) return;
+                    $('#my-queues-count').text('');
+                    $('#my-queue-list').html('<div class="my-queue-empty">목록을 불러오지 못했습니다.</div>');
+                }
+            });
+        }
+
+        /**
+         * 패턴 관리 큐 목록을 그린다. 현재 심볼을 강조하고 목록 안에서만 스크롤해 보이게 한다.
+         * @param queues 큐 목록 (PatternQueueResponse 배열)
+         */
+        function renderMyQueues(queues) {
+            const onCount = queues.filter(function(q) { return q.active; }).length;
+            $('#my-queues-count').text(queues.length ? queues.length + '개 · ON ' + onCount : '');
+
+            const $list = $('#my-queue-list').empty();
+            if (!queues.length) {
+                $list.html('<div class="my-queue-empty">등록된 큐가 없습니다.</div>');
+                return;
+            }
+
+            queues.forEach(function(q) {
+                $('<a class="my-queue-row"></a>')
+                    .attr('href', '/chart?symbol=' + encodeURIComponent(q.symbol))
+                    .toggleClass('active', q.symbol === symbol)
+                    .append(coinIconHtml(q.symbol.replace(/USDT$/, '')))
+                    .append($('<span class="my-queue-symbol"></span>').text(q.symbol))
+                    .append($('<span class="my-queue-state"></span>').toggleClass('on', q.active).text(q.active ? 'ON' : 'OFF'))
+                    .appendTo($list);
+            });
+
+            // 페이지 전체가 움직이지 않도록 목록 요소의 scrollTop만 조정
+            const row = $list.find('.my-queue-row.active').get(0);
+            if (row) $list.scrollTop(row.offsetTop - ($list.innerHeight() - row.offsetHeight) / 2);
+        }
+
+        /**
+         * 심볼 머리글의 현재가·변동률·24시간 통계를 조회해 갱신한다.
+         * 응답에 현재 심볼이 없거나 조회에 실패하면 --로 표시한다.
+         */
+        function loadSymbolHead() {
+            $.ajax({
+                // [사용자 정책 2026-11-02] 거래소 간 가격 차이가 크지 않아 API 호출을 줄이기 위해 표시 시세는 선택 거래소와 무관하게 Bybit 값으로 통일
+                url: '/api/tickers',
+                type: 'GET',
+                success: function(tickers) {
+                    renderSymbolHead((tickers || []).find(function(t) { return t.symbol === symbol; }));
+                },
+                error: function() {
+                    renderSymbolHead(null);
+                }
+            });
+        }
+
+        let lastSymPrice = null;   // 머리글 직전 가격 (깜빡임 방향 비교용)
+
+        /**
+         * 머리글 가격을 직전 값과 비교해 오르면 초록, 내리면 빨강으로 잠깐 표시한다. 같으면 표시하지 않는다.
+         * @param {number} price 현재가
+         */
+        function applySymPriceFlash(price) {
+            const $price = $('#sym-price');
+            // 값이 같으면 이전 표시를 지운 상태로 둔다
+            $price.removeClass('flash-up flash-down');
+            if (lastSymPrice !== null && price !== lastSymPrice) {
+                // 클래스를 뺐다가 다시 넣어야 애니메이션이 처음부터 재생된다
+                void $price[0].offsetWidth;
+                $price.addClass(price > lastSymPrice ? 'flash-up' : 'flash-down');
+            }
+            lastSymPrice = price;
+        }
+
+        /**
+         * 심볼 머리글을 그린다.
+         * @param ticker 현재 심볼의 티커 (없으면 null/undefined)
+         */
+        function renderSymbolHead(ticker) {
+            // 조회 실패 뒤 첫 값은 비교 대상이 없으므로 깜빡이지 않는다
+            if (!ticker) lastSymPrice = null;
+            if (!$('#sym-icon').children().length) {
+                $('#sym-icon').html(coinIconHtml(ticker ? ticker.baseCoin : symbol.replace(/USDT$/, '')));
+            }
+            const $pct = $('#sym-pct').removeClass('text-green text-red');
+            if (!ticker) {
+                $('#sym-price, #sym-high, #sym-low, #sym-volume').text('--');
+                $pct.text('--');
+                return;
+            }
+            const pcnt = parseFloat(ticker.price24hPcnt) * 100;
+            $('#sym-price').text(formatPriceText(ticker.lastPrice));
+            applySymPriceFlash(parseFloat(ticker.lastPrice));
+            $pct.addClass(pcnt < 0 ? 'text-red' : 'text-green').text((pcnt > 0 ? '+' : '') + pcnt.toFixed(2) + '%');
+            $('#sym-high').text(formatPriceText(ticker.highPrice24h));
+            $('#sym-low').text(formatPriceText(ticker.lowPrice24h));
+            $('#sym-volume').text(parseFloat(ticker.volume24h).toLocaleString('en-US', {maximumFractionDigits: 2}));
+        }
+
         function loadPatterns() {
             updateContextBadges();
+            loadMyQueues();   // 큐 변경·모드·거래소 전환 시 전체 목록도 함께 갱신
             $.ajax({
                 url: '/api/autotrade/patterns',
                 type: 'GET',
@@ -1155,7 +1358,7 @@
                 // 단계별 렌더링 (평평한 패턴 목록을 stepLevel로 묶음)
                 var steps = groupPatternsByStep(queue.patterns);
                 var stepsHtml = steps.map(function(step) {
-                    var patternsHtml = step.patterns.map(function(p, pIdx) {
+                    var patternsHtml = step.patterns.map(function(p) {
                         // 블록 태그 생성 (data-block-order = 블록 위치, 1부터 — 진행 블록 하이라이트용)
                         var blockTag = function(side, blockOrder) {
                             var isLong = side === 'LONG';
@@ -1170,14 +1373,20 @@
                         // 리프 블록 시각화 (조건 블록 다음 순서)
                         var leafHtml = blockTag(p.leafBlock, p.conditionBlocks.length + 1);
 
+                        // 진입 방향은 첫 조건 블록이 아니라 leaf 블록의 방향이다 (S:L 패턴은 LONG 진입)
+                        var entryIsLong = p.leafBlock === 'LONG';
+                        var metaParts = [p.leverage + 'x', p.amount + ' USDT'];
+                        if (p.takeProfitRate) metaParts.push('익절 ' + p.takeProfitRate + '%');
+                        if (p.stopLossRate) metaParts.push('손절 ' + p.stopLossRate + '%');
+
+                        // 조건·leaf 블록 그룹 2개 유지 (highlightActiveStep이 마지막 그룹을 leaf로 사용)
                         return '<div class="step-pattern-row" data-pattern-order="' + p.patternOrder + '">' +
-                            '<span class="step-pattern-label">패턴' + (pIdx + 1) + ':</span>' +
+                            '<div class="step-pattern-line">' +
                             '<span class="step-pattern-blocks">' + condHtml + '</span>' +
-                            '<span class="block-colon-display">:</span>' +
                             '<span class="step-pattern-blocks">' + leafHtml + '</span>' +
-                            '<span class="step-pattern-meta">→ ' + p.amount + ' USDT ×' + p.leverage + '</span>' +
-                            (p.stopLossRate ? '<span class="step-pattern-meta sl">SL:' + p.stopLossRate + '%</span>' : '') +
-                            (p.takeProfitRate ? '<span class="step-pattern-meta tp">TP:' + p.takeProfitRate + '%</span>' : '') +
+                            '<span class="step-entry-tag ' + (entryIsLong ? 'long' : 'short') + '">⇒ ' + p.leafBlock + '</span>' +
+                            '</div>' +
+                            '<span class="step-pattern-meta">' + metaParts.join(' · ') + '</span>' +
                             '</div>';
                     }).join('');
 
@@ -1185,7 +1394,7 @@
                     var isFirstStep = (step.stepLevel === steps[0].stepLevel);
                     var activeClass = (queue.active && isFirstStep) ? ' step-active' : '';
                     var badgeHtml = (queue.active && isFirstStep)
-                        ? '<span class="step-active-badge">현재 진행 단계</span>' : '';
+                        ? '<span class="step-active-badge">진행 중</span>' : '';
 
                     return '<div class="step-card' + activeClass + '" data-step-level="' + step.stepLevel + '">' +
                         '<div class="step-card-header">' +
@@ -1196,28 +1405,30 @@
                         '</div>';
                 }).join('');
 
-                // 큐 카드: 토글 버튼 + 트리거 정보 + 단계 목록 + 삭제 버튼
-                var toggleLabel = queue.active ? 'ON' : 'OFF';
+                // 큐 카드: 스위치 + 트리거 / 뱃지 / 상태(꺼짐 안내) / 단계 목록 / 수정·삭제
                 var toggleClass = queue.active ? 'toggle-on' : 'toggle-off';
 
-                var cycleBadge = queue.cycle ? '<span class="cycle-badge">🔄 사이클</span>' : '';
+                var cycleBadge = queue.cycle ? '<span class="cycle-badge">사이클</span>' : '';
                 // 오토스탑 모드 사용 중 (거래량 급변 시 현재 단계 종료 후 중지)
-                var autoStopBadge = queue.volumeStopEnabled ? '<span class="auto-stop-badge">🛑 오토스탑</span>' : '';
+                var autoStopBadge = queue.volumeStopEnabled ? '<span class="auto-stop-badge">오토스탑</span>' : '';
                 // 거래량 급변 감지됨 → 현재 단계 종료 후 중지 예정
                 var volumeStopBadge = queue.volumeStopReserved
-                    ? '<span class="volume-stop-badge" title="거래량 급감이 감지되어 현재 단계가 끝나면 큐가 중지됩니다">⏸ 중지 예약</span>' : '';
+                    ? '<span class="volume-stop-badge" title="거래량 급감이 감지되어 현재 단계가 끝나면 큐가 중지됩니다">중지 예약</span>' : '';
+                // 꺼진 큐는 상태 대신 안내 문구 표시
+                var offNote = queue.active ? '' : '<p class="queue-off-note">큐가 꺼져 있습니다. 켜면 트리거 대기부터 시작합니다.</p>';
                 return '<div class="server-queue-card ' + (queue.active ? 'queue-active' : 'queue-inactive') + '" data-queue-id="' + queue.id + '">' +
                     '<div class="server-queue-header">' +
-                    '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '">' + toggleLabel + '</button>' +
-                    '<span class="queue-trigger-info">트리거: ' + queue.triggerRate + '%</span>' +
-                    cycleBadge +
-                    autoStopBadge +
-                    volumeStopBadge +
+                    '<button onclick="toggleQueue(' + queue.id + ')" class="queue-toggle-btn ' + toggleClass + '" aria-pressed="' + !!queue.active + '" aria-label="큐 켜기/끄기"><i></i></button>' +
+                    '<span class="queue-trigger-info">트리거 <b>' + queue.triggerRate + '%</b></span>' +
+                    '</div>' +
+                    '<div class="queue-badges">' + cycleBadge + autoStopBadge + volumeStopBadge + '</div>' +
+                    offNote +
+                    stepsHtml +
+                    '<div class="server-queue-foot">' +
                     '<button onclick="startEditQueue(' + queue.id + ')" class="pattern-edit-btn" ' + (queue.active ? 'disabled title="비활성화 후 수정하세요"' : '') + '>수정</button>' +
                     // [사용자 정책 2026-10-30] 활성 큐는 삭제 불가 — 비활성화 후 삭제
                     '<button onclick="deletePattern(' + queue.id + ')" class="pattern-delete-btn" ' + (queue.active ? 'disabled title="비활성화 후 삭제하세요"' : '') + '>삭제</button>' +
                     '</div>' +
-                    stepsHtml +
                     '</div>';
             }).join('');
 
@@ -2098,6 +2309,47 @@
         }
 
         /**
+         * 호가창 현재가의 값과 색을 갱신한다. (시세 push·캔들 폴링 공통)
+         *
+         * @param price 가격 (거래소가 준 문자열)
+         */
+        function updateObLastPrice(price) {
+            var lastPriceEl = document.getElementById('ob-last-price');
+            var currentPriceNum = parseFloat(price);
+            if (isNaN(currentPriceNum)) return;
+            var previousPriceNum = parseFloat(lastPriceEl.dataset.rawPrice || 0);
+
+            // 가격 상승/하락에 따라 색상 클래스 적용 (bid=초록, ask=빨강). 값이 같으면 직전 색 유지
+            if (currentPriceNum > previousPriceNum) lastPriceEl.className = 'ob-bid';
+            else if (currentPriceNum < previousPriceNum) lastPriceEl.className = 'ob-ask';
+            // 작은 가격의 소수 자릿수가 잘리지 않도록 거래소가 준 문자열에 쉼표만 넣어 표시
+            lastPriceEl.innerText = formatPriceText(price);
+            lastPriceEl.dataset.rawPrice = currentPriceNum;
+        }
+
+        /**
+         * 캔들 폴링 값으로 호가창 현재가를 갱신한다.
+         * 두 값이 번갈아 들어와 색이 튀지 않도록, 최근 시세 push가 있으면 무시한다.
+         *
+         * @param closePrice 마지막 캔들 종가 (문자열)
+         */
+        function updateObLastPriceFromPolling(closePrice) {
+            if (Date.now() - lastObPricePushAt < OB_PRICE_PUSH_PRIORITY_MS) return;
+            updateObLastPrice(closePrice);
+        }
+
+        /**
+         * 거래소가 바뀌면 호가창 현재가를 비운다. (다른 거래소 값 표시·색 비교 방지)
+         */
+        function resetObLastPrice() {
+            var lastPriceEl = document.getElementById('ob-last-price');
+            lastObPricePushAt = 0;
+            lastPriceEl.className = '';
+            lastPriceEl.innerText = '...';
+            delete lastPriceEl.dataset.rawPrice;
+        }
+
+        /**
          * /topic/price.{exchange}.{symbol} 토픽을 구독한다. (선택 거래소 기준 공개 가격)
          * 서버에서 거래소 WebSocket으로 수신한 실시간 가격이 이 토픽으로 push된다.
          *
@@ -2118,14 +2370,8 @@
 
                 // 호가창 체결가 업데이트 (실시간 가격 반영)
                 if (ticker.lastPrice) {
-                    var lastPriceEl = document.getElementById('ob-last-price');
-                    var currentPriceNum = parseFloat(ticker.lastPrice);
-                    var previousPriceNum = parseFloat(lastPriceEl.dataset.rawPrice || 0);
-
-                    // 가격 상승/하락에 따라 색상 클래스 적용 (bid=초록, ask=빨강)
-                    lastPriceEl.className = 'order-book-last-price ' + (currentPriceNum >= previousPriceNum ? 'ob-bid' : 'ob-ask');
-                    lastPriceEl.innerText = currentPriceNum.toLocaleString();
-                    lastPriceEl.dataset.rawPrice = currentPriceNum;
+                    lastObPricePushAt = Date.now();
+                    updateObLastPrice(ticker.lastPrice);
                 }
             });
         }
@@ -2245,7 +2491,8 @@
                     highlightActiveStep(data);
 
                     // 활성화됨 → STOMP 구독 시작 (이후 실시간 push로 갱신)
-                    if (autoTradeActive && !wasActive) {
+                    // 연결 전이면 구독하지 않음: connectStomp()의 연결 직후 처리가 autoTradeActive를 보고 구독한다
+                    if (autoTradeActive && !wasActive && stompClient && stompClient.connected) {
                         subscribeAutoTradeTopic();
                     }
                     // 비활성화됨 → STOMP 구독 해제
@@ -2276,17 +2523,92 @@
          */
         function refreshChartAnnotations() {
             if (!chart) return;
-            chart.updateOptions({
+            var opts = {
                 annotations: {
                     xaxis: rangeAnnotations.map(function(a) { return JSON.parse(JSON.stringify(a)); }),
                     yaxis: collectYAxisAnnotations()
                 }
-            }, false, false);
+            };
+            var yaxis = holdingYAxisUpdate();
+            if (yaxis) opts.yaxis = yaxis;
+            chart.updateOptions(opts, false, false);
+            // 보유 중에만 차트 위 안내 표시
+            $('.chart-hint').prop('hidden', collectYAxisAnnotations().length === 0);
+        }
+
+        /** 세로축 기본 설정 (오른쪽 축, 눈금 7칸, 가격 크기별 소수 자릿수) */
+        function chartYAxisBase() {
+            return {
+                opposite: true,
+                tickAmount: 7,
+                tooltip: { enabled: true },
+                labels: {
+                    formatter: function(value) {
+                        if (typeof value !== 'number') return value;
+                        var digits = Math.abs(value) >= 100 ? 2 : Math.abs(value) >= 1 ? 4 : 8;
+                        return value.toLocaleString('en-US', { maximumFractionDigits: digits });
+                    }
+                }
+            };
+        }
+
+        let yAxisExpanded = false;   // 세로축을 진입·익절·손절가까지 넓혀 둔 상태인지 (해제 시 한 번만 되돌림)
+
+        /**
+         * 보유 중이면 보이는 캔들과 세 가격선을 모두 포함하는 세로축 설정을 만든다.
+         * 보유가 끝난 직후에는 자동 범위로 되돌리는 설정을, 그 외에는 null을 반환한다.
+         * (null일 때 세로축을 건드리지 않아야 줌의 autoScaleYaxis 결과가 유지된다)
+         * @returns {object|null} updateOptions에 넘길 yaxis 설정
+         */
+        function holdingYAxisUpdate() {
+            var lines = collectYAxisAnnotations();
+            if (lines.length === 0) {
+                if (!yAxisExpanded) return null;
+                yAxisExpanded = false;
+                return Object.assign(chartYAxisBase(), { min: undefined, max: undefined });
+            }
+
+            var values = lines.map(function(line) { return line.y; });
+            var view = currentViewRange();
+            chartSeriesData.forEach(function(candle) {
+                // 현재 화면에 보이는 캔들만 포함 (범위를 모르면 전체)
+                var time = candle.x.getTime();
+                if (view && (time < view.min || time > view.max)) return;
+                values.push(candle.y[1], candle.y[2]);   // 고가, 저가
+            });
+            yAxisExpanded = true;
+            return Object.assign(chartYAxisBase(), {
+                min: Math.min.apply(null, values) * 0.998,
+                max: Math.max.apply(null, values) * 1.002
+            });
+        }
+
+        /**
+         * 보유 가격선 설정을 만든다. (점선, 라벨은 왼쪽 + 가격 표시)
+         * @param y 가격
+         * @param themeColor 선·라벨 색 CSS 변수 이름
+         * @param text 라벨 문구
+         */
+        function buildPriceLine(y, themeColor, text) {
+            var color = getThemeColor(themeColor);
+            return {
+                y: y,
+                themeColor: themeColor,
+                borderColor: color,
+                strokeDashArray: 3,
+                label: {
+                    borderColor: color,
+                    style: { color: getThemeColor('on-accent'), background: color, fontSize: '10px', padding: { left: 5, right: 5, top: 2, bottom: 2 } },
+                    text: text,
+                    position: 'left',
+                    textAnchor: 'start'
+                }
+            };
         }
 
         /**
          * 진입가를 차트에 가로선(yaxis annotation)으로 표시한다.
-         * POSITION_HOLDING 상태에서 호출되며, 진입가를 주황색 굵은 선으로 표시한다.
+         * POSITION_HOLDING 상태에서 호출된다.
          *
          * @param entryPrice 진입가 문자열 (예: "50000.00")
          */
@@ -2295,18 +2617,7 @@
 
             // 차트 존재 여부와 무관하게 변수를 항상 세팅 (race condition 대응)
             // → chart가 null일 때도 변수를 설정해두고, 차트 생성 직후 refreshChartAnnotations()가 복원
-            entryPriceAnnotation = {
-                y: parseFloat(entryPrice),
-                borderColor: '#FF9800',   // 주황색 (매매 진입선 의미)
-                borderWidth: 3,
-                strokeDashArray: 0,
-                label: {
-                    borderColor: '#FF9800',
-                    style: { color: '#fff', background: '#FF9800', fontWeight: 'bold', fontSize: '12px' },
-                    text: '진입가: ' + entryPrice + ' USDT',
-                    position: 'right'
-                }
-            };
+            entryPriceAnnotation = buildPriceLine(parseFloat(entryPrice), 'accent', '진입 ' + formatPriceText(entryPrice));
             if (chart) refreshChartAnnotations();
         }
 
@@ -2316,38 +2627,10 @@
          */
         function updateTpSlAnnotation(tpPrice, slPrice) {
             // 차트 존재 여부와 무관하게 변수를 항상 세팅 (race condition 대응)
-            if (tpPrice != null) {
-                tpPriceAnnotation = {
-                    y: parseFloat(tpPrice),
-                    borderColor: '#4CAF50',   // 초록색 (익절)
-                    borderWidth: 2,
-                    strokeDashArray: 4,       // 점선
-                    label: {
-                        borderColor: '#4CAF50',
-                        style: { color: '#fff', background: '#4CAF50', fontWeight: 'bold', fontSize: '11px' },
-                        text: '익절가: ' + parseFloat(tpPrice).toFixed(4),
-                        position: 'right'
-                    }
-                };
-            } else {
-                tpPriceAnnotation = null;
-            }
-            if (slPrice != null) {
-                slPriceAnnotation = {
-                    y: parseFloat(slPrice),
-                    borderColor: '#F44336',   // 빨간색 (손절)
-                    borderWidth: 2,
-                    strokeDashArray: 4,
-                    label: {
-                        borderColor: '#F44336',
-                        style: { color: '#fff', background: '#F44336', fontWeight: 'bold', fontSize: '11px' },
-                        text: '손절가: ' + parseFloat(slPrice).toFixed(4),
-                        position: 'right'
-                    }
-                };
-            } else {
-                slPriceAnnotation = null;
-            }
+            tpPriceAnnotation = tpPrice != null
+                ? buildPriceLine(parseFloat(tpPrice), 'up', '익절 ' + formatPriceText(parseFloat(tpPrice).toFixed(4))) : null;
+            slPriceAnnotation = slPrice != null
+                ? buildPriceLine(parseFloat(slPrice), 'down', '손절 ' + formatPriceText(parseFloat(slPrice).toFixed(4))) : null;
             if (chart) refreshChartAnnotations();
         }
 
@@ -2418,7 +2701,7 @@
 
             var $activeStep = $queueCard.find('.step-card[data-step-level="' + data.currentStepLevel + '"]');
             $activeStep.addClass('step-active');
-            $activeStep.find('.step-card-header').append('<span class="step-active-badge">현재 진행 단계</span>');
+            $activeStep.find('.step-card-header').append('<span class="step-active-badge">진행 중</span>');
 
             // BLOCK_MATCHING / POSITION_HOLDING: 활성 패턴의 블록에 진행 상태 표시
             if ((data.phase === 'BLOCK_MATCHING' || data.phase === 'POSITION_HOLDING')
@@ -2451,8 +2734,10 @@
             currentQueueVolumeStop = !!(runningQueue && runningQueue.volumeStopEnabled);
 
             // 트리거 상태 표시 (큐 헤더 하단) + 진입가/TP/SL 차트 가로선 관리
-            var rows = buildTriggerStateRows();
-            var triggerHtml = rows ? '<div class="trigger-state-info">' + rows + '</div>' : '';
+            var stateRow = buildPhaseStateRow();
+            var triggerHtml = stateRow
+                ? '<div class="trigger-state-info">' + stateRow + '<div class="ts-rest">' + buildTriggerStateRows() + '</div></div>'
+                : '';
             if (data.phase === 'POSITION_HOLDING') {
                 // 차트 가로선 갱신 (TP=초록 / SL=빨강 점선)
                 if (data.entryPrice !== null) {
@@ -2464,7 +2749,7 @@
             }
 
             if (triggerHtml) {
-                $queueCard.find('.server-queue-header').after(triggerHtml);
+                $queueCard.find('.queue-badges').after(triggerHtml);
             }
 
             // 로컬 카운터 타이머 시작 (서버 push와 무관하게 1초마다 텍스트 갱신)

@@ -1,25 +1,26 @@
 # Web Coin Trader
 
-Bybit API 기반 암호화폐 자동매매 웹 애플리케이션
+Bybit·Binance 선물을 지원하는 패턴 기반 암호화폐 자동매매 웹 애플리케이션 (실전/모의투자)
 
 ## 주요 기능
 
-- **실시간 대시보드** - 전체 코인 시세 목록 (1초 갱신, 거래량 기준 정렬)
+- **실시간 대시보드** - 전체 코인 시세 목록 (1초 갱신, 거래대금 기준 정렬, 코인 검색), 코인별 최근 1시간 추세 미니 차트 (서버 메모리에 1분 간격 저장, 재시작 시 다시 채워짐)
 - **상세 차트** - 코인별 캔들 차트 (1분/5분/15분/30분/1시간) + 호가창
 - **패턴 기반 자동매매** - 큐 > 단계 > 패턴 > 블록 계층 구조로 매매 전략 구성
-- **거래량 급감 시 큐 중지** - 진입 시점 대비 24시간 거래량이 절반 이하로 줄면 현재 단계 종료 후 큐 중지 (큐별 선택, 급증은 판정하지 않음)
-- **마이페이지** - 거래 히스토리 조회, 패턴 관리
-- **회원가입/로그인** - Bybit API Key 검증 포함
+- **오토스탑 모드** - 진입 시점 대비 24시간 거래량이 절반 이하로 줄면 현재 단계 종료 후 큐 중지 (큐별 선택, 급증은 판정하지 않음)
+- **마이페이지** - 등록된 패턴, 투자·거래 히스토리(승률 등 통계·차트), 거래소 API 키 관리
+- **회원가입/로그인** - 거래소 API Key는 선택 입력 (입력 시 거래소 검증, 비우면 모의투자 전용, 마이페이지에서 나중에 등록)
+- **멀티 거래소·모드** - 헤더에서 거래소와 실전/모의 전환
 
 ## 기술 스택
 
 | 구분 | 기술 |
 |---|---|
 | Backend | Java 17, Spring Boot 3.4.2 |
-| Frontend | Thymeleaf, ApexCharts, Vanilla JS |
+| Frontend | Thymeleaf, ApexCharts, jQuery 4 |
 | Database | MariaDB (개발/운영), H2 (테스트) |
 | API 통신 | Spring Cloud OpenFeign |
-| 실시간 | WebSocket (Bybit 시세 스트림) |
+| 실시간 | 거래소 WebSocket (Bybit·Binance 시세/체결), 화면 push는 STOMP (SockJS) |
 | 인증 | Spring Security |
 | 테스트 | JUnit 5, WireMock |
 | 빌드 | Gradle |
@@ -28,15 +29,18 @@ Bybit API 기반 암호화폐 자동매매 웹 애플리케이션
 
 ```
 src/main/java/com/coin/webcointrader/
-├── autotrade/          # 자동매매 (큐, 패턴, 단계 관리 + 엔티티/리포지토리)
-├── trade/              # 거래 실행 Facade, 실전 거래·투자 히스토리
-├── sim/                # 모의투자 (가상 지갑, 모의 히스토리)
-├── login/              # 로그인/회원가입, 거래소 API Key
-├── mypage/             # 마이페이지 (타 도메인 Service/DTO 로만 접근)
-├── market/             # 시장 데이터 (시세, 호가)
-├── wallet/             # 실전 지갑 잔고
-├── bybit/              # Bybit 연동 (Feign 클라이언트, WebSocket, 요청/응답 DTO)
-└── common/             # 공통 (BaseEntity, Enum, 거래소 추상화, 설정, 유틸)
+├── common/             # 공통 추상화 + 도메인
+│   ├── autotrade/      # 자동매매 (큐, 패턴, 단계 관리, 엔진)
+│   ├── trade/          # 거래 실행 Facade, 실전 거래·투자 히스토리, 거래소 주문 추상화
+│   ├── sim/            # 모의투자 (가상 지갑, 모의 히스토리)
+│   ├── login/          # 로그인/회원가입, 거래소 API Key
+│   ├── mypage/         # 마이페이지 (타 도메인 Service/DTO 로만 접근)
+│   ├── market/         # 시장 데이터 (시세, 호가), 거래소 시세 추상화
+│   ├── wallet/         # 실전 지갑 잔고
+│   ├── account/        # 거래소 계정 추상화
+│   └── config, dto, entity, enums, exception, util
+├── bybit/              # Bybit 연동 (account, market, stream, trade)
+└── binance/            # Binance 연동 (account, market, stream, trade)
 
 ※ 각 도메인은 controller / service / repository / entity / dto 를 보유하며,
   다른 도메인의 Repository·Entity 를 직접 호출하지 않고 Service 와 DTO 를 통해 접근한다.
@@ -44,7 +48,9 @@ src/main/java/com/coin/webcointrader/
 src/main/resources/
 ├── templates/          # Thymeleaf 템플릿 (대시보드, 차트, 마이페이지 등)
 ├── static/             # CSS, JS 정적 리소스
-└── application.yml     # 애플리케이션 설정
+├── application.yml     # 애플리케이션 설정
+├── application-local.yml  # 로컬 설정 (Git 제외)
+└── logback-spring.xml  # 로그 설정
 ```
 
 ## 실행 방법
@@ -52,12 +58,12 @@ src/main/resources/
 ### 사전 요구사항
 - Java 17+
 - MariaDB
-- Bybit Testnet API Key/Secret
+- (선택) Bybit 또는 Binance API Key/Secret — 모의투자만 쓰면 불필요
 
 ### 1. MariaDB 데이터베이스 준비
 - MariaDB 서버 실행
 - `coin_trader` 데이터베이스 생성
-- DDL 스크립트는 별도 관리
+- `others/ddl_2026_10_29_recreate_all_tables.sql` 실행 — **기존 테이블을 삭제 후 재생성**합니다
 
 ### 2. 환경 설정
 `src/main/resources/application-local.yml` 파일 생성:
@@ -72,6 +78,8 @@ aes:
   encryption:
     key: {AES 암호화 키 (32바이트)}
 ```
+
+> **주의**: `application.yml`의 기본 주소는 **실거래 서버**(Bybit `api.bybit.com`, Binance `fapi.binance.com`)입니다. Binance 데모 주소는 해당 파일의 주석을 참고하세요.
 
 ### 3. 빌드 및 실행
 ```bash
@@ -89,7 +97,7 @@ aes:
 ```
 - Service: 단위 테스트
 - Controller/Repository: 통합 테스트
-- API 모의: WireMock 사용
+- API 모의: WireMock 사용 (응답 파일: `src/test/resources/__files/`)
 
 ---
 
@@ -97,7 +105,7 @@ aes:
 
 > 기준 코드: `common/autotrade/service/AutoTradeService.java` (엔진), `common/trade/service/TradeFacade.java` (MAIN/SIM 분기),
 > `bybit/trade/BybitTradeClient.java`, `binance/trade/BinanceTradeClient.java` (거래소 주문).
-> 문서 작성일: 2026-10-29
+> 문서 갱신일: 2026-11-02
 
 ### 1. 기본 개념
 
@@ -248,7 +256,7 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
 3. **청산 실패 시 큐 유지** + 400 오류 `"포지션 청산에 실패해 큐를 유지합니다: 원인"` → 화면 알림.
    - 청산 주문은 접수됐으나 포지션 0이 아직 확인되지 않으면 오류를 반환하고, 이후 틱에서 확인되면 엔진이 큐를 자동 비활성화합니다.
 
-#### 3-9. 거래량 급감 시 큐 중지 (큐별 선택, MAIN·SIM)
+#### 3-9. 오토스탑 모드: 거래량 급감 시 큐 중지 (큐별 선택, MAIN·SIM)
 [사용자 정책 2026-10-29] 큐의 `volume_stop_enabled`가 켜진 경우에만 동작합니다.
 1. **값**: 시세 ticker의 24시간 거래량(대시보드에 표시되는 값)을 사용합니다.
 2. **기준**: 진입 시점의 24시간 거래량. 진입 시 시세를 아직 받지 못했으면 처음 받은 값으로 확정합니다.
@@ -265,7 +273,7 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
 
 | 테이블 | 시점 | 내용 |
 |---|---|---|
-| 거래 이력 (trade_history / sim_trade_history) | 진입·매도·청산·실패·큐 중지 | 주문 1건당 1행. ENTRY / SELL / LIQUIDATION, SUCCESS / FAILED, 실체결가·실수수료, 오류 사유. 거래량 급변 중지 시 **STOP** 1행(주문 없음, amount 0, 중지 시점 가격, 사유는 error_message) |
+| 거래 이력 (trade_history / sim_trade_history) | 진입·매도·청산·실패·큐 중지 | 주문 1건당 1행. ENTRY / SELL / LIQUIDATION, SUCCESS / FAILED, 실체결가·실수수료, 오류 사유. 거래량 급감 중지 시 **STOP** 1행(주문 없음, amount 0, 중지 시점 가격, 사유는 error_message) |
 | 투자 이력 (investment_history / sim_investment_history) | 사이클(진입→청산) 완료 | 진입가·청산가·마진·레버리지·예상 TP/SL가·손익·펀딩비 |
 
 - 청산 이력은 **비동기 후처리**(`closeRecordExecutor`)로 저장 → 매매 흐름을 막지 않음. 상태 전환 전 진입 정보를 스냅샷(`CloseRecord`)으로 넘김.
@@ -287,15 +295,16 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
 ### 6. 큐 비활성화 조건 (자동)
 진입 수량 0 연속 5회, 마진 모드/레버리지 설정 실패, 진입 주문 실패·미체결, 진입 확인 5회 실패, 익절 지정가 등록 실패(청산 후),
 청산 수량 확인 불가 5회, 청산 확인 5회 실패, 익절 지정가 취소 5회 실패, 외부 청산 방식 OTHER, 모든 단계 소진(cycle=false),
-선택할 패턴 없음, 거래량 급변 중지 예약 후 단계 종료. 비활성화 시 STOMP 알림(`autotrade.alert`)으로 화면 alert.
+선택할 패턴 없음, 거래량 급감 중지 예약 후 단계 종료. 비활성화 시 STOMP 알림(`autotrade.alert`)으로 화면 alert.
 
 ### 7. 화면 (chart.html)
 - 상태 수신: STOMP `/user/queue/autotrade.status.{exchange}.{mode}.{symbol}` + REST `/api/autotrade/status`.
-- 현재 블록 깜빡임(`block-current`), POSITION_HOLDING 시 "진입: x / 변동률: y%" 1초 갱신.
+- 현재 블록 깜빡임(`block-current`), 상태 박스에 상태(트리거 대기/블록 대기/포지션 보유) 표시, POSITION_HOLDING 시 진입가·변동률 행 추가(변동률 1초 갱신).
+- 오토스탑 큐는 보유 중 "진입 거래량 (24h)" 행을 표시합니다.
 - 익절 지정가 대기(`tpOrderPending`) 시 leaf 블록 우측 상단 스피너(`block-order-pending`) + "익절 지정가 대기: {가격}".
 - `holdingQueueIds`(보유 중 큐 ID 목록)로 끄기·삭제 확인 팝업 여부 판단.
-- 큐 생성·수정 모달: "사이클 모드", "거래량 급변 시 중지" 토글(`.toggle-switch`).
-- 큐 카드: 중지 예약 시 "⏸ 중지 예약" 뱃지(`volumeStopReserved`). 목록을 다시 불러올 때 반영됩니다.
+- 큐 생성·수정 모달: "사이클 모드", "오토스탑 모드" 토글(`.toggle-switch`).
+- 큐 카드: 오토스탑 사용 시 "오토스탑" 뱃지(`volumeStopEnabled`), 중지 예약 시 "중지 예약" 뱃지(`volumeStopReserved`). 목록을 다시 불러올 때 반영됩니다.
 - 마이페이지 투자 상세: 부분 익절 후 손절 건은 진입·매도(익절분)·청산(손절분) 3행과 `+X USDT 익절, -Y USDT 손절` 요약 줄을 표시합니다.
   행별 손익은 서버 계산 — 앞쪽 EXIT는 (체결가−진입가)×수량−자기 수수료−진입 수수료 배분, 마지막 EXIT는 투자 손익 − 앞쪽 합(합계가 투자 손익과 일치).
 
@@ -318,7 +327,7 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
 
 ## 사용자 직접 확인 필요 항목 (체크리스트)
 
-> 2026-10-29 기준. 대화 기록·작업 메모·`others/session_*.md`에서 "직접 확인 필요"로 남은 항목을 모았습니다.
+> 2026-10-29 기준, 2026-11-02 문구 갱신. 대화 기록·작업 메모·`others/session_*.md`에서 "직접 확인 필요"로 남은 항목을 모았습니다.
 > 완료하면 `[x]`로 바꿔 주세요. (완료 여부가 기록에 없는 항목은 "완료 여부 불명"으로 표시)
 
 ### A. DB 적용 (먼저 수행)
@@ -338,10 +347,10 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
 - [ ] 모의투자 익절 시 거래 이력 체결가 = 익절 지정가(tick 반올림), 수수료 = maker(0.02%)
 - [ ] leaf 블록 스피너·"익절 지정가 대기: {가격}" 문구는 **실거래에서만** 표시 (모의투자에서 안 보이는 것이 정상)
 
-**이번 작업 — 거래량 급변 시 중지 (모의투자로 가능)**
-- [ ] 큐 생성·수정 모달의 "사이클 모드"·"거래량 급변 시 중지" 토글 정렬·동작 (글자 클릭으로도 전환)
+**이번 작업 — 오토스탑 모드 (모의투자로 가능)**
+- [ ] 큐 생성·수정 모달의 "사이클 모드"·"오토스탑 모드" 토글 정렬·동작 (글자 클릭으로도 전환)
 - [ ] 토글을 켜고 저장 → 수정 모달을 다시 열었을 때 켜진 상태 유지
-- [ ] 감시 큐를 켜고 진입 → 거래량이 급변하면 매매 로그에 `[중지 예약] …` 표시, 목록 재조회 시 "⏸ 중지 예약" 뱃지
+- [ ] 감시 큐를 켜고 진입 → 거래량이 절반 이하로 줄면 매매 로그에 `[중지 예약] …` 표시, 목록 재조회 시 "중지 예약" 뱃지
 - [ ] 예약 후 익절·손절로 단계가 끝나면 큐가 꺼지고 거래 이력에 **STOP** 행(amount 0, 사유) 1건
 - [ ] 예약 중 직접 OFF → 청산 후 종료, STOP 행 없음, 다시 켜면 뱃지 사라짐
 - [ ] 감시를 끈 큐는 예약이 생기지 않음
@@ -371,9 +380,8 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
   - Binance PERCENT_PRICE(-4016/-4024), Bybit 가격 제한. 거부되면 FAILED 이력 → 시장가 청산 → 큐 비활성화됨
 
 ### C-2. 실거래 확인 — 거래량 급변 중지·진입 전 포지션 확인 (이번 작업, Bybit·Binance 각각)
-- [ ] 감시 큐가 있을 때 체결 스트림 구독 로그(Bybit `publicTrade.…`, Binance `…@aggTrade`)가 찍히고, 감시 큐가 없어지면 해지되는지
 - [ ] 진입 거래량(24h)이 거래소 화면의 24시간 거래량과 대략 맞는지 (코인 수량 기준)
-- [ ] Binance: 구독 스트림 수가 늘어도 연결이 끊기지 않는지 (가격·봉·체결 구독을 한 메시지로 묶어 전송)
+- [ ] Binance: 구독 스트림 수가 늘어도 연결이 끊기지 않는지 (가격·봉 구독을 한 메시지로 묶어 전송)
 - [ ] 거래소에 수동으로 포지션을 연 상태에서 같은 심볼 큐가 진입 시점에 도달하면 `[진입 보류]` 로그 후 주문이 나가지 않는지
 - [ ] 그 포지션을 정리하면 다음 트리거에서 정상 진입하는지
 
@@ -415,4 +423,4 @@ TP/SL 가격: `진입가 × (1 ± 비율 / 100)`. 비율은 가격 변동 기준
 - [ ] 투자 이력 `close_type`(매도/청산 구분) 컬럼 추가 — DB 마이그레이션 필요로 보류 중
 - [ ] (완료 여부 불명) 복잡한 패턴에서 TP 도달이 LIQUIDATION으로 기록되는 문제 — 설계 결정 필요
 - [ ] 이중 진입 재발 시 Option B(청산 후 TRIGGER_WAIT 복귀) 검토
-- [ ] 10-27 · 10-28 · 10-29 변경분 커밋/푸시 (Claude 셸은 GitHub 자격증명이 없어 직접 `git push` 필요)
+- [x] 10-27 · 10-28 · 10-29 변경분 커밋/푸시 (Claude 셸은 GitHub 자격증명이 없어 직접 `git push` 필요)

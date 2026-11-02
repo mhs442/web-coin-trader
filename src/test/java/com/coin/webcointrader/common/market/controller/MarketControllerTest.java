@@ -1,6 +1,7 @@
 package com.coin.webcointrader.common.market.controller;
 
 import com.coin.webcointrader.common.login.dto.UserDTO;
+import com.coin.webcointrader.common.market.service.MarketService;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +28,9 @@ class MarketControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private MarketService marketService;
 
     private UsernamePasswordAuthenticationToken auth;
 
@@ -63,6 +67,31 @@ class MarketControllerTest {
     @AfterEach
     void tearDown() {
         WireMock.reset();
+    }
+
+    // ─────────────────────────────────────────────
+    // GET /api/tickers/trends
+    // ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /api/tickers/trends: 심볼별 저장 가격 목록을 반환한다")
+    void getPriceTrends_returnsRecordedPrices() throws Exception {
+        marketService.refreshTickers();      // 스텁 시세를 캐시에 채운다
+        marketService.recordPriceTrends();
+
+        mockMvc.perform(get("/api/tickers/trends").with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[?(@.symbol == 'BTCUSDT')].prices[0]").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("GET /api/tickers/trends: 비로그인 요청은 /api/tickers와 같게 처리한다")
+    void getPriceTrends_requiresLoginLikeTickers() throws Exception {
+        int tickers = mockMvc.perform(get("/api/tickers")).andReturn().getResponse().getStatus();
+
+        mockMvc.perform(get("/api/tickers/trends"))
+                .andExpect(status().is(tickers));
     }
 
     // ─────────────────────────────────────────────

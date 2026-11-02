@@ -1,16 +1,51 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>코인목록</title>
-    <link rel="stylesheet" th:href="@{/_resources/css/style.css}">
+    <th:block th:replace="~{fragments/head :: assets}"></th:block>
     <script th:src="@{/_resources/js/jquery-4.0.0.min.js}"></script>
 </head>
 <body>
 <div th:replace="~{fragments/header :: walletHeader}"></div>
 <div class="market-overview-container">
     <div class="dashboard-header">
-        <h1>실시간 코인 목록</h1>
+        <div>
+            <h1>실시간 코인 목록</h1>
+            <p class="sub">거래대금 기준 정렬 · 1초마다 갱신</p>
+        </div>
         <input type="text" id="coin-search" class="coin-search-input" placeholder="코인 검색 (예: BTC, ETH)">
-        <a href="/mypage" class="mypage-link">마이페이지</a>
+    </div>
+
+    <!-- 요약 타일: 자산 / 오늘 순손익 / 오늘 승률 / 활성 큐 (현재 거래소·모드 기준) -->
+    <div class="overview-tiles">
+        <div class="tile t-equity">
+            <span class="tile-label wallet-mode" id="tile-equity-label">실전 자산</span>
+            <span class="tile-value" id="tile-equity">--</span>
+            <span class="tile-foot" id="tile-available">사용 가능 --</span>
+        </div>
+        <div class="tile t-pnl">
+            <span class="tile-label">오늘 순손익</span>
+            <span class="tile-value" id="tile-net">--</span>
+            <span class="tile-foot" id="tile-net-foot">--</span>
+        </div>
+        <div class="tile t-win">
+            <span class="tile-label">오늘 승률</span>
+            <span class="tile-value" id="tile-win">--</span>
+            <div class="meter"><span id="tile-win-meter" style="width:0"></span></div>
+            <span class="tile-foot" id="tile-win-foot">--</span>
+        </div>
+        <div class="tile t-queue">
+            <span class="tile-label">활성 큐</span>
+            <span class="tile-value" id="tile-queue">--</span>
+            <span class="tile-foot">켜진 큐 / 전체 큐</span>
+        </div>
+    </div>
+
+    <!-- 24시간 변동률 상위 코인 -->
+    <div class="movers">
+        <h2>상승 코인</h2>
+        <div class="mover-list" id="mover-list"></div>
     </div>
 
     <div class="table-wrapper dashboard-scroll-wrapper" id="dashboard-scroll-wrapper">
@@ -19,11 +54,12 @@
             <tr>
                 <th>심볼</th>
                 <th>기초 코인</th>
-                <th>현재가</th>
-                <th>24시간 변동률</th>
-                <th>24시간 최고가</th>
-                <th>24시간 최저가</th>
-                <th>24시간 거래량</th>
+                <th class="r">현재가</th>
+                <th class="r">24시간 변동률</th>
+                <th class="col-spark">최근 1시간 추세</th>
+                <th class="r">24시간 최고가</th>
+                <th class="r">24시간 최저가</th>
+                <th class="r">24시간 거래량</th>
             </tr>
             </thead>
             <tbody id="coin-list-body">
@@ -35,6 +71,22 @@
 
 <script>
     let allCoins = [];             // 전체 코인 데이터 캐시
+    let trendSvgs = {};   // 심볼별 미니 차트 SVG 문자열
+    const TREND_EMPTY = '<span class="spark-empty">--</span>';
+    const lastPrices = {};         // 심볼별 직전 현재가 (깜빡임 방향 비교용)
+
+    /**
+     * 현재가 칸의 깜빡임 클래스를 구한다. 표를 매초 다시 그리므로 값이 바뀐 행에만 붙인다.
+     * @param {object} coin 티커
+     * @returns {string} 'flash-up'(상승) / 'flash-down'(하락) / ''(변동 없음·첫 값)
+     */
+    function priceFlashClass(coin) {
+        const price = parseFloat(coin.lastPrice);
+        const previous = lastPrices[coin.symbol];
+        lastPrices[coin.symbol] = price;
+        if (previous === undefined || price === previous) return '';
+        return price > previous ? 'flash-up' : 'flash-down';
+    }
 
     /**
      * 코인 행(row) HTML을 생성한다.
@@ -54,17 +106,72 @@
         tr.innerHTML = `
             <td>
                 <div class="symbol-info">
-                    <span class="symbol-text">${coin.formattedSymbol}</span>
+                    ${coinIconHtml(coin.baseCoin)}
+                    <span class="symbol-text">${coin.baseCoin}<em>/${coin.symbol.slice(coin.baseCoin.length)}</em></span>
                 </div>
             </td>
-            <td>${coin.baseCoin}</td>
-            <td class="price">${coin.lastPrice}</td>
-            <td class="${colorClass}">${displayPercent}</td>
-            <td>${coin.highPrice24h}</td>
-            <td>${coin.lowPrice24h}</td>
-            <td>${volume}</td>
+            <td class="muted">${coin.baseCoin}</td>
+            <td class="r price ${priceFlashClass(coin)}">${formatPriceText(coin.lastPrice)}</td>
+            <td class="r"><span class="pct-pill ${colorClass}">${displayPercent}</span></td>
+            <td class="col-spark">${trendHtml(coin.symbol)}</td>
+            <td class="r muted">${formatPriceText(coin.highPrice24h)}</td>
+            <td class="r muted">${formatPriceText(coin.lowPrice24h)}</td>
+            <td class="r muted">${volume}</td>
         `;
         return tr;
+    }
+
+    /**
+     * 가격 목록으로 미니 차트 SVG 문자열을 만든다. 코인마다 자기 값 범위로 정규화한다.
+     * @param {number[]} prices 1분 간격 현재가 (오래된 값부터)
+     * @returns {string} SVG 문자열. 값이 2개 미만이면 '--'
+     */
+    function buildTrendSvg(prices) {
+        if (!prices || prices.length < 2) return TREND_EMPTY;
+
+        const width = 100, height = 24, pad = 2;
+        const min = Math.min(...prices), max = Math.max(...prices);
+        const range = max - min;
+        const points = prices.map((price, i) => {
+            const x = i / (prices.length - 1) * width;
+            // 변동이 없으면 가운데 수평선으로 그린다
+            const y = range === 0 ? height / 2 : height - pad - (price - min) / range * (height - pad * 2);
+            return x.toFixed(2) + ' ' + y.toFixed(2);
+        });
+
+        // 색은 1시간 전 대비 방향: 상승 / 하락 / 변동 없음
+        const first = prices[0], last = prices[prices.length - 1];
+        const direction = last > first ? 'spark-up' : last < first ? 'spark-down' : 'spark-flat';
+        return `<svg class="spark ${direction}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><path d="M${points.join(' L')}"/></svg>`;
+    }
+
+    /**
+     * 심볼의 미니 차트를 꺼낸다. 표가 1초마다 다시 그려지므로 저장해 둔 문자열만 사용한다.
+     * @param {string} symbol 종목 심볼
+     * @returns {string} SVG 문자열 또는 '--'
+     */
+    function trendHtml(symbol) {
+        return trendSvgs[symbol] || TREND_EMPTY;
+    }
+
+    /**
+     * 최근 1시간 추세를 조회해 심볼별 SVG로 저장한다. 화면에는 다음 1초 갱신 때 반영된다.
+     */
+    function loadTrends() {
+        $.ajax({
+            url: '/api/tickers/trends',
+            method: 'GET',
+            success: function(trends) {
+                if (!Array.isArray(trends)) return;
+                const next = {};
+                trends.forEach(trend => { next[trend.symbol] = buildTrendSvg(trend.prices); });
+                trendSvgs = next;
+            },
+            error: function(xhr) {
+                // 실패해도 시세 표는 그대로 두고, 다음 주기에 다시 시도한다
+                console.error('Error fetching trends:', xhr.status);
+            }
+        });
     }
 
     /**
@@ -94,6 +201,135 @@
     }
 
     /**
+     * 24시간 변동률 상위 3개 코인을 카드로 렌더링한다. (검색어와 무관하게 전체 코인 기준)
+     */
+    function renderMovers() {
+        const top = allCoins.slice()
+            .sort((a, b) => parseFloat(b.price24hPcnt) - parseFloat(a.price24hPcnt))
+            .slice(0, 3);
+
+        const $list = $('#mover-list').empty();
+        top.forEach(coin => {
+            const pcnt = parseFloat(coin.price24hPcnt) * 100;
+            const colorClass = pcnt < 0 ? 'text-red' : 'text-green';
+            $('<a class="mover"></a>')
+                .attr('href', '/chart?symbol=' + encodeURIComponent(coin.symbol))
+                .append(coinIconHtml(coin.baseCoin))
+                .append($('<span class="mover-name"></span>').text(coin.baseCoin))
+                .append($('<span class="mover-pct"></span>').addClass(colorClass).text((pcnt > 0 ? '+' : '') + pcnt.toFixed(2) + '%'))
+                .append($('<span class="mover-trend"></span>').html(trendHtml(coin.symbol)))
+                .appendTo($list);
+        });
+    }
+
+    /**
+     * 숫자 문자열을 소수 둘째 자리 금액 문구로 바꾼다.
+     * @param {string|number} value 금액
+     * @returns {string} 예: '1,234.50'
+     */
+    function formatAmount(value) {
+        return parseFloat(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    /**
+     * 오늘 순손익·승률 타일을 조회해 갱신한다. (브라우저 현지 날짜의 0시~23시 59분 기준)
+     */
+    function loadTodaySummary() {
+        const requestKey = getTradeMode() + '/' + getExchange();
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+
+        $.ajax({
+            url: '/api/mypage/investments',
+            method: 'GET',
+            data: {
+                mode: getTradeMode(),
+                exchange: getExchange(),
+                startDate: today + 'T00:00:00',
+                endDate: today + 'T23:59:59',
+                page: 0,
+                size: 1                 // 요약만 필요하므로 목록은 최소로 조회
+            },
+            success: function(data) {
+                // 응답 전에 모드·거래소가 바뀌었으면 옛 값을 표시하지 않음
+                if (requestKey !== getTradeMode() + '/' + getExchange()) return;
+                const summary = data && data.summary;
+                if (!summary) { showSummaryUnavailable(); return; }
+
+                const net = parseFloat(summary.netTotal);
+                $('#tile-net').text((net > 0 ? '+' : '') + formatAmount(net))
+                    .toggleClass('text-green', net > 0)
+                    .toggleClass('text-red', net < 0);
+                $('#tile-net-foot').text('이익 ' + formatAmount(summary.totalProfit) + ' · 손실 ' + formatAmount(summary.totalLoss));
+                $('#tile-win').text(summary.winRate + '%');
+                $('#tile-win-meter').css('width', (parseFloat(summary.winRate) || 0) + '%');
+                $('#tile-win-foot').text(summary.winCount + '승 / ' + summary.totalCount + '건');
+            },
+            error: function() {
+                if (requestKey === getTradeMode() + '/' + getExchange()) showSummaryUnavailable();
+            }
+        });
+    }
+
+    /**
+     * 오늘 요약을 받지 못했을 때 이전 모드·거래소 값이 남지 않도록 비운다.
+     */
+    function showSummaryUnavailable() {
+        $('#tile-net').text('--').removeClass('text-green text-red');
+        $('#tile-net-foot, #tile-win-foot').text('--');
+        $('#tile-win').text('--');
+        $('#tile-win-meter').css('width', 0);
+    }
+
+    /**
+     * 활성 큐 타일을 조회해 갱신한다. (현재 거래소·모드의 전체 큐 기준)
+     */
+    function loadQueueCount() {
+        const requestKey = getTradeMode() + '/' + getExchange();
+        $.ajax({
+            url: '/api/autotrade/patterns/all',
+            method: 'GET',
+            data: { mode: getTradeMode(), exchange: getExchange() },
+            success: function(queues) {
+                if (requestKey !== getTradeMode() + '/' + getExchange()) return;
+                const list = queues || [];
+                // 숫자만 넣는 칸이라 html 사용 (켜진 큐 / 전체 큐)
+                $('#tile-queue').html(list.filter(q => q.active).length + '<small> / ' + list.length + '</small>');
+            },
+            error: function() {
+                if (requestKey !== getTradeMode() + '/' + getExchange()) return;
+                $('#tile-queue').text('--');
+            }
+        });
+    }
+
+    /**
+     * 자산 타일 문구를 현재 모드에 맞추고, 오늘 요약·활성 큐를 다시 조회한다.
+     */
+    function refreshOverview() {
+        $('#tile-equity-label').text(getTradeMode() === 'sim' ? '모의 자산' : '실전 자산');
+        loadTodaySummary();
+        loadQueueCount();
+    }
+
+    // 자산 타일: 헤더가 조회한 잔고를 그대로 사용
+    $(document).on('walletUpdated', function(e, wallet) {
+        if (wallet && wallet.totalEquity != null) {
+            // 금액은 크게, 통화 단위는 작게 표시
+            $('#tile-equity').text(formatAmount(wallet.totalEquity) + ' ')
+                .append($('<small></small>').text(wallet.currency || ''));
+            $('#tile-available').text('사용 가능 ' + formatAmount(wallet.availableBalance || 0));
+        } else {
+            $('#tile-equity').text('--');
+            $('#tile-available').text('사용 가능 --');
+        }
+    });
+
+    // 모드·거래소 변경 시 즉시 다시 조회
+    $(document).on('tradeModeChanged exchangeChanged', refreshOverview);
+
+    /**
      * 헤더에서 선택한 거래소의 전체 코인 목록을 가져와 캐시에 저장하고 렌더링한다.
      */
     function updateCoinList() {
@@ -106,6 +342,7 @@
                 if (Array.isArray(data)) {
                     allCoins = data;
                     renderCoins();
+                    renderMovers();
                 }
             },
             error: function(xhr) {
@@ -127,6 +364,10 @@
         whenExchangeReady(function() {
             updateCoinList();
             setInterval(updateCoinList, 1000);
+            loadTrends();
+            setInterval(loadTrends, 60000);        // 서버가 1분마다 저장하므로 같은 간격으로 조회
+            refreshOverview();
+            setInterval(refreshOverview, 30000);   // 요약은 자주 변하지 않아 30초 간격으로 갱신
         });
     });
 </script>
