@@ -194,19 +194,56 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
             throw new CustomException(ExceptionMessage.ORDER_FAILED, "응답 없음");
         }
 
+        boolean protectionInstalled = true;
+        boolean protectionCancelled = false; // 취소 API 실패는 cancelAlgoOrders가 삼키므로 시도 여부로 표시 (안내가 빠지는 쪽보다 낫다)
         if (request.isReduceOnly()) {
             // 시장가 청산 접수 후: 포지션이 사라져 쓸모없어진 조건부 주문 정리
             // 지정가 익절은 접수만 된 상태(포지션 유지) → 안전망 조건부 주문을 남겨둠
             if (request.getPrice() == null) {
                 cancelAlgoOrders(symbol);
+                protectionCancelled = true;
             }
         } else {
-            placeProtectionOrders(request);
+            protectionInstalled = placeProtectionOrders(request);
         }
         return OrderResultDTO.builder()
                 .orderId(response.getOrderId())
                 .clientOrderId(request.getClientOrderId())
+                .protectionFailed(!protectionInstalled)
+                .protectionCancelled(protectionCancelled)
                 .build();
+    }
+
+    /**
+     * 응답 유실 뒤 복구한 진입 주문은 submitOrder의 보호 주문 단계를 거치지 못했으므로 여기서 건다.
+     * 이전 조건부 주문 정리는 newOrder 전에 끝났으므로 다시 하지 않는다.
+     *
+     * @param request   원 주문 요청
+     * @param recovered 복구한 주문 결과
+     * @return 복구한 주문 결과 (보호 주문 접수 실패 여부 반영)
+     */
+    @Override
+    protected OrderResultDTO afterOrderRecovered(OrderRequestDTO request, OrderResultDTO recovered) {
+        // 청산 주문에는 보호 주문이 없다
+        if (request.isReduceOnly()) return recovered;
+        return OrderResultDTO.builder()
+                .orderId(recovered.getOrderId())
+                .clientOrderId(recovered.getClientOrderId())
+                .protectionFailed(!placeProtectionOrders(request))
+                .build();
+    }
+
+    /**
+     * 진입 주문의 TP/SL 조건부 주문을 별도로 접수한다. (POST /fapi/v1/algoOrder)
+     * 주문 결과가 유실돼 진입 주문 처리에서 걸지 못한 경우에 호출한다.
+     *
+     * @param request 진입 주문 요청 (takeProfit/stopLoss null이면 해당 주문 생략)
+     * @param userId  API 키를 조회할 사용자 ID
+     * @return 모두 접수되면 true, 하나라도 실패하면 false
+     */
+    @Override
+    public boolean placeProtectionOrders(OrderRequestDTO request, Long userId) {
+        return withApiKey(userId, () -> placeProtectionOrders(request));
     }
 
     /**
@@ -226,31 +263,35 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
     /**
      * 진입 주문의 TP/SL을 포지션 전체 청산 조건부 주문으로 건다. (POST /fapi/v1/algoOrder)
      * 트리거 기준은 최종 체결가(CONTRACT_PRICE), clientAlgoId 는 "{clientOrderId}-TP/-SL".
-     * 각 주문은 독립적으로 시도하며 실패는 경고 로그만 남긴다.
+     * 각 주문은 독립적으로 시도한다. (한쪽이 실패해도 다른 쪽은 건다)
      *
      * @param request 진입 주문 요청 (takeProfit/stopLoss null이면 해당 주문 생략)
+     * @return 모두 접수되면 true, 하나라도 실패하면 false
      */
-    private void placeProtectionOrders(OrderRequestDTO request) {
+    private boolean placeProtectionOrders(OrderRequestDTO request) {
         // 보호 주문은 진입 반대 방향
         String closeSide = request.getSide() == OrderSide.BUY ? OrderSide.SELL.name() : OrderSide.BUY.name();
+        boolean installed = true;
         if (request.getTakeProfit() != null) {
-            placeAlgoOrder(request, closeSide, "TAKE_PROFIT_MARKET", request.getTakeProfit(), "-TP");
+            installed &= placeAlgoOrder(request, closeSide, "TAKE_PROFIT_MARKET", request.getTakeProfit(), "-TP");
         }
         if (request.getStopLoss() != null) {
-            placeAlgoOrder(request, closeSide, "STOP_MARKET", request.getStopLoss(), "-SL");
+            installed &= placeAlgoOrder(request, closeSide, "STOP_MARKET", request.getStopLoss(), "-SL");
         }
+        return installed;
     }
 
     /**
-     * 조건부 주문 1건을 접수한다. 실패는 경고 로그만 남긴다.
+     * 조건부 주문 1건을 접수한다. 실패해도 진입은 유지하므로 예외를 던지지 않는다.
      *
      * @param request      진입 주문 요청
      * @param side         주문 방향 (진입 반대)
      * @param type         TAKE_PROFIT_MARKET / STOP_MARKET
      * @param triggerPrice 트리거 가격
      * @param idSuffix     clientAlgoId 접미사 (-TP / -SL)
+     * @return 접수되면 true, 실패하면 false
      */
-    private void placeAlgoOrder(OrderRequestDTO request, String side, String type, String triggerPrice, String idSuffix) {
+    private boolean placeAlgoOrder(OrderRequestDTO request, String side, String type, String triggerPrice, String idSuffix) {
         // clientOrderId 없으면 거래소 자동 생성
         String clientAlgoId = request.getClientOrderId() != null ? request.getClientOrderId() + idSuffix : null;
         try {
@@ -264,9 +305,11 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
                     .workingType("CONTRACT_PRICE")
                     .clientAlgoId(clientAlgoId)
                     .build());
+            return true;
         } catch (Exception e) {
             log.warn("[BINANCE 조건부 주문 실패] symbol={}, type={}, triggerPrice={}: {} — 진입은 유지",
                     request.getSymbol(), type, triggerPrice, e.getMessage());
+            return false;
         }
     }
 
@@ -570,8 +613,9 @@ public class BinanceTradeClient extends AbstractExchangeTradeClient {
         try {
             return withApiKey(userId, () -> {
                 List<BinancePositionRiskResponse> positions = feignClient.getPositionRisk(symbol);
+                // 응답 본문 없음 → 포지션 0으로 단정하지 않고 판단 불가로 처리
+                if (positions == null) return null;
                 BigDecimal total = BigDecimal.ZERO;
-                if (positions == null) return total;
                 for (BinancePositionRiskResponse p : positions) {
                     // 숏은 음수이므로 절댓값 합산
                     total = total.add(toDecimal(p.getPositionAmt()).abs());

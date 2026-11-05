@@ -21,4 +21,5 @@ public class ClosedPnlQueryDTO {
     private String symbol;             // 종목 심볼
     private Long entryTime;            // 진입 주문 전송 시각 (epoch ms, 펀딩비 합산 시작점)
     private BigDecimal entryFee;       // 진입 수수료 (USDT, 순손익 계산용)
+    private Long lookbackFrom;         // 손익 검색 시작 시각 (epoch ms, 오래전 체결된 주문 조회용, null = 거래소 기본 범위)
 }

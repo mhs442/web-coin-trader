@@ -306,20 +306,25 @@ public class BybitTradeClient extends AbstractExchangeTradeClient {
     }
 
     /**
-     * 최근 {@value #CLOSED_PNL_LOOKBACK_MS}ms의 linear 청산 손익을 최근 {@value #CLOSED_PNL_LIMIT}건 조회해
+     * 최근 {@value #CLOSED_PNL_LOOKBACK_MS}ms(또는 조회 조건의 lookbackFrom 이후, 최대 7일)의 linear 청산 손익을
+     * 최근 {@value #CLOSED_PNL_LIMIT}건 조회해
      * 주문 ID 일치 건을 찾는다. (GET /v5/position/closed-pnl)
      * Bybit는 펀딩비를 따로 주지 않으므로 구성값으로 역산해 채운다.
      * closedPnl에 수수료·펀딩비가 반영돼 있다고 보고 조회 조건의 entryTime·entryFee는 사용하지 않는다.
      * (API 문서 미기재 — 실거래 내역과 대조 검증 필요)
      *
-     * @param query 조회 조건 (orderId: 청산 주문 ID, symbol: 종목 심볼만 사용)
+     * @param query 조회 조건 (orderId: 청산 주문 ID, symbol: 종목 심볼, lookbackFrom: 검색 시작 시각만 사용)
      * @return 청산 손익, 에러 응답이거나 일치 건이 없으면(미반영) null
      */
     @Override
     protected ClosedPnlDTO fetchClosedPnl(ClosedPnlQueryDTO query) {
         String orderId = query.getOrderId();
         String symbol = query.getSymbol();
-        long startTime = clock.millis() - CLOSED_PNL_LOOKBACK_MS;
+        // 오래전 체결된 주문은 지정한 시각부터 검색 (거래소 최대 범위 7일로 보정), 지정이 없으면 최근 범위만
+        long now = clock.millis();
+        long startTime = query.getLookbackFrom() != null
+                ? Math.max(query.getLookbackFrom(), now - CLOSED_PNL_MAX_RANGE_MS)
+                : now - CLOSED_PNL_LOOKBACK_MS;
         GetClosedPnlResponse body = positionClient
                 .getClosedPnl(Category.LINEAR.getCategory(), symbol, CLOSED_PNL_LIMIT, startTime).getBody();
         // 에러 응답 또는 결과 누락 → 재조회 대상

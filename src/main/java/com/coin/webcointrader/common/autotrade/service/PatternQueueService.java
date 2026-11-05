@@ -231,6 +231,18 @@ public class PatternQueueService {
     }
 
     /**
+     * 큐의 현재 활성화 여부를 DB에서 직접 조회한다. (세션 레인이 다른 스레드에서 끈 결과까지 반영)
+     * 권한은 호출 측이 {@link #getQueue}로 먼저 확인한다.
+     *
+     * @param queueId 대상 큐 ID
+     * @return 활성화 여부
+     */
+    public boolean isQueueActive(Long queueId) {
+        return patternQueueRepository.findActiveById(queueId)
+                .orElseThrow(() -> new CustomException(ExceptionMessage.QUEUE_NOT_FOUND));
+    }
+
+    /**
      * 큐의 활성화 상태를 지정한 값으로 변경한다.
      * 끄기 전 포지션 청산 중 엔진이 큐를 먼저 비활성화해도 다시 켜지지 않도록 반전이 아닌 목표 상태로 지정한다.
      *

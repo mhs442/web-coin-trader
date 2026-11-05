@@ -551,6 +551,53 @@ class BybitTradeClientTest {
     }
 
     @Test
+    @DisplayName("getClosedPnl: 조회 범위 시작점이 없으면 최근 5분을 조회한다")
+    void getClosedPnl_noLookbackFrom_usesFiveMinutes() {
+        stubApiKey(1L);
+        long now = 10_000_000_000L;
+        given(clock.millis()).willReturn(now);
+        given(positionClient.getClosedPnl(eq("linear"), eq("BTCUSDT"), eq(50), anyLong()))
+                .willReturn(ResponseEntity.ok(makeClosedPnlPage(
+                        makeClosedPnl("close-order-1", "Sell", "100", "101", "0.055", "0.0556", "0.8794"))));
+
+        client.getClosedPnl(closeQuery(), 1L);
+
+        then(positionClient).should().getClosedPnl("linear", "BTCUSDT", 50, now - 5L * 60 * 1000L);
+    }
+
+    @Test
+    @DisplayName("getClosedPnl: 조회 범위 시작점이 있으면 기본 5분 대신 그 시각부터 조회한다")
+    void getClosedPnl_lookbackFrom_usedAsStartTime() {
+        stubApiKey(1L);
+        long now = 10_000_000_000L;
+        given(clock.millis()).willReturn(now);
+        given(positionClient.getClosedPnl(eq("linear"), eq("BTCUSDT"), eq(50), anyLong()))
+                .willReturn(ResponseEntity.ok(makeClosedPnlPage(
+                        makeClosedPnl("tp-order", "Sell", "100", "101", "0.055", "0.0556", "0.8794"))));
+
+        client.getClosedPnl(ClosedPnlQueryDTO.builder().orderId("tp-order").symbol("BTCUSDT")
+                .lookbackFrom(now - 3_600_000L).build(), 1L);
+
+        then(positionClient).should().getClosedPnl("linear", "BTCUSDT", 50, now - 3_600_000L);
+    }
+
+    @Test
+    @DisplayName("getClosedPnl: 조회 범위 시작점이 7일보다 오래되면 7일 전으로 보정한다")
+    void getClosedPnl_lookbackFromTooOld_clampedToSevenDays() {
+        stubApiKey(1L);
+        long now = 10_000_000_000L;
+        given(clock.millis()).willReturn(now);
+        given(positionClient.getClosedPnl(eq("linear"), eq("BTCUSDT"), eq(50), anyLong()))
+                .willReturn(ResponseEntity.ok(makeClosedPnlPage(
+                        makeClosedPnl("tp-order", "Sell", "100", "101", "0.055", "0.0556", "0.8794"))));
+
+        client.getClosedPnl(ClosedPnlQueryDTO.builder().orderId("tp-order").symbol("BTCUSDT")
+                .lookbackFrom(1L).build(), 1L);
+
+        then(positionClient).should().getClosedPnl("linear", "BTCUSDT", 50, now - 7L * 24 * 60 * 60 * 1000L);
+    }
+
+    @Test
     @DisplayName("getClosedPnl: 숏 청산(Buy)은 진입가치 - 청산가치로 매매차익을 잡아 펀딩비를 역산한다")
     void getClosedPnl_shortClose_calcsFundingFee() {
         stubApiKey(1L);

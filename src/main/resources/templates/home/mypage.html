@@ -1195,23 +1195,25 @@
         if ($('#toggle-' + queueId).hasClass('on')) {
             checkQueueHolding(queueId, symbol, function(holding) {
                 if (holding && !confirmCloseHolding('비활성화')) return;
-                requestToggleQueue(queueId);
+                requestToggleQueue(queueId, false);
             });
             return;
         }
         // 실전 모드에서 켤 때는 실제 자금 주문이 시작되므로 확인 (모의는 바로 켬)
         if (getTradeMode() === 'main'
             && !confirm('[' + getTradeContextLabel() + '] ' + symbol + ' 큐 자동매매를 시작합니다.\n실제 자금으로 주문이 나갑니다. 진행하시겠습니까?')) return;
-        requestToggleQueue(queueId);
+        requestToggleQueue(queueId, true);
     }
 
-    /** 큐 on/off 토글 요청 후 행의 상태·버튼을 갱신한다. */
-    function requestToggleQueue(queueId) {
+    /** 큐를 원하는 상태(active)로 바꾸도록 요청한 뒤 행의 상태·버튼을 서버 응답대로 갱신한다. */
+    function requestToggleQueue(queueId, active) {
         // 요청 중 버튼 비활성 (연속 클릭 시 토글 요청이 두 번 나가 원래 상태로 돌아가는 것 방지)
         const $toggleBtn = $('#toggle-' + queueId).prop('disabled', true);
         $.ajax({
             url: '/api/autotrade/patterns/' + queueId + '/toggle',
             type: 'PATCH',
+            contentType: 'application/json',
+            data: JSON.stringify({ active: active }),
             complete: function() { $toggleBtn.prop('disabled', false); },
             success: function(data) {
                 const isActive = data.active;

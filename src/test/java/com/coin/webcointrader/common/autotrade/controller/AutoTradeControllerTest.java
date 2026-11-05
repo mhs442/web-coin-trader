@@ -1,6 +1,7 @@
 package com.coin.webcointrader.common.autotrade.controller;
 
 import com.coin.webcointrader.common.enums.ExchangeType;
+import com.coin.webcointrader.common.enums.TradeMode;
 import com.coin.webcointrader.common.autotrade.repository.PatternQueueRepository;
 import com.coin.webcointrader.common.login.dto.UserDTO;
 import com.coin.webcointrader.common.autotrade.entity.PatternQueue;
@@ -26,10 +27,12 @@ import java.math.BigDecimal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
@@ -360,6 +363,8 @@ class AutoTradeControllerTest {
         doNothing().when(autoTradeService).syncSession(anyLong(), any(), any(), any());
 
         mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}")
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(false));
@@ -377,6 +382,8 @@ class AutoTradeControllerTest {
         doNothing().when(autoTradeService).syncSession(anyLong(), any(), any(), any());
 
         mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":true}")
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(true));
@@ -394,12 +401,152 @@ class AutoTradeControllerTest {
                 .when(autoTradeService).closeQueuePosition(USER_ID, q.getId());
 
         mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}")
                         .with(authentication(auth)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("포지션 청산에 실패해 큐를 유지합니다: 익절 지정가 취소 실패"));
 
         assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isTrue();
         verify(autoTradeService, never()).syncSession(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 이미 꺼진 큐에 끄기 요청이 오면 켜지 않고 청산·동기화도 하지 않는다")
+    void togglePattern_alreadyOff_noChange() throws Exception {
+        PatternQueue q = patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+
+        assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isFalse();
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
+        verify(autoTradeService, never()).syncSession(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 이미 켜진 큐에 켜기 요청이 오면 끄지 않고 청산 없이 세션만 다시 동기화한다")
+    void togglePattern_alreadyOn_resyncsWithoutClose() throws Exception {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        q = patternQueueRepository.save(q);
+        doNothing().when(autoTradeService).syncSession(anyLong(), any(), any(), any());
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":true}")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+
+        assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isTrue();
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
+        verify(autoTradeService, times(1)).syncSession(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("syncSession: 요청 밖·레인 스레드에서 읽은 큐도 엔진이 패턴을 단계 순서대로 읽을 수 있다")
+    void syncSession_outsideRequest_patternsReadable() {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        q.getPatterns().add(makePattern(q, 2));
+        q.getPatterns().add(makePattern(q, 1));
+        patternQueueRepository.save(q);
+        try {
+            // 세션 생성 (호출 스레드)
+            autoTradeService.syncSession(USER_ID, ExchangeType.BYBIT, "BTCUSDT", TradeMode.MAIN);
+            assertThat(sessionPatternLevels()).containsExactly(1, 2);
+            // 세션 갱신 (레인 스레드)
+            autoTradeService.syncSession(USER_ID, ExchangeType.BYBIT, "BTCUSDT", TradeMode.MAIN);
+            assertThat(sessionPatternLevels()).containsExactly(1, 2);
+        } finally {
+            patternQueueRepository.deleteAll();
+            autoTradeService.syncSession(USER_ID, ExchangeType.BYBIT, "BTCUSDT", TradeMode.MAIN);
+        }
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 켜기 재요청의 동기화 중 레인이 큐를 끄면 꺼진 상태로 응답한다")
+    void togglePattern_alreadyOn_syncTurnsOff_respondsOff() throws Exception {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        Long queueId = patternQueueRepository.save(q).getId();
+        // 동기화 중 세션 레인이 큐를 끈 상황: 다른 스레드에서 저장해야 요청의 영속성 컨텍스트 캐시와 값이 달라진다
+        doAnswer(inv -> {
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                PatternQueue saved = patternQueueRepository.findById(queueId).orElseThrow();
+                saved.setActive(false);
+                patternQueueRepository.save(saved);
+            }).join();
+            return null;
+        }).when(autoTradeService).syncSession(anyLong(), any(), any(), any());
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + queueId + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":true}")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 켜기 동기화가 실패한 뒤 다시 켜면 세션 동기화를 다시 시도한다")
+    void togglePattern_on_syncFailed_retryResyncs() throws Exception {
+        PatternQueue q = patternQueueRepository.save(makePatternQueue(USER_ID, "BTCUSDT"));
+        doThrow(new RuntimeException("동기화 실패")).doNothing()
+                .when(autoTradeService).syncSession(anyLong(), any(), any(), any());
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":true}")
+                        .with(authentication(auth)));
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":true}")
+                        .with(authentication(auth)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+
+        verify(autoTradeService, times(2)).syncSession(anyLong(), any(), any(), any());
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: 본문이 없으면 400을 반환하고 큐 상태를 바꾸지 않는다")
+    void togglePattern_noBody_rejected() throws Exception {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        q = patternQueueRepository.save(q);
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest());
+
+        assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isTrue();
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
+    }
+
+    @Test
+    @DisplayName("PATCH toggle: active가 null이면 400을 반환하고 큐 상태를 바꾸지 않는다")
+    void togglePattern_nullActive_rejected() throws Exception {
+        PatternQueue q = makePatternQueue(USER_ID, "BTCUSDT");
+        q.setActive(true);
+        q = patternQueueRepository.save(q);
+
+        mockMvc.perform(patch("/api/autotrade/patterns/" + q.getId() + "/toggle")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":null}")
+                        .with(authentication(auth)))
+                .andExpect(status().isBadRequest());
+
+        assertThat(patternQueueRepository.findById(q.getId()).orElseThrow().isActive()).isTrue();
+        verify(autoTradeService, never()).closeQueuePosition(any(), any());
     }
 
     // ─────────────────────────────────────────────
@@ -430,6 +577,21 @@ class AutoTradeControllerTest {
     // ─────────────────────────────────────────────
     // 헬퍼 메서드
     // ─────────────────────────────────────────────
+
+    private java.util.List<Integer> sessionPatternLevels() {
+        return autoTradeService.getSession(USER_ID, ExchangeType.BYBIT, "BTCUSDT", TradeMode.MAIN)
+                .getQueues().get(0).getPatterns().stream().map(com.coin.webcointrader.common.autotrade.entity.Pattern::getStepLevel).toList();
+    }
+
+    private com.coin.webcointrader.common.autotrade.entity.Pattern makePattern(PatternQueue queue, int stepLevel) {
+        com.coin.webcointrader.common.autotrade.entity.Pattern pattern = new com.coin.webcointrader.common.autotrade.entity.Pattern();
+        pattern.setQueue(queue);
+        pattern.setStepLevel(stepLevel);
+        pattern.setPatternOrder(1);
+        pattern.setLeverage(10);
+        pattern.setBlocks(new java.util.ArrayList<>(java.util.List.of(com.coin.webcointrader.common.enums.Side.LONG)));
+        return pattern;
+    }
 
     private PatternQueue makePatternQueue(Long userId, String symbol) {
         PatternQueue q = new PatternQueue();

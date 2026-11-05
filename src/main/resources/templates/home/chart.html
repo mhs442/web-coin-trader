@@ -2026,6 +2026,9 @@
             $.ajax({
                 url: '/api/autotrade/patterns/' + id + '/toggle',
                 type: 'PATCH',
+                contentType: 'application/json',
+                // 화면 기준 원하는 상태를 명시 (서버 상태가 이미 같으면 아무 동작도 하지 않음)
+                data: JSON.stringify({ active: !isActive }),
                 success: function() {
                     // loadPatterns 성공 콜백에서 checkAutoTradeStatus 호출 (카드 재렌더링으로 버튼 복구)
                     loadPatterns();
@@ -2390,7 +2393,7 @@
                 var alertData = JSON.parse(message.body);
                 var levelLabel = alertData.level === 'ERROR' ? '⛔ 자동매매 오류' :
                                  alertData.level === 'WARN'  ? '⚠️ 자동매매 경고' : 'ℹ️ 자동매매 알림';
-                var msg = levelLabel + '\n\n[' + alertData.occurredAt + '] 큐 #' + alertData.queueId + ' 비활성화\n\n사유: ' + alertData.reason;
+                var msg = levelLabel + '\n\n[' + alertData.occurredAt + '] 큐 #' + alertData.queueId + (alertData.level === 'ERROR' ? ' 비활성화' : '') + '\n\n사유: ' + alertData.reason;
                 showToast(msg, alertData.level === 'ERROR' ? 'error' : 'warn', true);
                 // 큐 목록 갱신 (비활성화 상태 즉시 반영)
                 loadPatterns();

@@ -2,6 +2,8 @@ package com.coin.webcointrader.common.autotrade.controller;
 
 import com.coin.webcointrader.common.autotrade.entity.PatternQueue;
 import com.coin.webcointrader.common.autotrade.dto.*;
+import com.coin.webcointrader.common.enums.ExceptionMessage;
+import com.coin.webcointrader.common.exception.CustomException;
 import com.coin.webcointrader.common.autotrade.service.AutoTradeService;
 import com.coin.webcointrader.common.autotrade.service.PatternQueueService;
 import com.coin.webcointrader.common.login.dto.UserDTO;
@@ -90,17 +92,35 @@ public class AutoTradeController {
     }
 
     /**
-     * 큐 활성화/비활성화 토글 (토글 후 자동매매 세션 동기화)
+     * 큐를 요청한 상태로 켜거나 끈다. (변경 시 자동매매 세션 동기화)
+     * 이미 그 상태면 청산 없이(켜기는 세션 동기화만 다시 수행) 현재 상태를 반환한다.
      *
-     * @param id   큐 ID
-     * @param user 로그인 사용자
-     * @return 변경된 패턴 큐 응답
+     * @param id      큐 ID
+     * @param request 원하는 큐 상태
+     * @param user    로그인 사용자
+     * @return 패턴 큐 응답
      */
     @PatchMapping("/patterns/{id}/toggle")
     public PatternQueueResponse togglePattern(@PathVariable Long id,
+                                              @RequestBody(required = false) TogglePatternRequest request,
                                               @AuthenticationPrincipal UserDTO user) {
+        // 상태 미지정 요청은 거부 (기본값을 두면 실수로 끄기·청산이 실행될 수 있음)
+        if (request == null || request.getActive() == null) {
+            throw new CustomException(ExceptionMessage.TOGGLE_ACTIVE_REQUIRED);
+        }
+        boolean turnOn = request.getActive();
         PatternQueue queue = patternQueueService.getQueue(user.getId(), id);
-        boolean turnOn = !queue.isActive();
+        // 오래된 화면의 요청 등 이미 원하는 상태 → 청산 없이 현재 상태 반환 (켜기는 세션만 다시 동기화)
+        if (queue.isActive() == turnOn) {
+            if (!turnOn) {
+                return toResponse(queue);
+            }
+            // DB만 켜지고 세션 생성에 실패한 경우를 복구 (동기화 자체는 주문을 내지 않음)
+            // 단, 세션이 없어 새로 만들면 1단계부터 다시 돌고, 엔진이 저장 실패로 끈 큐는 재가동하지 않음
+            autoTradeService.syncSession(user.getId(), queue.getExchangeType(), queue.getSymbol(), queue.getTradeMode());
+            // 엔진이 끈 큐는 꺼진 상태로 응답 (레인 스레드가 끈 값은 요청의 엔티티에 반영되지 않아 DB에서 직접 확인)
+            return toResponse(queue, patternQueueService.isQueueActive(id));
+        }
         // [사용자 정책 2026-10-29] 끄기 전 보유 포지션 청산 (실패 시 예외 → 끄지 않고 큐 유지)
         if (!turnOn) {
             autoTradeService.closeQueuePosition(user.getId(), id);
@@ -188,6 +208,10 @@ public class AutoTradeController {
     // ─────────────────────────────────────────────
 
     private PatternQueueResponse toResponse(PatternQueue queue) {
+        return toResponse(queue, queue.isActive());
+    }
+
+    private PatternQueueResponse toResponse(PatternQueue queue, boolean active) {
         // 패턴 순서는 엔티티 @OrderBy(stepLevel, patternOrder)를 그대로 따른다
         List<PatternQueueResponse.PatternResponse> patternResponses = queue.getPatterns().stream()
                 .map(this::toPatternResponse)
@@ -197,7 +221,7 @@ public class AutoTradeController {
                 .id(queue.getId())
                 .symbol(queue.getSymbol())
                 .exchangeType(queue.getExchangeType().name())
-                .active(queue.isActive())
+                .active(active)
                 .cycle(queue.isCycle())
                 .volumeStopEnabled(queue.isVolumeStopEnabled())
                 .volumeStopReserved(queue.getVolumeStopReason() != null)

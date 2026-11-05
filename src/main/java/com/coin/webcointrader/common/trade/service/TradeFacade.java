@@ -251,6 +251,21 @@ public class TradeFacade {
     }
 
     /**
+     * MAIN 모드에서 진입 주문의 거래소 보호 주문(TP/SL)을 별도로 접수한다.
+     * SIM 모드는 거래소 주문이 없으므로 호출하지 않고 true를 반환한다.
+     *
+     * @param request      진입 주문 요청
+     * @param userId       사용자 ID
+     * @param exchangeType 거래소 타입
+     * @param tradeMode    거래 모드
+     * @return 모두 접수됐거나 할 일이 없으면 true, 하나라도 실패하면 false
+     */
+    public boolean placeProtectionOrders(OrderRequestDTO request, Long userId, ExchangeType exchangeType, TradeMode tradeMode) {
+        if (tradeMode == TradeMode.SIM) return true;
+        return registry.trade(exchangeType).placeProtectionOrders(request, userId);
+    }
+
+    /**
      * MAIN 모드에서 기준 시각 이후 심볼의 가장 최근 청산 건과 청산 방식을 조회한다. (놓친 외부 청산 재조정용)
      * SIM 모드는 거래소 청산 내역이 없으므로 null을 반환한다.
      *

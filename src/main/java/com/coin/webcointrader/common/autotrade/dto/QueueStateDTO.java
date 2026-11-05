@@ -2,6 +2,7 @@ package com.coin.webcointrader.common.autotrade.dto;
 
 import com.coin.webcointrader.common.enums.Side;
 import com.coin.webcointrader.common.enums.TradeOrderType;
+import com.coin.webcointrader.common.trade.dto.OrderRequestDTO;
 import com.coin.webcointrader.common.trade.dto.TradeHistoryDTO;
 import lombok.Getter;
 import lombok.Setter;
@@ -49,14 +50,23 @@ public class QueueStateDTO {
     private String tpOrderId;          // 익절 지정가 거래소 주문 ID (null 가능)
     private BigDecimal tpOrderPrice;   // 익절 지정가 주문 가격 (tick 반올림 후, 부분 익절 손익 계산용)
     private int tpCancelFailCount;     // 손절 전 익절 지정가 취소 연속 실패 횟수 (5회면 큐 비활성화)
+    private String partialTpQty;       // 기록을 마친 부분 익절 체결 수량 (잔여 청산 기록 전까지 보존, null = 없음)
+    private BigDecimal partialTpPrice; // 부분 익절 체결가 (투자 이력 합산용)
+    private BigDecimal partialTpFee;   // 부분 익절 추정 수수료 (투자 이력 합산용)
+    private String partialTpOrderId;   // 부분 익절 지정가 거래소 주문 ID (합산 손익 조회용, null 가능)
 
     // 거래소 완료 확인 대기 (진입: 포지션 보유 확인 / 청산: 포지션 0 확인 전까지 다음 동작 보류)
     private TradeOrderType pendingConfirmType; // 확인 대기 중인 주문 종류 (ENTRY/SELL/LIQUIDATION, null = 대기 없음)
     private TradeHistoryDTO pendingEntryHistory; // 진입 확인 대기 중 저장을 보류한 진입 이력 (확인 결과로 SUCCESS/FAILED 저장)
+    private OrderRequestDTO pendingProtectionRequest; // 진입 포지션 확인 뒤 거래소 보호 주문을 걸 진입 요청 (주문 결과 유실 + 포지션 조회 실패일 때만 값 있음)
     private Side pendingCloseSignal;         // 손절 확인 후 다음 단계 진입 방향 (SELL이면 null)
     private int closeConfirmFailCount;       // 완료 미확인 연속 횟수 (5회 시 큐 비활성화)
+    private int entrySizeShortCount;         // 진입 확인 중 포지션이 요청보다 작게 확인된 횟수 (5회 시 실제 크기로 확정)
     private long closeConfirmCheckedAt;      // 마지막 포지션 확인 시각 (epoch ms, 재확인 간격 제한용)
+    private ExchangeProtectionGap protectionGap = ExchangeProtectionGap.NONE; // 보유 포지션의 거래소 보호 주문이 비어 있는 상태
     private boolean stopRequested;           // 큐 종료(끄기·삭제) 청산 요청됨 — 청산 확인 시 다음 단계 대신 큐 비활성화
+    private Long closeDetailWaitStartedAt;   // 포지션 0인데 청산 내역이 없어 전환을 보류한 시작 시각 (epoch ms, null = 보류 아님)
+    private boolean closeDetailWaitSuspended; // 포지션 조회 실패로 청산 내역 대기를 일시 해제함 (true = TP/SL 감시 재개, 시작 시각은 유지)
     private Double volumeBaseline;           // 거래량 급변 판정 기준 (진입 시점 24시간 거래량, null = 시세 미수신으로 미확정)
 
     /**
@@ -101,12 +111,21 @@ public class QueueStateDTO {
         tpOrderId = null;
         tpOrderPrice = null;
         tpCancelFailCount = 0;
+        partialTpQty = null;
+        partialTpPrice = null;
+        partialTpFee = null;
+        partialTpOrderId = null;
         pendingConfirmType = null;
         pendingEntryHistory = null;
+        pendingProtectionRequest = null;
         pendingCloseSignal = null;
         closeConfirmFailCount = 0;
+        entrySizeShortCount = 0;
         closeConfirmCheckedAt = 0L;
         stopRequested = false;
+        closeDetailWaitStartedAt = null;
+        closeDetailWaitSuspended = false;
+        protectionGap = ExchangeProtectionGap.NONE;
         volumeBaseline = null;
     }
 }

@@ -16,6 +16,7 @@ public enum ExceptionMessage {
     ENCRYPTION_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "암호화에 실패하였습니다."),
     DECRYPTION_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "복호화에 실패하였습니다."),
     INVALID_ENCRYPTION_KEY(HttpStatus.INTERNAL_SERVER_ERROR, "유효하지 않은 encryption key입니다."),
+    TOGGLE_ACTIVE_REQUIRED(HttpStatus.BAD_REQUEST, "원하는 큐 상태(active)를 입력해 주세요."),
     INVALID_TRIGGER_RATE(HttpStatus.BAD_REQUEST, "트리거 비율(%)은 0보다 커야 합니다."),
     EMPTY_STEPS(HttpStatus.BAD_REQUEST, "단계를 1개 이상 입력해야 합니다."),
     EXCEED_MAX_STEPS(HttpStatus.BAD_REQUEST, "단계는 최대 20개까지 등록할 수 있습니다."),

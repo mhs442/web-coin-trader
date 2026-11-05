@@ -287,4 +287,15 @@ class TradeFacadeTest {
         assertThat(tradeFacade.getBalance(1L, ExchangeType.BYBIT, TradeMode.MAIN)).isSameAs(main);
         assertThat(tradeFacade.getBalance(1L, ExchangeType.BYBIT, TradeMode.SIM)).isSameAs(sim);
     }
+
+    @Test
+    @DisplayName("placeProtectionOrders: MAIN은 거래소에 위임하고 SIM은 호출 없이 true를 반환한다")
+    void placeProtectionOrders_delegatesOnlyInMain() {
+        given(registry.trade(ExchangeType.BYBIT)).willReturn(bybitTrade);
+        given(bybitTrade.placeProtectionOrders(ORDER, 1L)).willReturn(false);
+
+        assertThat(tradeFacade.placeProtectionOrders(ORDER, 1L, ExchangeType.BYBIT, TradeMode.MAIN)).isFalse();
+        assertThat(tradeFacade.placeProtectionOrders(ORDER, 1L, ExchangeType.BYBIT, TradeMode.SIM)).isTrue();
+        then(bybitTrade).should(org.mockito.Mockito.times(1)).placeProtectionOrders(ORDER, 1L);
+    }
 }

@@ -135,6 +135,19 @@ public interface ExchangeTradeClient {
     BigDecimal getPositionSize(Long userId, String symbol);
 
     /**
+     * 진입 주문의 거래소 보호 주문(TP/SL)을 별도로 접수한다.
+     * 주문 응답이 유실돼 진입 주문 처리에서 보호 주문을 걸지 못한 경우에 사용한다.
+     * TP/SL을 진입 주문에 함께 보내는 거래소는 할 일이 없으므로 기본 구현은 true를 반환한다.
+     *
+     * @param request 진입 주문 요청 (takeProfit/stopLoss null이면 해당 주문 생략)
+     * @param userId  API 키를 조회할 사용자 ID
+     * @return 모두 접수됐거나 할 일이 없으면 true, 하나라도 실패하면 false
+     */
+    default boolean placeProtectionOrders(OrderRequestDTO request, Long userId) {
+        return true;
+    }
+
+    /**
      * private 스트림 연결 사용자를 주어진 집합과 같게 맞춘다.
      *
      * @param userIds 연결할 사용자 ID 집합

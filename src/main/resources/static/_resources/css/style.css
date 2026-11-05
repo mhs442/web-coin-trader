@@ -68,7 +68,7 @@ button, input, select { font: inherit; color: inherit; }
    ========================================= */
 .wallet-header {
     grid-column: 2;
-    grid-row: 1;
+    grid-row: 2;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -86,16 +86,43 @@ button, input, select { font: inherit; color: inherit; }
 body:has(.app-chrome) {
     display: grid;
     grid-template-columns: 208px minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
 }
 .app-chrome { display: contents; }
 body > .market-overview-container,
 body > .trade-layout-container,
 body > .mypage-container {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 3;
     min-width: 0;
     min-height: 0;
+}
+
+/* 상단 공지: 오른쪽에서 왼쪽으로 흐르는 안내 (마우스를 올리면 멈춤) */
+.app-notice {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-width: 0;
+    overflow: hidden;
+    padding: 5px 0;
+    background: var(--warn-soft);
+    border-bottom: 1px solid var(--line);
+    color: var(--warn-text);
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.app-notice-text {
+    display: inline-block;
+    padding-left: 100%;
+    animation: app-notice-flow 32s linear infinite;
+}
+.app-notice:hover .app-notice-text { animation-play-state: paused; }
+@keyframes app-notice-flow { to { transform: translateX(-100%); } }
+/* 동작 줄이기 설정: 흐르지 않고 고정 표시 */
+@media (prefers-reduced-motion: reduce) {
+    .app-notice { padding: 5px 16px; white-space: normal; }
+    .app-notice-text { display: inline; padding-left: 0; animation: none; }
 }
 
 /* 모의 모드 표시선 */
@@ -112,7 +139,7 @@ body > .mypage-container {
 /* 사이드바 */
 .app-sidebar {
     grid-column: 1;
-    grid-row: 1 / -1;
+    grid-row: 2 / -1;
     display: flex;
     flex-direction: column;
     padding: 16px 12px;

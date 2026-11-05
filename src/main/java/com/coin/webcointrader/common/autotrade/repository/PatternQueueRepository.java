@@ -5,6 +5,7 @@ import com.coin.webcointrader.common.enums.ExchangeType;
 import com.coin.webcointrader.common.enums.TradeMode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -13,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 패턴 큐 Repository.
@@ -88,10 +90,20 @@ public interface PatternQueueRepository extends JpaRepository<PatternQueue, Long
      * @param isActive     활성화 여부
      * @param tradeMode    거래 모드 (MAIN/SIM)
      * @param exchangeType 거래소 타입
-     * @return 활성 패턴 큐 목록 (createdAt 오름차순)
+     * @return 활성 패턴 큐 목록 (createdAt 오름차순, 패턴 포함 — 세션 엔진이 요청·트랜잭션 밖에서 패턴을 읽음)
      */
+    @EntityGraph(attributePaths = "patterns")
     List<PatternQueue> findByUserIdAndSymbolAndIsActiveAndTradeModeAndExchangeTypeOrderByCreatedAtAsc(
             Long userId, String symbol, boolean isActive, TradeMode tradeMode, ExchangeType exchangeType);
+
+    /**
+     * 큐의 활성화 여부를 DB에서 직접 조회한다. (요청의 영속성 컨텍스트 캐시를 거치지 않음)
+     *
+     * @param queueId 큐 ID
+     * @return 활성화 여부 (큐가 없으면 empty)
+     */
+    @Query("SELECT q.isActive FROM PatternQueue q WHERE q.id = :queueId")
+    Optional<Boolean> findActiveById(@Param("queueId") Long queueId);
 
     // ─────────────────────────────────────────────
     // 마이페이지용 쿼리

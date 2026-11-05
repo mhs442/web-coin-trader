@@ -150,6 +150,7 @@ class BinanceTradeClientTest {
 
         assertThat(result.getOrderId()).isEqualTo("22542179");
         assertThat(result.getClientOrderId()).isEqualTo(CLIENT_ORDER_ID);
+        assertThat(result.isProtectionCancelled()).isFalse(); // 진입은 보호 주문 취소로 표시하지 않음
         InOrder order = inOrder(feignClient);
         order.verify(feignClient).cancelAllAlgoOpenOrders("BTCUSDT");
         ArgumentCaptor<BinanceOrderRequest> captor = ArgumentCaptor.forClass(BinanceOrderRequest.class);
@@ -174,8 +175,9 @@ class BinanceTradeClientTest {
         OrderRequestDTO close = OrderRequestDTO.builder()
                 .symbol("BTCUSDT").side(OrderSide.SELL).qty("0.010").reduceOnly(true).clientOrderId("q1-S-1").build();
 
-        client.placeOrder(close, 1L);
+        OrderResultDTO result = client.placeOrder(close, 1L);
 
+        assertThat(result.isProtectionCancelled()).isTrue();
         InOrder order = inOrder(feignClient);
         ArgumentCaptor<BinanceOrderRequest> captor = ArgumentCaptor.forClass(BinanceOrderRequest.class);
         order.verify(feignClient).newOrder(captor.capture());
@@ -196,8 +198,9 @@ class BinanceTradeClientTest {
                 .symbol("BTCUSDT").side(OrderSide.SELL).qty("0.010").reduceOnly(true)
                 .price("52000.5").clientOrderId("q1-T-1").build();
 
-        client.placeOrder(tpLimit, 1L);
+        OrderResultDTO result = client.placeOrder(tpLimit, 1L);
 
+        assertThat(result.isProtectionCancelled()).isFalse();
         ArgumentCaptor<BinanceOrderRequest> captor = ArgumentCaptor.forClass(BinanceOrderRequest.class);
         then(feignClient).should().newOrder(captor.capture());
         BinanceOrderRequest sent = captor.getValue();
@@ -274,6 +277,83 @@ class BinanceTradeClientTest {
         assertThat(result.getOrderId()).isEqualTo("22542179");
         // TP 실패가 SL 접수를 막지 않는다
         then(feignClient).should(times(2)).newAlgoOrder(any());
+        assertThat(result.isProtectionFailed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("placeOrder: 보호 주문이 모두 접수되면 실패 표시가 없다")
+    void placeOrder_tpSlSuccess_notMarkedFailed() throws Exception {
+        givenKey();
+        given(feignClient.newOrder(any())).willReturn(fixture("newOrder", BinanceOrderResponse.class));
+        given(feignClient.newAlgoOrder(any())).willReturn(fixture("newAlgoOrder", BinanceAlgoOrderResponse.class));
+
+        assertThat(client.placeOrder(entry("52000", "48000"), 1L).isProtectionFailed()).isFalse();
+    }
+
+    @Test
+    @DisplayName("placeOrder 응답 유실 후 진입 주문 복구: TP/SL 조건부 주문을 접수한다")
+    void placeOrder_recoveredEntry_placesProtection() throws Exception {
+        givenKey();
+        given(feignClient.newOrder(any())).willThrow(new BinanceApiException(-1000, "Unknown error"));
+        given(feignClient.getOrder("BTCUSDT", null, CLIENT_ORDER_ID)).willReturn(fixture("getOrder_filled", BinanceOrderResponse.class));
+        given(feignClient.newAlgoOrder(any())).willReturn(fixture("newAlgoOrder", BinanceAlgoOrderResponse.class));
+
+        OrderResultDTO result = client.placeOrder(entry("52000", "48000"), 1L);
+
+        assertThat(result.getOrderId()).isEqualTo("22542179");
+        assertThat(result.isProtectionFailed()).isFalse();
+        ArgumentCaptor<BinanceAlgoOrderRequest> captor = ArgumentCaptor.forClass(BinanceAlgoOrderRequest.class);
+        then(feignClient).should(times(2)).newAlgoOrder(captor.capture());
+        assertThat(captor.getAllValues()).extracting(BinanceAlgoOrderRequest::getClientAlgoId)
+                .containsExactly(CLIENT_ORDER_ID + "-TP", CLIENT_ORDER_ID + "-SL");
+    }
+
+    @Test
+    @DisplayName("placeOrder 응답 유실 후 진입 복구 + 조건부 주문 실패: 진입 결과는 유지하고 실패를 표시한다")
+    void placeOrder_recoveredEntry_protectionFails() throws Exception {
+        givenKey();
+        given(feignClient.newOrder(any())).willThrow(new BinanceApiException(-1000, "Unknown error"));
+        given(feignClient.getOrder("BTCUSDT", null, CLIENT_ORDER_ID)).willReturn(fixture("getOrder_filled", BinanceOrderResponse.class));
+        given(feignClient.newAlgoOrder(any())).willThrow(new BinanceApiException(-2021, "Order would immediately trigger."));
+
+        OrderResultDTO result = client.placeOrder(entry("52000", "48000"), 1L);
+
+        assertThat(result.getOrderId()).isEqualTo("22542179");
+        assertThat(result.getClientOrderId()).isEqualTo(CLIENT_ORDER_ID);
+        assertThat(result.isProtectionFailed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("placeOrder 응답 유실 후 reduceOnly 주문 복구: 조건부 주문을 접수하지 않는다")
+    void placeOrder_recoveredReduceOnly_noProtection() throws Exception {
+        givenKey();
+        given(feignClient.newOrder(any())).willThrow(new BinanceApiException(-1000, "Unknown error"));
+        given(feignClient.getOrder("BTCUSDT", null, CLIENT_ORDER_ID)).willReturn(fixture("getOrder_filled", BinanceOrderResponse.class));
+
+        OrderRequestDTO close = OrderRequestDTO.builder()
+                .symbol("BTCUSDT").side(OrderSide.SELL).qty("0.010").reduceOnly(true)
+                .clientOrderId(CLIENT_ORDER_ID).takeProfit("52000").stopLoss("48000").build();
+        OrderResultDTO result = client.placeOrder(close, 1L);
+
+        then(feignClient).should(never()).newAlgoOrder(any());
+        assertThat(result.isProtectionCancelled()).isFalse(); // 복구 경로는 조건부 주문을 취소하지 않음
+    }
+
+    @Test
+    @DisplayName("placeProtectionOrders: 조건부 주문을 접수하고 하나라도 실패하면 false를 반환한다")
+    void placeProtectionOrders_reportsResult() throws Exception {
+        givenKey();
+        given(feignClient.newAlgoOrder(any()))
+                .willReturn(fixture("newAlgoOrder", BinanceAlgoOrderResponse.class))
+                .willReturn(fixture("newAlgoOrder", BinanceAlgoOrderResponse.class));
+        assertThat(client.placeProtectionOrders(entry("52000", "48000"), 1L)).isTrue();
+        then(feignClient).should(times(2)).newAlgoOrder(any());
+
+        given(feignClient.newAlgoOrder(any()))
+                .willThrow(new BinanceApiException(-2021, "Order would immediately trigger."))
+                .willReturn(fixture("newAlgoOrder", BinanceAlgoOrderResponse.class));
+        assertThat(client.placeProtectionOrders(entry("52000", "48000"), 1L)).isFalse();
+        then(feignClient).should(times(4)).newAlgoOrder(any());
     }
 
     @Test
@@ -489,6 +569,23 @@ class BinanceTradeClientTest {
     }
 
     @Test
+    @DisplayName("getClosedPnl: 부분 익절 조회(진입 시각 없음, 진입 수수료 0)는 펀딩비를 조회하지 않고 조회 범위 시작점도 쓰지 않는다")
+    void getClosedPnl_partialTpQuery_noFundingNoEntryFee() throws Exception {
+        givenKey();
+        given(feignClient.getUserTrades(eq("BTCUSDT"), eq("22542200"), isNull(), anyInt()))
+                .willReturn(fixtureList("getUserTrades_close", BinanceUserTradeResponse.class));
+
+        ClosedPnlDTO pnl = client.getClosedPnl(ClosedPnlQueryDTO.builder()
+                .exchangeType(ExchangeType.BINANCE).orderId("22542200").symbol("BTCUSDT")
+                .entryFee(BigDecimal.ZERO).lookbackFrom(1761526800000L).build(), 1L);
+
+        // 8 − 0 − 0.25 = 7.75 (진입 수수료·펀딩비는 잔여 청산 조회에서 1회만 반영)
+        assertThat(new BigDecimal(pnl.getClosedPnl())).isEqualByComparingTo("7.75");
+        assertThat(new BigDecimal(pnl.getFundingFee())).isEqualByComparingTo("0");
+        then(feignClient).should(never()).getIncome(anyString(), anyString(), anyLong(), anyLong(), anyInt());
+    }
+
+    @Test
     @DisplayName("getClosedPnl: 청산 체결이 아직 반영되지 않으면 재조회 후 null (계산식 fallback)")
     void getClosedPnl_notReflected() {
         givenKey();
@@ -655,6 +752,15 @@ class BinanceTradeClientTest {
         given(feignClient.getPositionRisk("BTCUSDT")).willReturn(List.of());
 
         assertThat(client.getPositionSize(1L, "BTCUSDT")).isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("getPositionSize: 응답 본문이 없으면 포지션 0으로 단정하지 않고 null")
+    void getPositionSize_nullBody() {
+        givenKey();
+        given(feignClient.getPositionRisk("BTCUSDT")).willReturn(null);
+
+        assertThat(client.getPositionSize(1L, "BTCUSDT")).isNull();
     }
 
     // ─────────────────────────────────────────────

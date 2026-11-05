@@ -194,9 +194,21 @@ public abstract class AbstractExchangeTradeClient implements ExchangeTradeClient
                 // 결과 불명확 → clientOrderId로 실제 접수 여부 확인 (거부 확정 실패는 그대로 전파)
                 OrderResultDTO recovered = isAmbiguousFailure(e) ? recoverByClientOrderId(request) : null;
                 if (recovered == null) throw e;
-                return recovered;
+                return afterOrderRecovered(request, recovered);
             }
         });
+    }
+
+    /**
+     * 응답 유실 뒤 clientOrderId 조회로 복구한 주문의 후처리.
+     * 주문 응답 뒤에 이어지는 거래소별 처리가 있으면 재정의한다. 기본은 복구 결과를 그대로 반환한다.
+     *
+     * @param request   원 주문 요청
+     * @param recovered 복구한 주문 결과
+     * @return 호출자에게 돌려줄 주문 결과
+     */
+    protected OrderResultDTO afterOrderRecovered(OrderRequestDTO request, OrderResultDTO recovered) {
+        return recovered;
     }
 
     /**
